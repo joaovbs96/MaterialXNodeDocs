@@ -1,0 +1,10 @@
+void mx_normalmap_vector2(vector value, vector2 normal_scale, vector N, vector T, vector B, output vector result)
+{
+    vector v = (dot(value, value) == 0.0) ? vector(0.0, 0.0, 1.0) : value * 2.0 - 1.0;
+    result = normalize(T * v[0] * normal_scale.x + B * v[1] * normal_scale.y + N * v[2]);
+}
+
+void mx_normalmap_float(vector value, float normal_scale, vector N, vector T, vector B, output vector result)
+{
+    mx_normalmap_vector2(value, vector2(normal_scale, normal_scale), N, T, B, result);
+}

@@ -6,42 +6,48 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-disney-principled"
       },
       "gltf_pbr": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-pbr"
       },
       "open_pbr_surface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-open-pbr-surface"
       },
       "open_pbr_anisotropy": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-open-pbr-anisotropy"
       },
       "standard_surface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-standard-surface"
       },
       "UsdPreviewSurface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-UsdPreviewSurface"
       }
     },
     "texture2d": {
@@ -50,42 +56,48 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-colorimage"
       },
       "gltf_image": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-image"
       },
       "gltf_normalmap": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-normalmap"
       },
       "gltf_iridescence_thickness": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-iridescence-thickness"
       },
       "gltf_anisotropy_image": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-gltf-anisotropy-image"
       },
       "UsdUVTexture": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-UsdUVTexture"
       }
     },
     "geometric": {
@@ -94,7 +106,8 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-UsdPrimvarReader"
       }
     },
     "math": {
@@ -103,7 +116,8 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-UsdTransform2d"
       }
     }
   },
@@ -114,91 +128,104 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaAdd"
       },
       "LamaConductor": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaConductor"
       },
       "LamaDielectric": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaDielectric"
       },
       "LamaDiffuse": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaDiffuse"
       },
       "LamaEmission": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaEmission"
       },
       "LamaGeneralizedSchlick": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaGeneralizedSchlick"
       },
       "LamaIridescence": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaIridescence"
       },
       "LamaLayer": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaLayer"
       },
       "LamaMix": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaMix"
       },
       "LamaSheen": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaSheen"
       },
       "LamaSSS": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaSSS"
       },
       "LamaSurface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaSurface"
       },
       "LamaTranslucent": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-LamaTranslucent"
       }
     }
   },
@@ -209,28 +236,32 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-open-pbr-surface-to-standard-surface"
       },
       "standard_surface_to_gltf_pbr": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-standard-surface-to-gltf-pbr"
       },
       "standard_surface_to_open_pbr_surface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-standard-surface-to-open-pbr-surface"
       },
       "standard_surface_to_UsdPreviewSurface": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-standard-surface-to-UsdPreviewSurface"
       }
     }
   },
@@ -241,70 +272,80 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-g18-rec709-to-lin-rec709"
       },
       "g22_rec709_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-g22-rec709-to-lin-rec709"
       },
       "rec709_display_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-rec709-display-to-lin-rec709"
       },
       "acescg_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-acescg-to-lin-rec709"
       },
       "g22_ap1_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-g22-ap1-to-lin-rec709"
       },
       "srgb_texture_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-srgb-texture-to-lin-rec709"
       },
       "lin_adobergb_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-lin-adobergb-to-lin-rec709"
       },
       "adobergb_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-adobergb-to-lin-rec709"
       },
       "srgb_displayp3_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-srgb-displayp3-to-lin-rec709"
       },
       "lin_displayp3_to_lin_rec709": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-lin-displayp3-to-lin-rec709"
       }
     }
   },
@@ -315,21 +356,24 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-point-light"
       },
       "directional_light": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-directional-light"
       },
       "spot_light": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-spot-light"
       }
     }
   },
@@ -364,7 +408,8 @@
         ],
         "description": "The current scene view direction, as defined by the shading environment.\n\nThe view direction is a normalized vector from the viewer position to the current shading position. In a PBR shading context, it represents the incident direction for primary camera rays, independent of any secondary or reflection rays.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.NPRSpec.md#node-viewdirection"
       },
       "facingratio": {
         "section": "NPR Utility Nodes",
@@ -407,7 +452,8 @@
         ],
         "description": "The geometric facing ratio of the view direction and surface normal.\n\nFacing ratio is computed as the dot product between the view direction and surface normal.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.NPRSpec.md#node-facingratio"
       },
       "gooch_shade": {
         "section": "NPR Shading Nodes",
@@ -461,7 +507,8 @@
             "text": "Gooch et al., A Non-Photorealistic Lighting Model For Automatic Technical Illustration, 1998.",
             "url": "https://users.cs.northwestern.edu/~ago820/SIG98/gooch98.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.NPRSpec.md#node-gooch-shade"
       }
     }
   },
@@ -519,7 +566,7 @@
           }
         ],
         "description": "Constructs a diffuse reflection BSDF based on the Oren-Nayar reflectance model.\n\nA roughness of 0.0 gives Lambertian reflectance.\n\nAn energy_compensation boolean selects between the Qualitative Oren-Nayar[^Oren1994] and Energy-Preserving Oren-Nayar[^Portsmouth2025] models of diffuse reflectance.",
-        "notes": "In the equations below, the color input corresponds to $\\rho$, the diffuse albedo, and the roughness input corresponds to $\\sigma$, where $\\sigma \\in [0, 1]$.\n\n#### Qualitative Oren-Nayar Reflectance Equations\n\n$$ A = 1 - 0.5\\left(\\frac{\\sigma^2}{\\sigma^2 + 0.33}\\right) $$\n\n$$ B = 0.45\\left(\\frac{\\sigma^2}{\\sigma^2 + 0.09}\\right) $$\n\n$$ g(\\omega_i,\\omega_o) = \\max\\left(0, \\cos(\\phi_i - \\phi_o)\\right)\\sin\\alpha \\tan\\beta,\\quad \\alpha = \\max(\\theta_i,\\theta_o),\\quad \\beta = \\min(\\theta_i,\\theta_o) $$\n\n$$ f_r(\\omega_i,\\omega_o) = \\frac{\\rho}{\\pi}\\bigl(A + B g(\\omega_i,\\omega_o)\\bigr) $$\n\n#### Energy-Preserving Oren-Nayar (EON) Reflectance Equations\n\nWhen energy_compensation is enabled, the EON model[^Portsmouth2025] decomposes the BRDF into a single-scatter lobe based on Fujii's improved Oren-Nayar formulation[^Fujii2020] and a multi-scatter lobe that compensates for inter-reflection energy lost at higher roughness values. The full derivation is given in the EON Reflectance Model appendix.",
+        "notes": "In the equations below, the color input corresponds to $\\rho$, the diffuse albedo, and the roughness input corresponds to $\\sigma$, where $\\sigma \\in [0, 1]$.\n\n#### Qualitative Oren-Nayar Reflectance Equations\n\n$$ A = 1 - 0.5\\left(\\frac{\\sigma^2}{\\sigma^2 + 0.33}\\right) $$\n\n$$ B = 0.45\\left(\\frac{\\sigma^2}{\\sigma^2 + 0.09}\\right) $$\n\n$$ g(\\omega_i,\\omega_o) = \\max\\left(0, \\cos(\\phi_i - \\phi_o)\\right)\\sin\\alpha \\tan\\beta,\\quad \\alpha = \\max(\\theta_i,\\theta_o),\\quad \\beta = \\min(\\theta_i,\\theta_o) $$\n\n$$ f_r(\\omega_i,\\omega_o) = \\frac{\\rho}{\\pi}\\bigl(A + B g(\\omega_i,\\omega_o)\\bigr) $$\n\n#### Energy-Preserving Oren-Nayar (EON) Reflectance Equations\n\nWhen energy_compensation is enabled, the EON model[^Portsmouth2025] decomposes the BRDF into a single-scatter lobe based on Fujii's improved Oren-Nayar formulation[^Fujii2020] and a multi-scatter lobe that compensates for inter-reflection energy lost at higher roughness values. The full derivation is given in the [EON Reflectance Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#eon-reflectance-model) appendix.",
         "references": [
           {
             "key": "Oren1994",
@@ -536,7 +583,8 @@
             "text": "Yasuhiro Fujii, Improving the Oren-Nayar Diffuse Model, 2020",
             "url": "https://mimosa-pudica.net/improved-oren-nayar.html"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-oren-nayar-diffuse-bsdf"
       },
       "burley_diffuse_bsdf": {
         "section": "BSDF Nodes",
@@ -591,7 +639,8 @@
             "text": "Brent Burley, Physically-Based Shading at Disney, 2012",
             "url": "https://media.disneyanimation.com/uploads/production/publication_asset/48/asset/s2012_pbs_disney_brdf_notes_v3.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-burley-diffuse-bsdf"
       },
       "translucent_bsdf": {
         "section": "BSDF Nodes",
@@ -634,7 +683,8 @@
         ],
         "description": "Constructs a translucent (diffuse transmission) BSDF based on the Lambert reflectance model.",
         "notes": "In the equation below, the color input corresponds to $\\rho$, the diffuse transmittance.\n\n#### Lambertian Transmittance Equation\n\nThe node implements a Lambertian BTDF, the transmission analog of the Lambertian BRDF. Incident light is scattered uniformly over the lower hemisphere (the opposite side of the surface from the incident direction):\n\n$$ f_t(\\omega_i, \\omega_o) = \\frac{\\rho}{\\pi} $$",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-translucent-bsdf"
       },
       "dielectric_bsdf": {
         "section": "BSDF Nodes",
@@ -724,7 +774,7 @@
           }
         ],
         "description": "Constructs a reflection and/or transmission BSDF based on a microfacet reflectance model and a Fresnel curve for dielectrics[^Walter2007]. If reflection scattering is enabled the node may be layered vertically over a base BSDF for the surface beneath the dielectric layer. By chaining multiple <dielectric_bsdf> nodes you can describe a surface with multiple specular lobes. If transmission scattering is enabled the node may be layered over a VDF describing the surface interior to handle absorption and scattering inside the medium, useful for colored glass, turbid water, etc.\n\nImplementations are expected to preserve energy as the roughness of the surface increases, with multiple scattering compensation[^Turquin2019] being a popular implementation strategy.\n\nThe tint input colors the reflected and transmitted light but should be left at white (1,1,1) for physically correct results. Setting the ior input to zero disables the Fresnel curve, allowing reflectivity to be controlled purely by weight and tint.\n\nSetting retroreflective to true switches the BSDF to retroreflection mode, where light is reflected back toward the incoming direction rather than the mirror reflection direction[^Portsmouth2026].\n\nThin-film iridescence effects[^Belcour2017] may be enabled by setting thinfilm_thickness to a non-zero value.\n\nThe scatter_mode controls whether the surface reflects light (R), transmits light (T), or both (RT). In RT mode, reflection and transmission occur both when entering and leaving a surface, with their respective intensities controlled by the Fresnel curve. Depending on the IOR and incident angle, total internal reflection may occur even when transmission modes are selected.",
-        "notes": "In the equations below, the tint input corresponds to $t$ and the ior input corresponds to $\\eta$, the real-valued index of refraction of the surface *relative to the exterior medium*. The Fresnel formulation below assumes the exterior medium is air/vacuum ($\\eta_i \\approx 1$), so $\\eta$ is equivalently the ratio of the surface IOR to that of the medium on the incident side of the interface.\n\nThe tint $t$ scales the node's reflection and transmission lobes directly, multiplying the microfacet BRDF and BTDF as $t f_r$ and $t f_t$. It does not modify the Fresnel reflectance $F$ itself, so the Fresnel transmittance $1 - F$ used by the BTDF remains untinted.\n\n#### Dielectric Fresnel Equations\n\nThe Fresnel reflectance $F$ is computed from the standard Fresnel equations for unpolarized light[^Walter2007], using the optimized formulation given by Lagarde[^Lagarde2013]:\n\n$$ c = \\cos\\theta $$\n\n$$ g = \\sqrt{\\eta^2 + c^2 - 1} $$\n\n$$ F = \\frac{1}{2}\\cdot\\frac{(g - c)^2}{(g + c)^2}\\left(1 + \\frac{\\bigl(c(g + c) - 1\\bigr)^2}{\\bigl(c(g - c) + 1\\bigr)^2}\\right) $$\n\nWhen $\\eta^2 + c^2 < 1$, the quantity $g$ is imaginary and total internal reflection occurs, in which case $F = 1$.\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in Thin-Film Iridescence. The substrate IOR $\\eta_3$ is set to the node's ior input $\\eta$, with $\\kappa_3 = 0$ (lossless dielectric). The polarized phase shifts at the film\u2013substrate interface are computed using the complex phase formulas given in the Thin-Film Iridescence Model appendix, evaluated with $\\kappa_3 = 0$; these capture the phase flip of the parallel polarization at the film\u2013substrate Brewster angle, as well as the continuous phase shifts arising from total internal reflection within the film.",
+        "notes": "In the equations below, the tint input corresponds to $t$ and the ior input corresponds to $\\eta$, the real-valued index of refraction of the surface *relative to the exterior medium*. The Fresnel formulation below assumes the exterior medium is air/vacuum ($\\eta_i \\approx 1$), so $\\eta$ is equivalently the ratio of the surface IOR to that of the medium on the incident side of the interface.\n\nThe tint $t$ scales the node's reflection and transmission lobes directly, multiplying the [microfacet BRDF and BTDF](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#microfacet-model) as $t f_r$ and $t f_t$. It does not modify the Fresnel reflectance $F$ itself, so the Fresnel transmittance $1 - F$ used by the BTDF remains untinted.\n\n#### Dielectric Fresnel Equations\n\nThe Fresnel reflectance $F$ is computed from the standard Fresnel equations for unpolarized light[^Walter2007], using the optimized formulation given by Lagarde[^Lagarde2013]:\n\n$$ c = \\cos\\theta $$\n\n$$ g = \\sqrt{\\eta^2 + c^2 - 1} $$\n\n$$ F = \\frac{1}{2}\\cdot\\frac{(g - c)^2}{(g + c)^2}\\left(1 + \\frac{\\bigl(c(g + c) - 1\\bigr)^2}{\\bigl(c(g - c) + 1\\bigr)^2}\\right) $$\n\nWhen $\\eta^2 + c^2 < 1$, the quantity $g$ is imaginary and total internal reflection occurs, in which case $F = 1$.\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in [Thin-Film Iridescence](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence). The substrate IOR $\\eta_3$ is set to the node's ior input $\\eta$, with $\\kappa_3 = 0$ (lossless dielectric). The polarized phase shifts at the film\u2013substrate interface are computed using the complex phase formulas given in the [Thin-Film Iridescence Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence-model) appendix, evaluated with $\\kappa_3 = 0$; these capture the phase flip of the parallel polarization at the film\u2013substrate Brewster angle, as well as the continuous phase shifts arising from total internal reflection within the film.",
         "references": [
           {
             "key": "Walter2007",
@@ -751,7 +801,8 @@
             "text": "S\u00e9bastien Lagarde, Memo on Fresnel equations, 2013",
             "url": "https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations/"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-dielectric-bsdf"
       },
       "conductor_bsdf": {
         "section": "BSDF Nodes",
@@ -834,8 +885,8 @@
             }
           }
         ],
-        "description": "Constructs a reflection BSDF based on a microfacet reflectance model[^Burley2012]. Uses a Fresnel curve with complex refraction index for conductors/metals. If an artistic parametrization[^Gulbrandsen2014] is needed the <artistic_ior> utility node can be connected to handle this.\n\nImplementations are expected to preserve energy as the roughness of the surface increases, with multiple scattering compensation[^Turquin2019] being a popular implementation strategy.\n\nThe default values for ior and extinction represent approximate values for gold.\n\nSetting retroreflective to true switches the BSDF to retroreflection mode, where light is reflected back toward the incoming direction rather than the mirror reflection direction[^Portsmouth2026].\n\nThin-film iridescence effects[^Belcour2017] may be enabled by setting thinfilm_thickness to a non-zero value.",
-        "notes": "In the equations below, the ior input corresponds to $\\eta$, the index of refraction per color channel, and the extinction input corresponds to $\\kappa$, the extinction coefficient per color channel. Together, these define the complex index of refraction $\\eta + i\\kappa$ of the conductor.\n\n#### Conductor Fresnel Equations\n\nThe reflectance $F$ is the average of the s-polarized ($R_s$) and p-polarized ($R_p$) Fresnel reflectances at a conductor interface[^Lagarde2013]:\n\n$$ a^2 + b^2 = \\sqrt{(\\eta^2 - \\kappa^2 - \\sin^2\\theta)^2 + 4\\eta^2 \\kappa^2} $$\n\n$$ a = \\sqrt{\\max\\left(0, \\tfrac{1}{2}(a^2 + b^2 + \\eta^2 - \\kappa^2 - \\sin^2\\theta)\\right)} $$\n\n$$ R_s = \\frac{a^2 + b^2 - 2a \\cdot \\cos\\theta + \\cos^2\\theta}{a^2 + b^2 + 2a \\cdot \\cos\\theta + \\cos^2\\theta} $$\n\n$$ R_p = R_s \\cdot \\frac{\\cos^2\\theta (a^2 + b^2) - 2a \\cdot \\cos\\theta\\sin^2\\theta + \\sin^4\\theta}{\\cos^2\\theta (a^2 + b^2) + 2a \\cdot \\cos\\theta\\sin^2\\theta + \\sin^4\\theta} $$\n\n$$ F = \\tfrac{1}{2}(R_s + R_p) $$\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in Thin-Film Iridescence. The substrate is defined by the node's complex index of refraction, with $\\eta_3 = \\eta$ and $\\kappa_3 = \\kappa$. The polarized phase shifts at the film\u2013substrate interface are computed using the complex phase formulas given in the Thin-Film Iridescence Model appendix.",
+        "description": "Constructs a reflection BSDF based on a microfacet reflectance model[^Burley2012]. Uses a Fresnel curve with complex refraction index for conductors/metals. If an artistic parametrization[^Gulbrandsen2014] is needed the [<artistic_ior>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-artistic-ior) utility node can be connected to handle this.\n\nImplementations are expected to preserve energy as the roughness of the surface increases, with multiple scattering compensation[^Turquin2019] being a popular implementation strategy.\n\nThe default values for ior and extinction represent approximate values for gold.\n\nSetting retroreflective to true switches the BSDF to retroreflection mode, where light is reflected back toward the incoming direction rather than the mirror reflection direction[^Portsmouth2026].\n\nThin-film iridescence effects[^Belcour2017] may be enabled by setting thinfilm_thickness to a non-zero value.",
+        "notes": "In the equations below, the ior input corresponds to $\\eta$, the index of refraction per color channel, and the extinction input corresponds to $\\kappa$, the extinction coefficient per color channel. Together, these define the complex index of refraction $\\eta + i\\kappa$ of the conductor.\n\n#### Conductor Fresnel Equations\n\nThe reflectance $F$ is the average of the s-polarized ($R_s$) and p-polarized ($R_p$) Fresnel reflectances at a conductor interface[^Lagarde2013]:\n\n$$ a^2 + b^2 = \\sqrt{(\\eta^2 - \\kappa^2 - \\sin^2\\theta)^2 + 4\\eta^2 \\kappa^2} $$\n\n$$ a = \\sqrt{\\max\\left(0, \\tfrac{1}{2}(a^2 + b^2 + \\eta^2 - \\kappa^2 - \\sin^2\\theta)\\right)} $$\n\n$$ R_s = \\frac{a^2 + b^2 - 2a \\cdot \\cos\\theta + \\cos^2\\theta}{a^2 + b^2 + 2a \\cdot \\cos\\theta + \\cos^2\\theta} $$\n\n$$ R_p = R_s \\cdot \\frac{\\cos^2\\theta (a^2 + b^2) - 2a \\cdot \\cos\\theta\\sin^2\\theta + \\sin^4\\theta}{\\cos^2\\theta (a^2 + b^2) + 2a \\cdot \\cos\\theta\\sin^2\\theta + \\sin^4\\theta} $$\n\n$$ F = \\tfrac{1}{2}(R_s + R_p) $$\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in [Thin-Film Iridescence](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence). The substrate is defined by the node's complex index of refraction, with $\\eta_3 = \\eta$ and $\\kappa_3 = \\kappa$. The polarized phase shifts at the film\u2013substrate interface are computed using the complex phase formulas given in the [Thin-Film Iridescence Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence-model) appendix.",
         "references": [
           {
             "key": "Burley2012",
@@ -867,7 +918,8 @@
             "text": "S\u00e9bastien Lagarde, Memo on Fresnel equations, 2013",
             "url": "https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations/"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-conductor-bsdf"
       },
       "generalized_schlick_bsdf": {
         "section": "BSDF Nodes",
@@ -969,7 +1021,7 @@
           }
         ],
         "description": "Constructs a reflection and/or transmission BSDF based on a microfacet model and a generalized Schlick Fresnel curve[^Hoffman2023]. If reflection scattering is enabled the node may be layered vertically over a base BSDF for the surface beneath the dielectric layer. By chaining multiple <generalized_schlick_bsdf> nodes you can describe a surface with multiple specular lobes. If transmission scattering is enabled the node may be layered over a VDF describing the surface interior to handle absorption and scattering inside the medium, useful for colored glass, turbid water, etc.\n\nImplementations are expected to preserve energy as the roughness of the surface increases, with multiple scattering compensation[^Turquin2019] being a popular implementation strategy.\n\nThe color82 input provides a multiplier on reflectivity at 82 degrees, useful for capturing the characteristic \"dip\" in the reflectance curve of metallic surfaces. Setting it to (1,1,1) effectively disables this feature for backward compatibility.\n\nSetting retroreflective to true switches the BSDF to retroreflection mode, where light is reflected back toward the incoming direction rather than the mirror reflection direction[^Portsmouth2026].\n\nThin-film iridescence effects[^Belcour2017] may be enabled by setting thinfilm_thickness to a non-zero value.\n\nThe scatter_mode behavior matches that of dielectric_bsdf: in RT mode, reflection and transmission occur both when entering and leaving a surface, with intensities controlled by the Fresnel curve. Total internal reflection may occur depending on the incident angle.",
-        "notes": "In the equations below, the color0 and color90 inputs correspond to $r_0$ and $r_{90}$, the color82 input corresponds to $t$, and the exponent input corresponds to $q$ in the generalized Schlick model.\n\n#### Generalized Schlick Equations\n\nThe Hoffman[^Hoffman2023] generalization of the Schlick Fresnel curve adds a controllable dip in the reflectance at $\\theta_{\\max} = \\arccos(1/7) \\approx 81.79\u00b0$, whose depth is set by the color82 multiplier $t$:\n\n$$ \\cos\\theta_{\\max} = \\frac{1}{7} $$\n\n$$ a = \\frac{\\bigl[r_0 + (r_{90} - r_0)(1 - \\cos\\theta_{\\max})^{q}\\bigr](1 - t)}{\\cos\\theta_{\\max}(1 - \\cos\\theta_{\\max})^{6}} $$\n\n$$ F_{\\theta} = r_0 + (r_{90} - r_0)(1 - \\cos\\theta)^{q} - a \\cdot \\cos\\theta (1 - \\cos\\theta)^{6} $$\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F_{\\theta}$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in Thin-Film Iridescence. The substrate IOR $\\eta_3$ is derived from the color0 input $r_0$ using the standard Schlick-to-IOR inversion, with $\\kappa_3 = 0$. The phase shift at the film\u2013substrate interface uses the step-function approximation given in the Thin-Film Iridescence Model appendix, applied equally to both polarization states.",
+        "notes": "In the equations below, the color0 and color90 inputs correspond to $r_0$ and $r_{90}$, the color82 input corresponds to $t$, and the exponent input corresponds to $q$ in the generalized Schlick model.\n\n#### Generalized Schlick Equations\n\nThe Hoffman[^Hoffman2023] generalization of the Schlick Fresnel curve adds a controllable dip in the reflectance at $\\theta_{\\max} = \\arccos(1/7) \\approx 81.79\u00b0$, whose depth is set by the color82 multiplier $t$:\n\n$$ \\cos\\theta_{\\max} = \\frac{1}{7} $$\n\n$$ a = \\frac{\\bigl[r_0 + (r_{90} - r_0)(1 - \\cos\\theta_{\\max})^{q}\\bigr](1 - t)}{\\cos\\theta_{\\max}(1 - \\cos\\theta_{\\max})^{6}} $$\n\n$$ F_{\\theta} = r_0 + (r_{90} - r_0)(1 - \\cos\\theta)^{q} - a \\cdot \\cos\\theta (1 - \\cos\\theta)^{6} $$\n\n#### Thin-Film Iridescence\n\nWhen thinfilm_thickness is non-zero, the Fresnel reflectance $F_{\\theta}$ above is replaced by the Airy reflectance $F_{\\text{airy}}$ defined in [Thin-Film Iridescence](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence). The substrate IOR $\\eta_3$ is derived from the color0 input $r_0$ using the standard Schlick-to-IOR inversion, with $\\kappa_3 = 0$. The phase shift at the film\u2013substrate interface uses the step-function approximation given in the [Thin-Film Iridescence Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#thin-film-iridescence-model) appendix, applied equally to both polarization states.",
         "references": [
           {
             "key": "Hoffman2023",
@@ -991,7 +1043,8 @@
             "text": "Laurent Belcour, Pascal Barla, A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence, 2017",
             "url": "https://belcour.github.io/blog/research/publication/2017/05/01/brdf-thin-film.html"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-generalized-schlick-bsdf"
       },
       "subsurface_bsdf": {
         "section": "BSDF Nodes",
@@ -1044,8 +1097,8 @@
             }
           }
         ],
-        "description": "Constructs a subsurface scattering BSDF for subsurface scattering within a homogeneous medium. The parameterization is chosen to match random walk Monte Carlo methods[^Kulla2017] as well as approximate empirical methods[^Christensen2015]. This node is defined compositionally as a BSDF vertically layered over an <anisotropic_vdf>, as detailed below.\n\nThe radius input sets the average distance (mean free path) that light propagates below the surface before scattering back out, and can be set independently for each color channel.\n\nThe anisotropy input controls the scattering direction: negative values produce backwards scattering, positive values produce forward scattering, and zero produces uniform scattering.",
-        "notes": "#### Compositional Structure\n\nThe node's scattering behavior is equivalent to an untinted Lambertian transmission surface \u2014 <translucent_bsdf> with unit color \u2014 vertically layered over a participating medium described by <anisotropic_vdf>. Incident light enters the medium through the surface, scatters with phase function asymmetry $g$ (the anisotropy input), and exits at a potentially different surface position; its coloring is determined entirely by the volumetric absorption, not by the surface transmission. The resulting distribution function therefore depends on both the incident and exitant surface positions ($p_i$ and $p_o$), as introduced in the Bidirectional Scattering Distribution Function section.\n\nThe artist-facing color and radius inputs are converted to the volume's physical absorption and scattering coefficients by an albedo inversion, and a renderer may evaluate the result either directly via random-walk volumetric transport or through an equivalent normalized diffusion approximation. These conversions and the diffusion profile are given in the Subsurface Scattering Model appendix.",
+        "description": "Constructs a subsurface scattering BSDF for subsurface scattering within a homogeneous medium. The parameterization is chosen to match random walk Monte Carlo methods[^Kulla2017] as well as approximate empirical methods[^Christensen2015]. This node is defined compositionally as a BSDF vertically layered over an [<anisotropic_vdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-anisotropic-vdf), as detailed below.\n\nThe radius input sets the average distance (mean free path) that light propagates below the surface before scattering back out, and can be set independently for each color channel.\n\nThe anisotropy input controls the scattering direction: negative values produce backwards scattering, positive values produce forward scattering, and zero produces uniform scattering.",
+        "notes": "#### Compositional Structure\n\nThe node's scattering behavior is equivalent to an untinted Lambertian transmission surface \u2014 [<translucent_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-translucent-bsdf) with unit color \u2014 vertically layered over a participating medium described by [<anisotropic_vdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-anisotropic-vdf). Incident light enters the medium through the surface, scatters with phase function asymmetry $g$ (the anisotropy input), and exits at a potentially different surface position; its coloring is determined entirely by the volumetric absorption, not by the surface transmission. The resulting distribution function therefore depends on both the incident and exitant surface positions ($p_i$ and $p_o$), as introduced in the [Bidirectional Scattering Distribution Function](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#bidirectional-scattering-distribution-function) section.\n\nThe artist-facing color and radius inputs are converted to the volume's physical absorption and scattering coefficients by an albedo inversion, and a renderer may evaluate the result either directly via random-walk volumetric transport or through an equivalent normalized diffusion approximation. These conversions and the diffusion profile are given in the [Subsurface Scattering Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#subsurface-scattering-model) appendix.",
         "references": [
           {
             "key": "Kulla2017",
@@ -1057,7 +1110,8 @@
             "text": "Per H. Christensen, Brent Burley, Approximate Reflectance Profiles for Efficient Subsurface Scattering, 2015",
             "url": "https://research.pixar.com/docs/2015.TechnicalReport.CB.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-subsurface-bsdf"
       },
       "sheen_bsdf": {
         "section": "BSDF Nodes",
@@ -1110,8 +1164,8 @@
             }
           }
         ],
-        "description": "Constructs a microfacet BSDF for the back-scattering properties of cloth-like materials. This node may be layered vertically over a base BSDF using a <layer> node. All energy that is not reflected will be transmitted to the base layer. A mode option selects between two available sheen models, Conty-Kulla[^Conty2017] and Zeltner[^Zeltner2022].",
-        "notes": "In the equations below, the color input corresponds to $c$, a non-physical color tint on the sheen lobe, and the roughness input corresponds to $r$, the degree to which the microfibers diverge from the surface normal.\n\n#### Conty-Kulla Sheen Equations\n\n$$ D(\\theta_h) = \\frac{\\left(2 + \\dfrac{1}{r}\\right)\\left(1 - \\cos^2\\theta_h\\right)^{\\frac{1}{2r}}}{2\\pi} $$\n\n$$ f_r(\\omega_i,\\omega_o,\\omega_h) = \\frac{c D(\\theta_h)}{4(\\cos\\theta_i + \\cos\\theta_o - \\cos\\theta_i\\cos\\theta_o)} $$\n\n#### Zeltner Sheen Equations\n\nWhen mode is set to zeltner, the Zeltner sheen model[^Zeltner2022] approximates multi-scattering cloth reflectance using a Linearly Transformed Cosine (LTC) lobe. The full derivation and fitted coefficients are given in the Zeltner Sheen Model appendix.",
+        "description": "Constructs a microfacet BSDF for the back-scattering properties of cloth-like materials. This node may be layered vertically over a base BSDF using a [<layer>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-layer) node. All energy that is not reflected will be transmitted to the base layer. A mode option selects between two available sheen models, Conty-Kulla[^Conty2017] and Zeltner[^Zeltner2022].",
+        "notes": "In the equations below, the color input corresponds to $c$, a non-physical color tint on the sheen lobe, and the roughness input corresponds to $r$, the degree to which the microfibers diverge from the surface normal.\n\n#### Conty-Kulla Sheen Equations\n\n$$ D(\\theta_h) = \\frac{\\left(2 + \\dfrac{1}{r}\\right)\\left(1 - \\cos^2\\theta_h\\right)^{\\frac{1}{2r}}}{2\\pi} $$\n\n$$ f_r(\\omega_i,\\omega_o,\\omega_h) = \\frac{c D(\\theta_h)}{4(\\cos\\theta_i + \\cos\\theta_o - \\cos\\theta_i\\cos\\theta_o)} $$\n\n#### Zeltner Sheen Equations\n\nWhen mode is set to zeltner, the Zeltner sheen model[^Zeltner2022] approximates multi-scattering cloth reflectance using a Linearly Transformed Cosine (LTC) lobe. The full derivation and fitted coefficients are given in the [Zeltner Sheen Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#zeltner-sheen-model) appendix.",
         "references": [
           {
             "key": "Conty2017",
@@ -1123,7 +1177,8 @@
             "text": "Tizian Zeltner et al., Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines, 2022",
             "url": "https://tizianzeltner.com/projects/Zeltner2022Practical/"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-sheen-bsdf"
       },
       "chiang_hair_bsdf": {
         "section": "BSDF Nodes",
@@ -1212,15 +1267,16 @@
             }
           }
         ],
-        "description": "Constructs a hair BSDF based on the Chiang hair shading model[^Chiang2016]. This node does not support vertical layering.\n\nThe roughness inputs provide a longitudinal variance $v$ and an azimuthal logistic scale $s$ for each lobe, with (0,0) specifying pure specular scattering. These low-level parameters may be computed from artist-facing longitudinal and azimuthal roughness values using the <chiang_hair_roughness> utility node. The default ior of 1.55 represents the index of refraction for keratin. The cuticle_angle is a normalized value in $[0, 1]$, with 0.5 representing no tilt, and values above 0.5 tilting the scales toward the root of the fiber.",
-        "notes": "In the equations below, the tint_R, tint_TT, and tint_TRT inputs correspond to per-lobe color tints $t_R$, $t_{TT}$, $t_{TRT}$; the ior input corresponds to $\\eta$, the index of refraction of the hair fiber; the roughness_R, roughness_TT, and roughness_TRT inputs each provide a pair $(v, s)$ of longitudinal variance and azimuthal logistic scale values; the cuticle_angle input corresponds to $\\alpha$; and the absorption_coefficient input corresponds to $\\sigma_a$.\n\n#### Chiang Hair Scattering Equations\n\nThe Chiang hair model[^Chiang2016] treats a hair fiber as a dielectric cylinder with tilted cuticle scales. Directions at a point on the fiber are parameterized by inclination $\\theta$ from the fiber's normal plane and azimuth $\\phi$ around the fiber, differing from the surface-normal angles used by planar BSDF nodes. The BCSDF is a sum over four scattering lobes \u2014 R (surface reflection), TT (double transmission), TRT (internal reflection), and TRRT+ (higher-order paths):\n\n$$ f_c(\\omega_i, \\omega_o) = \\frac{1}{\\pi} \\sum_{p \\in \\{R,TT,TRT,TRRT+\\}} t_p A_p M_p N_p $$\n\nwhere $M_p$ is the longitudinal scattering function, $N_p$ is the azimuthal scattering function, and $A_p$ is the attenuation factor combining Fresnel reflectance and volumetric absorption. The higher-order TRRT+ lobe shares the tint $t_{TRT}$ and the roughness values of the TRT lobe. The full definitions of these components are given in the Chiang Hair Model appendix.",
+        "description": "Constructs a hair BSDF based on the Chiang hair shading model[^Chiang2016]. This node does not support vertical layering.\n\nThe roughness inputs provide a longitudinal variance $v$ and an azimuthal logistic scale $s$ for each lobe, with (0,0) specifying pure specular scattering. These low-level parameters may be computed from artist-facing longitudinal and azimuthal roughness values using the [<chiang_hair_roughness>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-chiang-hair-roughness) utility node. The default ior of 1.55 represents the index of refraction for keratin. The cuticle_angle is a normalized value in $[0, 1]$, with 0.5 representing no tilt, and values above 0.5 tilting the scales toward the root of the fiber.",
+        "notes": "In the equations below, the tint_R, tint_TT, and tint_TRT inputs correspond to per-lobe color tints $t_R$, $t_{TT}$, $t_{TRT}$; the ior input corresponds to $\\eta$, the index of refraction of the hair fiber; the roughness_R, roughness_TT, and roughness_TRT inputs each provide a pair $(v, s)$ of longitudinal variance and azimuthal logistic scale values; the cuticle_angle input corresponds to $\\alpha$; and the absorption_coefficient input corresponds to $\\sigma_a$.\n\n#### Chiang Hair Scattering Equations\n\nThe Chiang hair model[^Chiang2016] treats a hair fiber as a dielectric cylinder with tilted cuticle scales. Directions at a point on the fiber are parameterized by inclination $\\theta$ from the fiber's normal plane and azimuth $\\phi$ around the fiber, differing from the surface-normal angles used by planar BSDF nodes. The BCSDF is a sum over four scattering lobes \u2014 R (surface reflection), TT (double transmission), TRT (internal reflection), and TRRT+ (higher-order paths):\n\n$$ f_c(\\omega_i, \\omega_o) = \\frac{1}{\\pi} \\sum_{p \\in \\{R,TT,TRT,TRRT+\\}} t_p A_p M_p N_p $$\n\nwhere $M_p$ is the longitudinal scattering function, $N_p$ is the azimuthal scattering function, and $A_p$ is the attenuation factor combining Fresnel reflectance and volumetric absorption. The higher-order TRRT+ lobe shares the tint $t_{TRT}$ and the roughness values of the TRT lobe. The full definitions of these components are given in the [Chiang Hair Model](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#chiang-hair-model) appendix.",
         "references": [
           {
             "key": "Chiang2016",
             "text": "Matt Jen-Yuan Chiang et al., A Practical and Controllable Hair and Fur Model for Production Path Tracing, 2016",
             "url": "https://media.disneyanimation.com/uploads/production/publication_asset/152/asset/eurographics2016Fur_Smaller.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-chiang-hair-bsdf"
       },
       "uniform_edf": {
         "section": "EDF Nodes",
@@ -1248,7 +1304,8 @@
         ],
         "description": "Constructs an EDF emitting light uniformly across the hemisphere around the surface normal.",
         "notes": "In the equation below, the color input corresponds to $c$, the emitted radiance.\n\n#### Uniform Emission Equation\n\n$$ L_e(\\omega_o) = c $$\n\nFor a Lambertian emitter such as this, the equivalent radiant exitance (power per unit area integrated over the hemisphere) is $M = \\pi c$.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-uniform-edf"
       },
       "conical_edf": {
         "section": "EDF Nodes",
@@ -1291,7 +1348,8 @@
         ],
         "description": "Constructs an EDF emitting light inside a cone around the normal direction.\n\nLight intensity begins to fall off at the inner_angle and reaches zero at the outer_angle (both specified in degrees as full cone angles). If the outer_angle is smaller than the inner_angle, no falloff occurs within the cone.",
         "notes": "In the equations below, the color input corresponds to $c$, the peak emitted radiance along the cone axis. The inner_angle and outer_angle inputs are full cone angles in degrees and are halved to obtain the angle from the cone axis.\n\n#### Conical Falloff Equations\n\nDefine:\n\n$$ \\cos\\theta_o = \\max(0, \\omega_o \\cdot n) $$\n\n$$ c_{\\text{in}} = \\cos\\!\\left(\\tfrac{\\pi}{360}\\cdot\\text{inner\\_angle}\\right), \\quad c_{\\text{out}} = \\cos\\!\\left(\\tfrac{\\pi}{360}\\cdot\\text{outer\\_angle}\\right) $$\n\nCase 1 \u2014 no falloff (outer_angle $\\le$ inner_angle): a hard cutoff at the inner cone boundary.\n\n$$ L_e(\\omega_o) = \\begin{cases} c & \\text{if } \\cos\\theta_o \\ge c_{\\text{in}} \\\\ 0 & \\text{otherwise} \\end{cases} $$\n\nCase 2 \u2014 smooth falloff (outer_angle $>$ inner_angle): Hermite-smoothstep interpolation in cosine space between the outer and inner cone boundaries.\n\n$$ L_e(\\omega_o) = c\\cdot\\mathrm{smoothstep}(c_{\\text{out}},\\, c_{\\text{in}},\\, \\cos\\theta_o) $$\n\nwhere $\\mathrm{smoothstep}(a, b, x) = t^2(3 - 2t)$ with $`t = \\mathrm{clamp}\\!\\left(\\dfrac{x - a}{b - a},\\, 0,\\, 1\\right)`$.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-conical-edf"
       },
       "measured_edf": {
         "section": "EDF Nodes",
@@ -1329,7 +1387,8 @@
         ],
         "description": "Constructs an EDF emitting light according to a measured IES light profile.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-measured-edf"
       },
       "generalized_schlick_edf": {
         "section": "EDF Nodes",
@@ -1378,7 +1437,8 @@
             "text": "Christophe Schlick, An Inexpensive BRDF Model for Physically-based Rendering, Computer Graphics Forum, 1994",
             "url": "https://doi.org/10.1111/1467-8659.1330233"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-generalized-schlick-edf"
       },
       "absorption_vdf": {
         "section": "VDF Nodes",
@@ -1406,7 +1466,8 @@
         ],
         "description": "Constructs a VDF for pure light absorption.\n\nThe absorption input represents the absorption rate per distance traveled in the medium, stated in $m^{-1}$, with independent control for each wavelength.",
         "notes": "In the equation below, the absorption input corresponds to $\\sigma_a$, the absorption coefficient per color channel, stated in $m^{-1}$.\n\n#### Beer-Lambert Absorption\n\nAs light travels a distance $t$ through a purely absorbing medium, its radiance is attenuated exponentially according to Beer's law:\n\n$$ T(t) = e^{-\\sigma_a t} $$\n\nwhere $T$ is the fraction of radiance transmitted.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-absorption-vdf"
       },
       "anisotropic_vdf": {
         "section": "VDF Nodes",
@@ -1455,7 +1516,8 @@
             "text": "Matt Pharr et al., Physically Based Rendering: From Theory To Implementation, 2023",
             "url": "https://www.pbr-book.org/"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-anisotropic-vdf"
       },
       "surface": {
         "section": "PBR Shader Nodes",
@@ -1496,9 +1558,10 @@
             }
           }
         ],
-        "description": "Constructs a surface shader describing light scattering and emission for surfaces. The thin_walled input selects between closed and thin-walled interpretations of the surface, as described in Closed and Thin-Walled Surfaces below.\n\nIf the edf input is left unconnected, no emission will occur from the surface.",
-        "notes": "In the equations below, the bsdf input corresponds to $f$, the edf input corresponds to $L_e$, and the opacity input corresponds to $O$.\n\n#### Surface Shading Equation\n\nThe surface shader evaluates the Light Transport Equation at the shading point, scaled by the cutout opacity $O \\in [0, 1]$:\n\n$$ L_o(\\omega_o) = O \\left[ L_e(\\omega_o) + \\int_{\\mathbb{S}^2} f(\\omega_i, \\omega_o)\\, L_i(\\omega_i)\\, |\\omega_i \\cdot n|\\; d\\omega_i \\right] $$\n\nThe opacity $O$ is the fraction of the surface footprint covered by the material; the remaining uncovered fraction $1 - O$ lets radiance from geometry behind the surface pass through unoccluded, allowing the surface to act as a cutout mask.\n\n#### Closed and Thin-Walled Surfaces\n\nBy default (thin_walled = false) the surface bounds a solid interior: transmissive BSDFs refract incident light according to their index of refraction, and any medium layered beneath the surface attenuates the transmitted radiance. When thin_walled is true the surface represents an infinitely thin shell with matching media on both sides: transmission passes straight through without refraction or interior scattering. Distinct surface shaders may be assigned to the front and back faces of geometry using <surfacematerial> in the standard library, with the rules for sidedness and thin-walled status given in the Surfaces section above.",
-        "references": []
+        "description": "Constructs a surface shader describing light scattering and emission for surfaces. The thin_walled input selects between closed and thin-walled interpretations of the surface, as described in [Closed and Thin-Walled Surfaces](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#closed-and-thin-walled-surfaces) below.\n\nIf the edf input is left unconnected, no emission will occur from the surface.",
+        "notes": "In the equations below, the bsdf input corresponds to $f$, the edf input corresponds to $L_e$, and the opacity input corresponds to $O$.\n\n#### Surface Shading Equation\n\nThe surface shader evaluates the [Light Transport Equation](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#the-light-transport-equation) at the shading point, scaled by the cutout opacity $O \\in [0, 1]$:\n\n$$ L_o(\\omega_o) = O \\left[ L_e(\\omega_o) + \\int_{\\mathbb{S}^2} f(\\omega_i, \\omega_o)\\, L_i(\\omega_i)\\, |\\omega_i \\cdot n|\\; d\\omega_i \\right] $$\n\nThe opacity $O$ is the fraction of the surface footprint covered by the material; the remaining uncovered fraction $1 - O$ lets radiance from geometry behind the surface pass through unoccluded, allowing the surface to act as a cutout mask.\n\n#### Closed and Thin-Walled Surfaces\n\nBy default (thin_walled = false) the surface bounds a solid interior: transmissive BSDFs refract incident light according to their index of refraction, and any medium layered beneath the surface attenuates the transmitted radiance. When thin_walled is true the surface represents an infinitely thin shell with matching media on both sides: transmission passes straight through without refraction or interior scattering. Distinct surface shaders may be assigned to the front and back faces of geometry using [<surfacematerial>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-surfacematerial) in the standard library, with the rules for sidedness and thin-walled status given in the [Surfaces](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#surfaces) section above.",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-surface"
       },
       "volume": {
         "section": "PBR Shader Nodes",
@@ -1530,8 +1593,9 @@
           }
         ],
         "description": "Constructs a volume shader describing a participating medium.\n\nIf the edf input is left unconnected, no emission will occur from the medium.",
-        "notes": "In the equations below, the vdf input supplies the absorption coefficient $\\sigma_a$, scattering coefficient $\\sigma_s$, and phase function $f_p$, and the edf input corresponds to the volume emission $L_e$.\n\n#### Volume Shading Equation\n\nThe volume shader evaluates the Equation of Transfer within the participating medium.",
-        "references": []
+        "notes": "In the equations below, the vdf input supplies the absorption coefficient $\\sigma_a$, scattering coefficient $\\sigma_s$, and phase function $f_p$, and the edf input corresponds to the volume emission $L_e$.\n\n#### Volume Shading Equation\n\nThe volume shader evaluates the [Equation of Transfer](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#the-equation-of-transfer) within the participating medium.",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-volume"
       },
       "light": {
         "section": "PBR Shader Nodes",
@@ -1568,15 +1632,17 @@
           }
         ],
         "description": "Constructs a light shader describing an explicit light source. The light shader will emit light according to the connected EDF. If the shader is attached to geometry both sides will be considered for light emission and the EDF controls if light is emitted from both sides or not.",
-        "notes": "In the equation below, the edf input corresponds to the base emission $L_e^{\\text{edf}}$, the intensity input corresponds to $I$, and the exposure input corresponds to $E$.\n\n#### Light Emission Equation\n\nThe light shader scales the emission of the connected EDF by a linear intensity multiplier and a photographic exposure control in stops:\n\n$$ L_e(\\omega_o) = I \\cdot 2^{E} \\cdot L_e^{\\text{edf}}(\\omega_o) $$\n\nNote that the standard library includes definitions for displacement and surface_unlit shader nodes.",
-        "references": []
+        "notes": "In the equation below, the edf input corresponds to the base emission $L_e^{\\text{edf}}$, the intensity input corresponds to $I$, and the exposure input corresponds to $E$.\n\n#### Light Emission Equation\n\nThe light shader scales the emission of the connected EDF by a linear intensity multiplier and a photographic exposure control in stops:\n\n$$ L_e(\\omega_o) = I \\cdot 2^{E} \\cdot L_e^{\\text{edf}}(\\omega_o) $$\n\nNote that the standard library includes definitions for [displacement](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-displacement) and [surface_unlit](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#node-surfaceunlit) shader nodes.",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-light"
       },
       "displacement": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-displacement"
       },
       "layer": {
         "section": "Utility Nodes",
@@ -1607,9 +1673,10 @@
             }
           }
         ],
-        "description": "Vertically layer a layerable BSDF such as <dielectric_bsdf>, <generalized_schlick_bsdf> or <sheen_bsdf> over a BSDF or VDF. The implementation is target specific, but a standard way of handling this is by albedo scaling, using the function \"base*(1-reflectance(top)) + top\", where the reflectance function calculates the directional albedo of a given BSDF.",
-        "notes": "In the equation below, the top input corresponds to $f_{\\text{top}}$ and the base input corresponds to $f_{\\text{base}}$. The quantity $E_{\\text{top}}$ is the directional albedo of $f_{\\text{top}}$, as defined in the Directional Albedo and Energy Conservation section.\n\n#### Layer Equation\n\n$$ f = f_{\\text{top}} + (1 - E_{\\text{top}}) f_{\\text{base}} $$\n\nThe base is attenuated by exactly the energy not reflected by the top layer. If both $f_{\\text{top}}$ and $f_{\\text{base}}$ are individually energy conserving, the layered result is also energy conserving.",
-        "references": []
+        "description": "Vertically layer a layerable BSDF such as [<dielectric_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-dielectric-bsdf), [<generalized_schlick_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-generalized-schlick-bsdf) or [<sheen_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-sheen-bsdf) over a BSDF or VDF. The implementation is target specific, but a standard way of handling this is by albedo scaling, using the function \"base*(1-reflectance(top)) + top\", where the reflectance function calculates the directional albedo of a given BSDF.",
+        "notes": "In the equation below, the top input corresponds to $f_{\\text{top}}$ and the base input corresponds to $f_{\\text{base}}$. The quantity $E_{\\text{top}}$ is the directional albedo of $f_{\\text{top}}$, as defined in the [Directional Albedo and Energy Conservation](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#directional-albedo-and-energy-conservation) section.\n\n#### Layer Equation\n\n$$ f = f_{\\text{top}} + (1 - E_{\\text{top}}) f_{\\text{base}} $$\n\nThe base is attenuated by exactly the energy not reflected by the top layer. If both $f_{\\text{top}}$ and $f_{\\text{base}}$ are individually energy conserving, the layered result is also energy conserving.",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-layer"
       },
       "mix": {
         "section": "Utility Nodes",
@@ -1652,7 +1719,8 @@
         ],
         "description": "Mix two same-type distribution functions according to a weight. Performs horizontal layering by linear interpolation between the two inputs, using the function \"bg\u2217(1\u2212mix) + fg\u2217mix\".",
         "notes": "In the equation below, the bg input corresponds to $f_{\\text{bg}}$, the fg input corresponds to $f_{\\text{fg}}$, and the mix input corresponds to the weight $w$.\n\n#### Mix Equation\n\n$$ f = (1 - w) f_{\\text{bg}} + w f_{\\text{fg}} $$\n\nBecause $w \\in [0, 1]$, the mix of two individually energy-conserving distribution functions is also energy conserving.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-mix"
       },
       "add": {
         "section": "Utility Nodes",
@@ -1684,8 +1752,9 @@
           }
         ],
         "description": "Additively blend two distribution functions of the same type.",
-        "notes": "In the equation below, the in1 input corresponds to $f_1$ and the in2 input corresponds to $f_2$.\n\n#### Add Equation\n\n$$ f = f_1 + f_2 $$\n\nNote that unlike <mix> and <layer>, the add node does not guarantee energy conservation. The sum of two energy-conserving distribution functions may reflect more energy than is incident, so the author is responsible for ensuring that the combined result remains physically plausible.",
-        "references": []
+        "notes": "In the equation below, the in1 input corresponds to $f_1$ and the in2 input corresponds to $f_2$.\n\n#### Add Equation\n\n$$ f = f_1 + f_2 $$\n\nNote that unlike [<mix>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-mix) and [<layer>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-layer), the add node does not guarantee energy conservation. The sum of two energy-conserving distribution functions may reflect more energy than is incident, so the author is responsible for ensuring that the combined result remains physically plausible.",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-add"
       },
       "multiply": {
         "section": "Utility Nodes",
@@ -1718,7 +1787,8 @@
         ],
         "description": "Multiply the contribution of a distribution function by a scaling weight. The weight is either a float to attenuate the channels uniformly, or a color which can attenuate the channels separately. To be energy conserving the scaling weight should be no more than 1.0 in any channel.",
         "notes": "In the equation below, the in1 input corresponds to $f_1$ and the in2 input corresponds to the scaling weight $s$.\n\n#### Multiply Equation\n\n$$ f = s f_1 $$\n\nWhen $s$ is a color3, each color channel of the distribution function is scaled independently.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-multiply"
       },
       "roughness_anisotropy": {
         "section": "Utility Nodes",
@@ -1755,7 +1825,8 @@
         ],
         "description": "Calculates anisotropic surface roughness from a scalar roughness and anisotropy parameterization. An anisotropy value above 0.0 stretches the roughness in the direction of the surface's \"tangent\" vector. An anisotropy value of 0.0 gives isotropic roughness. The roughness value is squared to achieve a more linear roughness look over the input range [0,1].",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-roughness-anisotropy"
       },
       "roughness_dual": {
         "section": "Utility Nodes",
@@ -1786,7 +1857,8 @@
         ],
         "description": "Calculates anisotropic surface roughness from a dual surface roughness parameterization. The roughness is squared to achieve a more linear roughness look over the input range [0,1].",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-roughness-dual"
       },
       "glossiness_anisotropy": {
         "section": "Utility Nodes",
@@ -1823,7 +1895,8 @@
         ],
         "description": "Calculates anisotropic surface roughness from a scalar glossiness and anisotropy parameterization. This node gives the same result as roughness anisotropy except that the glossiness value is an inverted roughness value. To be used as a convenience for shading models using the glossiness parameterization.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-glossiness-anisotropy"
       },
       "blackbody": {
         "section": "Utility Nodes",
@@ -1851,7 +1924,8 @@
         ],
         "description": "Returns the radiant emittance of a blackbody radiator with the given temperature.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-blackbody"
       },
       "artistic_ior": {
         "section": "Utility Nodes",
@@ -1887,9 +1961,10 @@
             }
           }
         ],
-        "description": "Converts the artistic parameterization reflectivity and edge_color to complex IOR values. To be used with the <conductor_bsdf> node.",
+        "description": "Converts the artistic parameterization reflectivity and edge_color to complex IOR values. To be used with the [<conductor_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-conductor-bsdf) node.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-artistic-ior"
       },
       "deon_hair_absorption_from_melanin": {
         "section": "Utility Nodes",
@@ -1944,7 +2019,8 @@
             "text": "Eugene d'Eon et al., An Energy-Conserving Hair Reflectance Model, 2011",
             "url": "https://eugenedeon.com/pdfs/egsrhair.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-deon-hair-absorption-from-melanin"
       },
       "chiang_hair_absorption_from_color": {
         "section": "Utility Nodes",
@@ -1987,7 +2063,8 @@
             "text": "Matt Jen-Yuan Chiang et al., A Practical and Controllable Hair and Fur Model for Production Path Tracing, 2016",
             "url": "https://media.disneyanimation.com/uploads/production/publication_asset/152/asset/eurographics2016Fur_Smaller.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-chiang-hair-absorption-from-color"
       },
       "chiang_hair_roughness": {
         "section": "Utility Nodes",
@@ -2047,7 +2124,7 @@
           }
         ],
         "description": "Converts the artistic parameterization hair roughness to roughness for R, TT and TRT lobes, as described in [^Chiang2016].",
-        "notes": "In the equations below, the longitudinal input corresponds to $\\ell$, the artist-facing longitudinal roughness; the azimuthal input corresponds to $a$, the artist-facing azimuthal roughness; and the scale_TT and scale_TRT inputs correspond to the per-lobe roughness scales $k_{TT}$ and $k_{TRT}$[^Marschner2003].\n\n#### Hair Roughness Conversion Equations\n\nThe artist-facing roughness values are converted to the longitudinal variance $v$ and azimuthal logistic scale $s$ consumed by <chiang_hair_bsdf> using empirical fits[^Chiang2016]:\n\n$$ v = \\left(0.726\\ell + 0.812\\ell^2 + 3.7\\ell^{20}\\right)^2 $$\n\n$$ s = 0.265 a + 1.194 a^2 + 5.372 a^{22} $$\n\nThe per-lobe outputs apply the squared roughness scales to the longitudinal variance:\n\n$$ \\text{roughness\\_R} = (v,\\; s), \\quad \\text{roughness\\_TT} = (k_{TT}^2\\, v,\\; s), \\quad \\text{roughness\\_TRT} = (k_{TRT}^2\\, v,\\; s) $$",
+        "notes": "In the equations below, the longitudinal input corresponds to $\\ell$, the artist-facing longitudinal roughness; the azimuthal input corresponds to $a$, the artist-facing azimuthal roughness; and the scale_TT and scale_TRT inputs correspond to the per-lobe roughness scales $k_{TT}$ and $k_{TRT}$[^Marschner2003].\n\n#### Hair Roughness Conversion Equations\n\nThe artist-facing roughness values are converted to the longitudinal variance $v$ and azimuthal logistic scale $s$ consumed by [<chiang_hair_bsdf>](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-chiang-hair-bsdf) using empirical fits[^Chiang2016]:\n\n$$ v = \\left(0.726\\ell + 0.812\\ell^2 + 3.7\\ell^{20}\\right)^2 $$\n\n$$ s = 0.265 a + 1.194 a^2 + 5.372 a^{22} $$\n\nThe per-lobe outputs apply the squared roughness scales to the longitudinal variance:\n\n$$ \\text{roughness\\_R} = (v,\\; s), \\quad \\text{roughness\\_TT} = (k_{TT}^2\\, v,\\; s), \\quad \\text{roughness\\_TRT} = (k_{TRT}^2\\, v,\\; s) $$",
         "references": [
           {
             "key": "Chiang2016",
@@ -2059,7 +2136,8 @@
             "text": "Stephen R. Marschner et al., Light Scattering from Human Hair Fibers, 2003",
             "url": "http://www.graphics.stanford.edu/papers/hair/hair-sg03final.pdf"
           }
-        ]
+        ],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.PBRSpec.md#node-chiang-hair-roughness"
       }
     }
   },
@@ -2070,14 +2148,16 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-surfacematerial"
       },
       "volumematerial": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-volumematerial"
       }
     },
     "shader": {
@@ -2127,7 +2207,8 @@
         ],
         "description": "An unlit surface shader node, representing a surface that can emit and transmit light, but does not receive illumination from light sources or other surfaces.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-surface-unlit"
       },
       "convert": {
         "section": "Channel Nodes",
@@ -2255,7 +2336,8 @@
         ],
         "description": "Convert a stream from one data type to another.",
         "notes": "For boolean input values, all numeric output values will be either zero or one.\n\nFor colorN/vectorN to colorM/vectorM:\n\n* if N is the same as M, then channels are directly copied. * if N is larger than M, then the first M channels are used and the excess channels ignored. * if N is smaller than M, then the N channels are directly copied and additional channels are populated with 0, aside from the fourth channel which is populated with 1.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-convert"
       }
     },
     "texture2d": {
@@ -2340,9 +2422,10 @@
             }
           }
         ],
-        "description": "Samples data from a single image, or from a layer within a multi-layer image.  When used in the context of rendering a geometry, the image is mapped onto the geometry based on geometry UV coordinates, with the lower-left corner of an image mapping to the (0,0) UV coordinate (or to the fractional (0,0) UV coordinate for tiled images).\n\nThe type of the <image> node determines the number of channels output, which may be less than the number of channels in the image file, outputting the first N channels from the image file.  So a float <image> would return the Red channel of an RGB image, and a color3 <image> would return the RGB channels of an RGBA image.  If the type of the <image> node has more channels than the referenced image file, then the output will contain zero values in all channels beyond the N channels of the image file, aside from the fourth channel which is populated with 1.\n\nThe file input value can include one or more substitutions to change the file name that is accessed, as described in the Filename Substitutions section in the main Specification document.\n\nIf no value for layer is provided and the input file has multiple layers, then the \"default\" layer will be used, or \"rgba\" if there is no \"default\" layer. Note: the number of channels defined by the type of the image must match the number of channels in the named layer.\n\nThe default input is the default value to use if the file reference can not be resolved (e.g. if a geometry token, interface token, or hostattr is included in the filename but no substitution value or default is defined, or if the resolved file URI cannot be read), or if the specified layer does not exist in the file. The default value must be the same type as the <image> element itself. If default is not defined, the default color value will be 0.0 in all channels.",
+        "description": "Samples data from a single image, or from a layer within a multi-layer image.  When used in the context of rendering a geometry, the image is mapped onto the geometry based on geometry UV coordinates, with the lower-left corner of an image mapping to the (0,0) UV coordinate (or to the fractional (0,0) UV coordinate for tiled images).\n\nThe type of the <image> node determines the number of channels output, which may be less than the number of channels in the image file, outputting the first N channels from the image file.  So a float <image> would return the Red channel of an RGB image, and a color3 <image> would return the RGB channels of an RGBA image.  If the type of the <image> node has more channels than the referenced image file, then the output will contain zero values in all channels beyond the N channels of the image file, aside from the fourth channel which is populated with 1.\n\nThe file input value can include one or more substitutions to change the file name that is accessed, as described in the [Filename Substitutions](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#filename-substitutions) section in the main Specification document.\n\nIf no value for layer is provided and the input file has multiple layers, then the \"default\" layer will be used, or \"rgba\" if there is no \"default\" layer. Note: the number of channels defined by the type of the image must match the number of channels in the named layer.\n\nThe default input is the default value to use if the file reference can not be resolved (e.g. if a geometry token, interface token, or hostattr is included in the filename but no substitution value or default is defined, or if the resolved file URI cannot be read), or if the specified layer does not exist in the file. The default value must be the same type as the <image> element itself. If default is not defined, the default color value will be 0.0 in all channels.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-image"
       },
       "tiledimage": {
         "section": "Texture Nodes",
@@ -2431,9 +2514,10 @@
             }
           }
         ],
-        "description": "Samples data from a single image, with provisions for tiling and offsetting the image across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the Filename Substitutions section in the main Specification document.",
+        "description": "Samples data from a single image, with provisions for tiling and offsetting the image across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the [Filename Substitutions](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#filename-substitutions) section in the main Specification document.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tiledimage"
       },
       "latlongimage": {
         "section": "Texture Nodes",
@@ -2474,9 +2558,10 @@
             }
           }
         ],
-        "description": "Samples an equiangular map along a view direction with adjustable latitudinal offset.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the Filename Substitutions section in the main Specification document.",
+        "description": "Samples an equiangular map along a view direction with adjustable latitudinal offset.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the [Filename Substitutions](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#filename-substitutions) section in the main Specification document.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-latlongimage"
       },
       "hextiledimage": {
         "section": "Texture Nodes",
@@ -2562,9 +2647,10 @@
             }
           }
         ],
-        "description": "Samples data from a single image, with provisions for hex-tiling and randomizing the image across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the Filename Substitutions section in the main Specification document.\n\nThe lumacoeffs input represents the luma coefficients of the current working color space. If no specific color space can be determined, the ACEScg (ap1) luma coefficients [0.2722287, 0.6740818, 0.0536895] will be used. Applications which support color management systems may choose to retrieve the luma coefficients of the working colorspace from the CMS to pass to the node's implementation directly, rather than exposing it to the user.",
+        "description": "Samples data from a single image, with provisions for hex-tiling and randomizing the image across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the [Filename Substitutions](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#filename-substitutions) section in the main Specification document.\n\nThe lumacoeffs input represents the luma coefficients of the current working color space. If no specific color space can be determined, the ACEScg (ap1) luma coefficients [0.2722287, 0.6740818, 0.0536895] will be used. Applications which support color management systems may choose to retrieve the luma coefficients of the working colorspace from the CMS to pass to the node's implementation directly, rather than exposing it to the user.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-hextiledimage"
       }
     },
     "texture3d": {
@@ -2681,7 +2767,8 @@
         ],
         "description": "Samples data from three images (or layers within multi-layer images), and projects a tiled representation of the images along each of the three respective coordinate axes, computing a weighted blend of the three samples using the geometric normal.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-triplanarprojection"
       }
     },
     "procedural": {
@@ -2751,7 +2838,8 @@
         ],
         "description": "Outputs a constant value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-constant"
       },
       "randomfloat": {
         "section": "Procedural Nodes",
@@ -2794,7 +2882,8 @@
         ],
         "description": "Produces a stable randomized float value between min and max, based on an input signal and optional seed value.  Uses a 2d cellnoise function to produce the output.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-randomfloat"
       }
     },
     "procedural2d": {
@@ -2803,14 +2892,16 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ramp"
       },
       "ramp_gradient": {
         "description": "No documentation available.",
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ramp-gradient"
       },
       "ramplr": {
         "section": "Procedural Nodes",
@@ -2848,7 +2939,8 @@
         ],
         "description": "A left-to-right linear value ramp.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ramplr"
       },
       "ramptb": {
         "section": "Procedural Nodes",
@@ -2886,7 +2978,8 @@
         ],
         "description": "A top-to-bottom linear value ramp.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ramptb"
       },
       "ramp4": {
         "section": "Procedural Nodes",
@@ -2934,7 +3027,8 @@
         ],
         "description": "A 4-corner bilinear value ramp.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ramp4"
       },
       "splitlr": {
         "section": "Procedural Nodes",
@@ -2977,7 +3071,8 @@
         ],
         "description": "A left-right split matte, split at a specified U value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-splitlr"
       },
       "splittb": {
         "section": "Procedural Nodes",
@@ -3020,7 +3115,8 @@
         ],
         "description": "A top-bottom split matte, split at a specified V value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-splittb"
       },
       "noise2d": {
         "section": "Noise Nodes",
@@ -3058,7 +3154,8 @@
         ],
         "description": "2D Perlin noise in 1, 2, 3 or 4 channels.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-noise2d"
       },
       "fractal2d": {
         "section": "Noise Nodes",
@@ -3106,7 +3203,8 @@
         ],
         "description": "Zero-centered 2D Fractal noise in 1, 2, 3 or 4 channels, created by summing several octaves of 2D Perlin noise, increasing the frequency and decreasing the amplitude at each octave.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-fractal2d"
       },
       "cellnoise2d": {
         "section": "Noise Nodes",
@@ -3134,7 +3232,8 @@
         ],
         "description": "2D cellular noise, 1 or 3 channels (type float or vector3).",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-cellnoise2d"
       },
       "worleynoise2d": {
         "section": "Noise Nodes",
@@ -3177,7 +3276,8 @@
         ],
         "description": "2D Worley noise using centered jitter, outputting float (distance metric to closest feature), vector2 (distance metrics to closest 2 features) or vector3 (distance metrics to closest 3 features) values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-worleynoise2d"
       },
       "unifiednoise2d": {
         "section": "Noise Nodes",
@@ -3274,7 +3374,8 @@
         ],
         "description": "A single node supporting 2D Perlin, Cell, Worley or Fractal noise in a unified interface.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-unifiednoise2d"
       },
       "flake2d": {
         "section": "Noise Nodes",
@@ -3347,7 +3448,8 @@
         ],
         "description": "Generates a procedural flake pattern in 2D space, suitable for simulating metallic flakes in materials such as car paint.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-flake2d"
       },
       "checkerboard": {
         "section": "Shape Nodes",
@@ -3395,7 +3497,8 @@
         ],
         "description": "2D checkerboard pattern.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-checkerboard"
       },
       "line": {
         "section": "Shape Nodes",
@@ -3443,7 +3546,8 @@
         ],
         "description": "2D line pattern: outputs 1 if texcoord is at less than radius distance from a line segment defined by point1 and point2, otherwise outputs 0.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-line"
       },
       "circle": {
         "section": "Shape Nodes",
@@ -3481,7 +3585,8 @@
         ],
         "description": "2D circle (disk) pattern: outputs 1 if texcoord is inside a circle defined by center and radius, otherwise outputs 0.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-circle"
       },
       "cloverleaf": {
         "section": "Shape Nodes",
@@ -3519,7 +3624,8 @@
         ],
         "description": "2D cloverleaf pattern: four semicircles on the edges of a square defined by center and radius.  Outputs 1 if texcoord is within the pattern, otherwise outputs 0.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-cloverleaf"
       },
       "hexagon": {
         "section": "Shape Nodes",
@@ -3557,7 +3663,8 @@
         ],
         "description": "2D hexagon pattern: outputs 1 if texcoord is inside a hexagon shape inscribed by a circle defined by center and radius; otherwise outputs 0.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-hexagon"
       },
       "grid": {
         "section": "Shape Nodes",
@@ -3605,7 +3712,8 @@
         ],
         "description": "Creates a grid pattern of (1, 1, 1) white lines on a (0, 0, 0) black background with the given tiling, offset, and line thickness. Pattern can be regular or staggered.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-grid"
       },
       "crosshatch": {
         "section": "Shape Nodes",
@@ -3653,7 +3761,8 @@
         ],
         "description": "Creates a crosshatch pattern with the given tiling, offset, and line thickness. Pattern can be regular or staggered.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-crosshatch"
       },
       "tiledcircles": {
         "section": "Shape Nodes",
@@ -3701,7 +3810,8 @@
         ],
         "description": "Creates a black and white pattern of circles with a defined tiling and size (diameter). Pattern can be regular or staggered.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tiledcircles"
       },
       "tiledcloverleafs": {
         "section": "Shape Nodes",
@@ -3749,7 +3859,8 @@
         ],
         "description": "Creates a black and white pattern of cloverleafs with a defined tiling and size (diameter of the circles circumscribing the shape). Pattern can be regular or staggered.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tiledcloverleafs"
       },
       "tiledhexagons": {
         "section": "Shape Nodes",
@@ -3797,7 +3908,8 @@
         ],
         "description": "Creates a black and white pattern of hexagons with a defined tiling and size (diameter of the circles circumscribing the shape). Pattern can be regular or staggered.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tiledhexagons"
       }
     },
     "procedural3d": {
@@ -3837,7 +3949,8 @@
         ],
         "description": "3D Perlin noise in 1, 2, 3 or 4 channels.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-noise3d"
       },
       "fractal3d": {
         "section": "Noise Nodes",
@@ -3885,7 +3998,8 @@
         ],
         "description": "Zero-centered 3D Fractal noise in 1, 2, 3 or 4 channels, created by summing several octaves of 3D Perlin noise, increasing the frequency and decreasing the amplitude at each octave.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-fractal3d"
       },
       "cellnoise3d": {
         "section": "Noise Nodes",
@@ -3913,7 +4027,8 @@
         ],
         "description": "3D cellular noise, 1 or 3 channels (type float or vector3).",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-cellnoise3d"
       },
       "worleynoise3d": {
         "section": "Noise Nodes",
@@ -3956,7 +4071,8 @@
         ],
         "description": "3D Worley noise using centered jitter, outputting float (distance metric to closest feature), vector2 (distance metrics to closest 2 features) or vector3 (distance metrics to closest 3 features) values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-worleynoise3d"
       },
       "unifiednoise3d": {
         "section": "Noise Nodes",
@@ -4053,7 +4169,8 @@
         ],
         "description": "A single node supporting 3D Perlin, Cell, Worley or Fractal noise in a unified interface.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-unifiednoise3d"
       },
       "flake3d": {
         "section": "Noise Nodes",
@@ -4126,7 +4243,8 @@
         ],
         "description": "Generates a procedural flake pattern in 3D space, suitable for simulating metallic flakes in materials such as car paint.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-flake3d"
       },
       "randomcolor": {
         "section": "Procedural Nodes",
@@ -4189,7 +4307,8 @@
         ],
         "description": "Produces a randomized RGB color within a randomized hue, saturation and brightness range, based on an input signal and optional seed value.  Output type color3.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-randomcolor"
       }
     },
     "geometric": {
@@ -4222,7 +4341,8 @@
         ],
         "description": "The coordinates associated with the currently-processed data, as defined in a specific coordinate space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-position"
       },
       "normal": {
         "section": "Geometric Nodes",
@@ -4253,7 +4373,8 @@
         ],
         "description": "The normalized geometric normal associated with the currently-processed data, as defined in a specific coordinate space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-normal"
       },
       "tangent": {
         "section": "Geometric Nodes",
@@ -4290,7 +4411,8 @@
         ],
         "description": "The geometric tangent vector associated with the currently-processed data, as defined in a specific coordinate space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tangent"
       },
       "bitangent": {
         "section": "Geometric Nodes",
@@ -4327,7 +4449,8 @@
         ],
         "description": "The geometric bi-tangent vector associated with the currently-processed data, as defined in a specific coordinate space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-bitangent"
       },
       "texcoord": {
         "section": "Geometric Nodes",
@@ -4355,7 +4478,8 @@
         ],
         "description": "The 2D or 3D texture coordinates associated with the currently-processed data",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-texcoord"
       },
       "geomcolor": {
         "section": "Geometric Nodes",
@@ -4383,7 +4507,8 @@
         ],
         "description": "The color associated with the current geometry at the current position, generally bound via per-vertex color values. The type must match the type of the \"color\" bound to the geometry.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-geomcolor"
       },
       "geompropvalue": {
         "section": "Geometric Nodes",
@@ -4416,7 +4541,8 @@
         ],
         "description": "The value of the specified varying geometric property (defined by a <geompropdef>) of the currently-bound geometry. This node's type must match that of the referenced geomprop.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-geompropvalue"
       },
       "geompropvalueuniform": {
         "section": "Geometric Nodes",
@@ -4449,7 +4575,8 @@
         ],
         "description": "The value of the specified uniform geometric property (defined by a <geompropdef>) of the currently-bound geometry. This node's type must match that of the referenced geomprop.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-geompropvalueuniform"
       },
       "bump": {
         "section": "Geometric Nodes",
@@ -4497,7 +4624,8 @@
         ],
         "description": "The normalized normal computed by offsetting the surface world space position along its world space normal.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-bump"
       }
     },
     "application": {
@@ -4522,7 +4650,8 @@
         ],
         "description": "The current frame number as defined by the host environment.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-frame"
       },
       "time": {
         "section": "Application Nodes",
@@ -4545,7 +4674,8 @@
         ],
         "description": "The current time in seconds, as defined by the host environment.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-time"
       }
     },
     "math": {
@@ -4630,7 +4760,8 @@
         ],
         "description": "Add a value to the incoming float/color/vector/matrix",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-add"
       },
       "subtract": {
         "section": "Math Nodes",
@@ -4713,7 +4844,8 @@
         ],
         "description": "Subtract a value from the incoming float/color/vector/matrix",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-subtract"
       },
       "multiply": {
         "section": "Math Nodes",
@@ -4771,7 +4903,8 @@
         ],
         "description": "Multiply two values together. Scalar and vector types multiply component-wise, while matrices multiply using a standard matrix product.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-multiply"
       },
       "divide": {
         "section": "Math Nodes",
@@ -4829,7 +4962,8 @@
         ],
         "description": "Divide one value by another. Scalar and vector types divide component-wise, while for matrices in1 is multiplied by the inverse of in2.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-divide"
       },
       "modulo": {
         "section": "Math Nodes",
@@ -4866,7 +5000,8 @@
         ],
         "description": "The remaining fraction after dividing an incoming float/color/vector by a value and subtracting the integer portion. Modulo always returns a non-negative result.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-modulo"
       },
       "fract": {
         "section": "Math Nodes",
@@ -4894,7 +5029,8 @@
         ],
         "description": "Returns the fractional part of the floating-point input.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-fract"
       },
       "invert": {
         "section": "Math Nodes",
@@ -4927,7 +5063,8 @@
         ],
         "description": "Subtract the incoming float, color, or vector from amount in all channels, outputting: amount - in.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-invert"
       },
       "absval": {
         "section": "Math Nodes",
@@ -4955,7 +5092,8 @@
         ],
         "description": "The per-channel absolute value of the incoming float/color/vector.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-absval"
       },
       "floor": {
         "section": "Math Nodes",
@@ -5003,7 +5141,8 @@
         ],
         "description": "The per-channel nearest integer value less than or equal to the incoming float/color/vector. The output remains in floating point per-channel, i.e. the same type as the input, except that <floor> of a float input also has a variant outputting an integer type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-floor"
       },
       "ceil": {
         "section": "Math Nodes",
@@ -5051,7 +5190,8 @@
         ],
         "description": "The per-channel nearest integer value greater than or equal to the incoming float/color/vector. The output remains in floating point per-channel, i.e. the same type as the input, except that <ceil> of a float input also has a variant outputting an integer type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ceil"
       },
       "round": {
         "section": "Math Nodes",
@@ -5099,7 +5239,8 @@
         ],
         "description": "Round each channel of the incoming float/color/vector values to the nearest integer value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-round"
       },
       "power": {
         "section": "Math Nodes",
@@ -5132,7 +5273,8 @@
         ],
         "description": "Raise incoming float/color values to the specified exponent, commonly used for \"gamma\" adjustment.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-power"
       },
       "safepower": {
         "section": "Math Nodes",
@@ -5165,7 +5307,8 @@
         ],
         "description": "Raise incoming float/color values to the specified exponent. Negative \"in1\" values will result in negative output values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-safepower"
       },
       "sin": {
         "section": "Math Nodes",
@@ -5193,7 +5336,8 @@
         ],
         "description": "The sine of the incoming value, which is expected to be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-sin"
       },
       "cos": {
         "section": "Math Nodes",
@@ -5221,7 +5365,8 @@
         ],
         "description": "The cosine of the incoming value, which is expected to be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-cos"
       },
       "tan": {
         "section": "Math Nodes",
@@ -5249,7 +5394,8 @@
         ],
         "description": "The tangent of the incoming value, which is expected to be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-tan"
       },
       "asin": {
         "section": "Math Nodes",
@@ -5280,7 +5426,8 @@
         ],
         "description": "The arcsine of the incoming value. The output will be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-asin"
       },
       "acos": {
         "section": "Math Nodes",
@@ -5311,7 +5458,8 @@
         ],
         "description": "The arccosine of the incoming value. The output will be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-acos"
       },
       "atan2": {
         "section": "Math Nodes",
@@ -5344,7 +5492,8 @@
         ],
         "description": "The arctangent of the expression (iny/inx). The output will be expressed in radians.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-atan2"
       },
       "sqrt": {
         "section": "Math Nodes",
@@ -5375,7 +5524,8 @@
         ],
         "description": "The square root of the incoming value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-sqrt"
       },
       "ln": {
         "section": "Math Nodes",
@@ -5406,7 +5556,8 @@
         ],
         "description": "The natural logarithm of the incoming value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ln"
       },
       "exp": {
         "section": "Math Nodes",
@@ -5434,7 +5585,8 @@
         ],
         "description": "$e$ to the power of the incoming value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-exp"
       },
       "sign": {
         "section": "Math Nodes",
@@ -5462,7 +5614,8 @@
         ],
         "description": "The per-channel sign of the incoming float/color/vector value: -1 for negative, +1 for positive, or 0 for zero.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-sign"
       },
       "clamp": {
         "section": "Math Nodes",
@@ -5500,7 +5653,8 @@
         ],
         "description": "Clamp incoming values per-channel to a specified range of float/color/vector values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-clamp"
       },
       "min": {
         "section": "Math Nodes",
@@ -5533,7 +5687,8 @@
         ],
         "description": "Select the minimum of the two incoming values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-min"
       },
       "max": {
         "section": "Math Nodes",
@@ -5566,7 +5721,8 @@
         ],
         "description": "Select the maximum of the two incoming values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-max"
       },
       "normalize": {
         "section": "Math Nodes",
@@ -5594,7 +5750,8 @@
         ],
         "description": "Output the incoming vectorN stream normalized.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-normalize"
       },
       "magnitude": {
         "section": "Math Nodes",
@@ -5622,7 +5779,8 @@
         ],
         "description": "Output the float magnitude (vector length) of the incoming vectorN stream; cannot be used on float or colorN streams. Note: the fourth channel in vector4 streams is not treated any differently, e.g. not as a homogeneous \"w\" value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-magnitude"
       },
       "distance": {
         "section": "Math Nodes",
@@ -5655,7 +5813,8 @@
         ],
         "description": "Measures the distance between two points in 2D, 3D, or 4D.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-distance"
       },
       "dotproduct": {
         "section": "Math Nodes",
@@ -5688,7 +5847,8 @@
         ],
         "description": "Output the (float) dot product of two incoming vectorN streams; cannot be used on float or colorN streams.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-dotproduct"
       },
       "crossproduct": {
         "section": "Math Nodes",
@@ -5721,7 +5881,8 @@
         ],
         "description": "Output the (vector3) cross product of two incoming vector3 streams; cannot be used on any other stream type. A disabled crossproduct node passes through the value of in1 unchanged.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-crossproduct"
       },
       "transformpoint": {
         "section": "Math Nodes",
@@ -5759,7 +5920,8 @@
         ],
         "description": "Transform the incoming vector3 coordinate from one specified space to another; cannot be used on any other stream type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-transformpoint"
       },
       "transformvector": {
         "section": "Math Nodes",
@@ -5797,7 +5959,8 @@
         ],
         "description": "Transform the incoming vector3 coordinate from one specified space to another; cannot be used on any other stream type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-transformvector"
       },
       "transformnormal": {
         "section": "Math Nodes",
@@ -5835,7 +5998,8 @@
         ],
         "description": "Transform the incoming vector3 normal from one specified space to another; cannot be used on any other stream type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-transformnormal"
       },
       "transformmatrix": {
         "section": "Math Nodes",
@@ -5918,7 +6082,8 @@
         ],
         "description": "Transform the incoming vectorN by the specified matrix.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-transformmatrix"
       },
       "normalmap": {
         "section": "Math Nodes",
@@ -5966,7 +6131,8 @@
         ],
         "description": "Transform a normal vector from the encoded tangent space to world space. The input normal vector is assumed to be encoded with all channels in the [0-1] range, as would commonly be output from a normal map.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-normalmap"
       },
       "hextilednormalmap": {
         "section": "Math Nodes",
@@ -6067,9 +6233,10 @@
             }
           }
         ],
-        "description": "Samples data from a single normalmap, with provisions for hex-tiling and randomizing the normalmap across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the Filename Substitutions section in the main Specification document.\n\nThe strength input controls how strongly the sampled normal map affects the final normal. A value of 0.0 leaves the surface normal unchanged, 1.0 applies the sampled normal at full strength, and values >1.0 amplify the normal perturbation.",
+        "description": "Samples data from a single normalmap, with provisions for hex-tiling and randomizing the normalmap across UV space.\n\nThe file input can include one or more substitutions to change the file name that is accessed, as described in the [Filename Substitutions](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#filename-substitutions) section in the main Specification document.\n\nThe strength input controls how strongly the sampled normal map affects the final normal. A value of 0.0 leaves the surface normal unchanged, 1.0 applies the sampled normal at full strength, and values >1.0 amplify the normal perturbation.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-hextilednormalmap"
       },
       "transpose": {
         "section": "Math Nodes",
@@ -6097,7 +6264,8 @@
         ],
         "description": "Transpose the incoming matrix.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-transpose"
       },
       "determinant": {
         "section": "Math Nodes",
@@ -6125,7 +6293,8 @@
         ],
         "description": "Output the determinant of the incoming matrix.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-determinant"
       },
       "invertmatrix": {
         "section": "Math Nodes",
@@ -6153,7 +6322,8 @@
         ],
         "description": "Invert the incoming matrix.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-invertmatrix"
       },
       "rotate2d": {
         "section": "Math Nodes",
@@ -6186,7 +6356,8 @@
         ],
         "description": "Rotate the incoming 2D vector about the origin.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-rotate2d"
       },
       "rotate3d": {
         "section": "Math Nodes",
@@ -6224,7 +6395,8 @@
         ],
         "description": "Rotate the incoming 3D vector about the specified unit axis vector.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-rotate3d"
       },
       "place2d": {
         "section": "Math Nodes",
@@ -6285,7 +6457,8 @@
         ],
         "description": "Transform incoming 2D texture coordinates from one frame of reference to another.\n\nThe operationorder input controls the order in which transform operations are performed. The SRT option performs -pivot, scale, rotate, translate, +pivot. The TRS option performs -pivot, translate, rotate, scale, +pivot.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-place2d"
       },
       "trianglewave": {
         "section": "Math Nodes",
@@ -6313,7 +6486,8 @@
         ],
         "description": "Generate a triangle wave from the given scalar input. The generated wave ranges from zero to one and repeats on integer boundaries.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-trianglewave"
       },
       "reflect": {
         "section": "Math Nodes",
@@ -6346,7 +6520,8 @@
         ],
         "description": "Reflect the incoming 3D vector about a surface normal vector.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-reflect"
       },
       "refract": {
         "section": "Math Nodes",
@@ -6384,7 +6559,8 @@
         ],
         "description": "Refract the incoming 3D vector through a surface with the given surface normal and relative index of refraction.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-refract"
       },
       "creatematrix": {
         "section": "Math Nodes",
@@ -6492,7 +6668,8 @@
         ],
         "description": "Build a 3x3 or 4x4 matrix from three vector3 or four vector3 or vector4 inputs. A matrix44 may also be created from vector3 input values, in which case the fourth value will be set to 0.0 for in1-in3, and to 1.0 for in4 when creating the matrix44.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-creatematrix"
       }
     },
     "adjustment": {
@@ -6542,7 +6719,8 @@
         ],
         "description": "Linearly remap incoming values from one range of values [inlow, inhigh] to another [outlow, outhigh].",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-remap"
       },
       "smoothstep": {
         "section": "Adjustment Nodes",
@@ -6580,7 +6758,8 @@
         ],
         "description": "Output a smooth, hermite-interpolated remapping of input values from [low, high] to [0,1].",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-smoothstep"
       },
       "luminance": {
         "section": "Adjustment Nodes",
@@ -6613,7 +6792,8 @@
         ],
         "description": "Output a grayscale value containing the luminance of the incoming RGB color in all color channels.\n\nThe lumacoeffs input represents the luma coefficients of the current working color space. If no specific color space can be determined, the ACEScg (ap1) luma coefficients [0.2722287, 0.6740818, 0.0536895] will be used. Applications which support color management systems may choose to retrieve the luma coefficients of the working colorspace from the CMS to pass to the <luminance> node's implementation directly, rather than exposing it to the user.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-luminance"
       },
       "rgbtohsv": {
         "section": "Adjustment Nodes",
@@ -6641,7 +6821,8 @@
         ],
         "description": "Convert an incoming color from RGB to HSV space (with H and S ranging from 0 to 1); the alpha channel is left unchanged if present. This conversion is not affected by the current color space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-rgbtohsv"
       },
       "hsvtorgb": {
         "section": "Adjustment Nodes",
@@ -6669,7 +6850,8 @@
         ],
         "description": "Convert an incoming color from HSV to RGB space; the alpha channel is left unchanged if present. This conversion is not affected by the current color space.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-hsvtorgb"
       },
       "contrast": {
         "section": "Adjustment Nodes",
@@ -6712,7 +6894,8 @@
         ],
         "description": "Increase or decrease the contrast of the incoming in values using amount as a linear slope multiplier.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-contrast"
       },
       "range": {
         "section": "Adjustment Nodes",
@@ -6770,7 +6953,8 @@
         ],
         "description": "Remap incoming values from one range of values to another, optionally applying a gamma correction \"in the middle\".",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-range"
       },
       "hsvadjust": {
         "section": "Adjustment Nodes",
@@ -6803,7 +6987,8 @@
         ],
         "description": "Adjust the hue, saturation and value of an RGB color by converting the input color to HSV, adding amount.x to the hue, multiplying the saturation by amount.y, multiplying the value by amount.z, then converting back to RGB.\n\nPositive amount.x values rotate hue in the \"red to green to blue\" direction, with amount.x of 1.0 being the equivalent to a 360 degree (e.g. no-op) rotation.  Negative or greater-than-1.0 hue adjustment values are allowed, wrapping at the 0-1 boundaries.  The internal conversions between RGB and HSV spaces are not affected by the current color space, and for color4 inputs, the alpha value is left unchanged.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-hsvadjust"
       },
       "saturate": {
         "section": "Adjustment Nodes",
@@ -6841,7 +7026,8 @@
         ],
         "description": "Adjust the saturation of a color, the alpha channel will be unchanged if present.\n\nThe lumacoeffs input represents the luma coefficients of the current working color space. If no specific color space can be determined, the ACEScg (ap1) luma coefficients [0.2722287, 0.6740818, 0.0536895] will be used. Applications which support color management systems may choose to retrieve the luma coefficients of the working colorspace from the CMS to pass to the node's implementation directly, rather than exposing it to the user.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-saturate"
       },
       "colorcorrect": {
         "section": "Adjustment Nodes",
@@ -6909,7 +7095,8 @@
         ],
         "description": "Combines various adjustment nodes into one artist-friendly color correction node. For color4 inputs, the alpha value is unchanged.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-colorcorrect"
       }
     },
     "compositing": {
@@ -6939,7 +7126,8 @@
         ],
         "description": "Multiply the RGB channels of the input by the Alpha channel of the input.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-premult"
       },
       "unpremult": {
         "section": "Compositing Nodes",
@@ -6967,7 +7155,8 @@
         ],
         "description": "Divide the RGB channels of the input by the Alpha channel of the input. If the Alpha value is zero, the in value is passed through unchanged.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-unpremult"
       },
       "plus": {
         "section": "Compositing Nodes",
@@ -7010,7 +7199,8 @@
         ],
         "description": "Add two 1-4 channel inputs, with optional mixing between the bg input and the result.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-plus"
       },
       "minus": {
         "section": "Compositing Nodes",
@@ -7053,7 +7243,8 @@
         ],
         "description": "Subtract two 1-4 channel inputs, with optional mixing between the bg input and the result.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-minus"
       },
       "difference": {
         "section": "Compositing Nodes",
@@ -7096,7 +7287,8 @@
         ],
         "description": "Absolute-value difference of two 1-4 channel inputs, with optional mixing between the bg input and the result.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-difference"
       },
       "burn": {
         "section": "Compositing Nodes",
@@ -7139,7 +7331,8 @@
         ],
         "description": "Take two 1-4 channel inputs and apply the same operator to all channels:\n\n1-(1-B)/F",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-burn"
       },
       "dodge": {
         "section": "Compositing Nodes",
@@ -7182,7 +7375,8 @@
         ],
         "description": "Take two 1-4 channel inputs and apply the same operator to all channels:\n\nB/(1-F)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-dodge"
       },
       "screen": {
         "section": "Compositing Nodes",
@@ -7225,7 +7419,8 @@
         ],
         "description": "Take two 1-4 channel inputs and apply the same operator to all channels:\n\n1-(1-F)*(1-B)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-screen"
       },
       "overlay": {
         "section": "Compositing Nodes",
@@ -7268,7 +7463,8 @@
         ],
         "description": "Take two 1-4 channel inputs and apply the same operator to all channels:\n\n2FB if B<0.5; 1-2(1-F)(1-B) if B>=0.5",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-overlay"
       },
       "disjointover": {
         "section": "Compositing Nodes",
@@ -7311,7 +7507,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nF+B         if f+b<=1 F+B(1-f)/b  if f+b>1 alpha: min(f+b,1)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-disjointover"
       },
       "in": {
         "section": "Compositing Nodes",
@@ -7354,7 +7551,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nRGB = Fb Alpha = fb",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-in"
       },
       "mask": {
         "section": "Compositing Nodes",
@@ -7397,7 +7595,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nRGB = Bf Alpha = bf",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-mask"
       },
       "matte": {
         "section": "Compositing Nodes",
@@ -7440,7 +7639,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nRGB = Ff+B(1-f) Alpha = f+b(1-f)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-matte"
       },
       "out": {
         "section": "Compositing Nodes",
@@ -7483,7 +7683,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nRGB = F(1-b) Alpha = f(1-b)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-out"
       },
       "over": {
         "section": "Compositing Nodes",
@@ -7526,7 +7727,8 @@
         ],
         "description": "Take two color4 inputs and use the built-in alpha channel(s) to control the compositing of the fg and bg inputs:\n\nRGB = F+B(1-f) Alpha = f+b(1-f)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-over"
       },
       "inside": {
         "section": "Compositing Nodes",
@@ -7563,7 +7765,8 @@
         ],
         "description": "An \"inside\" mask operation returning Fm",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-inside"
       },
       "outside": {
         "section": "Compositing Nodes",
@@ -7600,7 +7803,8 @@
         ],
         "description": "An \"outside\" mask operation returning F(1-m)",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-outside"
       },
       "mix": {
         "section": "Compositing Nodes",
@@ -7672,8 +7876,9 @@
           }
         ],
         "description": "A \"mix\" operation blending from \"bg\" to \"fg\" according to the mix amount, returning Fm+B(1-m)",
-        "notes": "See also the Standard Shader Nodes section below for additional shader-semantic variants of the mix node.",
-        "references": []
+        "notes": "See also the [Standard Shader Nodes](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#standard-shader-nodes) section below for additional shader-semantic variants of the [mix node](https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-mix-shader).",
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-mix"
       }
     },
     "conditional": {
@@ -7743,7 +7948,8 @@
         ],
         "description": "Output the value of the in1 or in2 stream depending on whether the value1 input is greater than the value2 input.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ifgreater"
       },
       "ifgreatereq": {
         "section": "Conditional Nodes",
@@ -7811,7 +8017,8 @@
         ],
         "description": "Output the value of the in1 or in2 stream depending on whether the value1 input is greater or equal to the value2 input.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ifgreatereq"
       },
       "ifequal": {
         "section": "Conditional Nodes",
@@ -7939,7 +8146,8 @@
         ],
         "description": "Output the value of the in1 or in2 stream depending on whether the value1 input is equal to the value2 input.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-ifequal"
       },
       "switch": {
         "section": "Conditional Nodes",
@@ -8017,7 +8225,8 @@
         ],
         "description": "Output the value of one of up to ten input streams, according to the value of a selector input which. Note that not all inputs need to be connected. The output has the same type as in1, with a default value of zero.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-switch"
       },
       "and": {
         "section": "Logical Operator Nodes",
@@ -8050,7 +8259,8 @@
         ],
         "description": "Logically AND the two input boolean values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-and"
       },
       "or": {
         "section": "Logical Operator Nodes",
@@ -8083,7 +8293,8 @@
         ],
         "description": "Logically Inclusive OR the two input boolean values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-or"
       },
       "xor": {
         "section": "Logical Operator Nodes",
@@ -8116,7 +8327,8 @@
         ],
         "description": "Logically Exclusive OR the two input boolean values.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-xor"
       },
       "not": {
         "section": "Logical Operator Nodes",
@@ -8144,7 +8356,8 @@
         ],
         "description": "Logically NOT the input boolean value.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-not"
       }
     },
     "channel": {
@@ -8274,7 +8487,8 @@
         ],
         "description": "Convert a stream from one data type to another.",
         "notes": "For boolean input values, all numeric output values will be either zero or one.\n\nFor colorN/vectorN to colorM/vectorM:\n\n* if N is the same as M, then channels are directly copied. * if N is larger than M, then the first M channels are used and the excess channels ignored. * if N is smaller than M, then the N channels are directly copied and additional channels are populated with 0, aside from the fourth channel which is populated with 1.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-convert"
       },
       "combine2": {
         "section": "Channel Nodes",
@@ -8382,7 +8596,8 @@
         ],
         "description": "Combine the channels from two streams into the same number of channels of a single output stream of a compatible type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-combine2"
       },
       "combine3": {
         "section": "Channel Nodes",
@@ -8420,7 +8635,8 @@
         ],
         "description": "Combine the channels from three streams into the same number of channels of a single output stream of a compatible type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-combine3"
       },
       "combine4": {
         "section": "Channel Nodes",
@@ -8463,7 +8679,8 @@
         ],
         "description": "Combine the channels from four streams into the same number of channels of a single output stream of a compatible type.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-combine4"
       },
       "extract": {
         "section": "Channel Nodes",
@@ -8521,7 +8738,8 @@
         ],
         "description": "Isolate a single channel from a colorN, vectorN, or matrixNN stream.\n\nWhen the input is a colorN or vectorN, the node extracts a single float component by index. When the input is a matrix33 or matrix44, the node extracts a row vector by index.",
         "notes": "The valid range for index should be clamped to $[0,N)$ in the user interface, where N is the number of components (for vector/color inputs) or rows (for matrix inputs). index is a uniform, non-varying value. Any index values outside of the valid range should result in an error.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-extract"
       },
       "separate2": {
         "section": "Channel Nodes",
@@ -8554,7 +8772,8 @@
         ],
         "description": "Split the channels of a 2-channel stream into separate float outputs.",
         "notes": "For the vector2-input in, outx and outy correspond to the x- and y-components of in.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-separate2"
       },
       "separate3": {
         "section": "Channel Nodes",
@@ -8622,7 +8841,8 @@
         ],
         "description": "Split the channels of a 3-channel stream into separate float outputs.",
         "notes": "When the input in is a color3, outr, outg, and outb correspond to the r-, g-, and b-components of in, respectively.\n\nWhen the input in is a vector3, outx, outy, and outz correspond to the x-, y-, and z-components of in, respectively.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-separate3"
       },
       "separate4": {
         "section": "Channel Nodes",
@@ -8700,7 +8920,8 @@
         ],
         "description": "Split the channels of a 4-channel stream into separate float outputs.",
         "notes": "When the input in is a color4, outr, outg, outb, and outa correspond to the r-, g-, b-, and alpha components of in, respectively.\n\nWhen the input in is a vector4, outx, outy, outz, and outw correspond to the x-, y-, z-, and w-components of in, respectively.",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-separate4"
       }
     },
     "convolution2d": {
@@ -8745,7 +8966,8 @@
         ],
         "description": "Applies a convolution blur to the input stream.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-blur"
       },
       "heighttonormal": {
         "section": "Convolution Nodes",
@@ -8783,7 +9005,8 @@
         ],
         "description": "Convert a scalar height map to a tangent-space normal map of type vector3. The output normal map is encoded with all channels in the [0-1] range, enabling its storage in unsigned image formats.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-heighttonormal"
       }
     },
     "organization": {
@@ -8813,7 +9036,8 @@
         ],
         "description": "A no-op, which passes its input through to its output unchanged.\n\nUsers can use dot nodes to shape edge connection paths or provide documentation checkpoints in node graph layout UI's. Dot nodes may also pass uniform values from constant or other nodes with uniform=\"true\" outputs to uniform inputs and tokens.",
         "notes": "",
-        "references": []
+        "references": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-dot"
       }
     }
   },
@@ -8824,7 +9048,8 @@
         "notes": "",
         "section": "",
         "references": [],
-        "port_tables": []
+        "port_tables": [],
+        "spec_url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md#node-osl-set-ci"
       }
     }
   }
