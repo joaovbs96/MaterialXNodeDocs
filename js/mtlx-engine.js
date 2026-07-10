@@ -127,6 +127,44 @@ const getMxEnv = () => {
 // Flip to true to log the generated GLSL + discovered uniforms to the
 // console — the fastest way to diagnose a black/!runnable shader.
 const DEBUG_SHADERS = true;
+
+// Compile the scene while filtering BENIGN shader-compiler noise.
+// On Windows every browser runs WebGL through ANGLE, which translates
+// GLSL → HLSL and hands it to the D3D compiler (fxc). fxc unrolls the
+// constant-bounded loops in MaterialX's FIS/light code, constant-folds
+// each iteration, and emits "warning X4008: floating point division by
+// zero" for guarded paths it folds to a literal 0 denominator (same
+// fakepath line repeated once per unrolled iteration). This is
+// harmless — float division by zero is well-defined in GLSL and the
+// flagged paths are clamped with M_FLOAT_EPS at runtime — and the
+// official MaterialX web viewer (and even stock three.js materials,
+// see three.js issue #32692) produce the same spam on Windows. three
+// r128 console.warn()s ANY non-empty program info log even when the
+// link succeeded, so we can't avoid it at the source without turning
+// off renderer.debug.checkShaderErrors — which would also kill the
+// real-error path below (badProg diagnostics). Instead, drop only
+// link-SUCCEEDED logs that contain warnings and no errors, for the
+// duration of this compile. With DEBUG_SHADERS they're kept visible
+// at debug level for anyone who goes looking.
+const compileFilteringDriverNoise = (renderer, scene, camera) => {
+    const origWarn = console.warn;
+    console.warn = function (...args) {
+        const isProgLog = typeof args[0] === 'string' &&
+            args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()') === 0;
+        const text = args.join(' ');
+        if (isProgLog && /warning/i.test(text) && !/error/i.test(text)) {
+            if (DEBUG_SHADERS) console.debug('[mtlx] driver warnings (benign, filtered):', ...args);
+            return;
+        }
+        return origWarn.apply(console, args);
+    };
+    try {
+        renderer.compile(scene, camera);
+    } finally {
+        console.warn = origWarn;
+    }
+};
+
 // version) instead of guessing. Returns [{ type, name }, ...].
 const parseUniforms = (src) => {
     const out = [];
@@ -140,6 +178,66 @@ const parseUniforms = (src) => {
 // "#version 300 es"; MaterialX ESSL output already has one. Strip the
 // generated version line to avoid a duplicate-directive compile error.
 const stripVersion = (src) => src.replace(/^\s*#version[^\n]*\n/, '');
+
+// Some pbrlib nodes (the hair helpers: chiang_hair_roughness,
+// deon_hair_absorption_from_melanin, chiang_hair_absorption_from_color) are
+// implemented as native GLSL whose include chain pulls in the full BSDF
+// machinery (mx_microfacet_specular.glsl and friends). The generator only
+// emits the lighting support for shaders it deems LIT (graphs containing
+// BSDF/EDF nodes), so an UNLIT preview of such a node ends up with source
+// that REFERENCES lighting machinery that was never emitted:
+//   1. `#if DIRECTIONAL_ALBEDO_METHOD` with no #define — a hard error in
+//      GLSL ES (unlike C, an undefined identifier in #if doesn't read as 0):
+//      "'DIRECTIONAL_ALBEDO_METHOD' : unexpected token after conditional expression"
+//   2. calls to the environment API (mx_environment_radiance /
+//      mx_environment_irradiance) and mx_surface_transmission, whose
+//      definitions live in the environment/transmission implementation
+//      files emitted only for lit shaders:
+//      "'mx_environment_radiance' : no matching overloaded function found"
+// The fix supplies exactly what the generator's own "no lighting" flavors
+// would: the default #define (0 = analytic fit) and the no-op stubs from
+// mx_environment_none.glsl. Safe because in these unlit shaders the code
+// paths that call them are never invoked — they only have to compile. The
+// radiance/transmission stubs take a FresnelData parameter, so they are
+// inserted right AFTER that struct's declaration (guaranteed present: it
+// lives in the same microfacet include that references them). Lit shaders
+// define all of this themselves and are left untouched. Pixel stage only.
+const patchUnlitLightingRefs = (src) => {
+    const referencedNotDefined = (name) =>
+        new RegExp('\\b' + name + '\\s*\\(').test(src) &&
+        !new RegExp('vec3\\s+' + name + '\\s*\\(').test(src);
+
+    const needsIrr = referencedNotDefined('mx_environment_irradiance');
+    const needsRad = referencedNotDefined('mx_environment_radiance');
+    const needsTrans = referencedNotDefined('mx_surface_transmission');
+
+    if (needsIrr || needsRad || needsTrans) {
+        let simple = ''; // no dependencies — can go at the very top
+        let fresnel = ''; // needs the FresnelData struct
+        if (needsIrr) simple += 'vec3 mx_environment_irradiance(vec3 N) { return vec3(0.0); }\n';
+        if (needsRad) fresnel += 'vec3 mx_environment_radiance(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd) { return vec3(0.0); }\n';
+        if (needsTrans) fresnel += 'vec3 mx_surface_transmission(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd, vec3 tint) { return vec3(0.0); }\n';
+        const header = '\n// [mtlx-engine] no-op lighting stubs for an unlit shader (see patchUnlitLightingRefs)\n';
+        if (simple) src = header + simple + src;
+        if (fresnel) {
+            const structIdx = src.indexOf('struct FresnelData');
+            const insertAt = structIdx !== -1 ? src.indexOf('};', structIdx) + 2 : -1;
+            if (insertAt > 1) {
+                src = src.slice(0, insertAt) + header + fresnel + src.slice(insertAt);
+            }
+            // No FresnelData in source: the stub couldn't compile either, and
+            // neither could the call site — leave the source untouched so the
+            // real error surfaces.
+        }
+    }
+
+    // Last prepend so the define stays the very first line of the source.
+    if (/\bDIRECTIONAL_ALBEDO_METHOD\b/.test(src) &&
+        !/#define\s+DIRECTIONAL_ALBEDO_METHOD\b/.test(src)) {
+        src = '#define DIRECTIONAL_ALBEDO_METHOD 0\n' + src;
+    }
+    return src;
+};
 
 // Inject a display transform at the end of the generated PIXEL shader.
 // three.js's renderer.outputEncoding / toneMapping only affect BUILT-IN
@@ -308,20 +406,24 @@ const mxValueToThreeUniform = (type, data) => {
     }
 };
 
-// sRGB <-> linear for the parameter UI's color pickers: MaterialX
-// color values are LINEAR, while <input type="color"> speaks 8-bit
-// sRGB hex. Converting at the picker boundary keeps the uniform
-// values in the space the shader expects.
+// The parameter UI's color picker speaks LINEAR, like MaterialX itself:
+// its hex bytes are a plain byte <-> float mapping (byte / 255) onto the
+// stored linear 0-1 values — deliberately NOT an sRGB encode. This keeps
+// the picker in exact agreement with the 0-1 RGB spinners rendered next
+// to it (#808080 IS linear ~0.502 per channel), at the cost of the
+// swatch being displayed by the browser as if those bytes were sRGB.
+// linToSrgb / srgbToLin stay exported for anything that does need a
+// display-referred conversion.
 const linToSrgb = (c) => {
     const x = Math.max(0, Math.min(1, c));
     return x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
 };
 const srgbToLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 const rgbToHex = (rgb) => '#' + rgb.slice(0, 3).map((c) => {
-    const h = Math.round(linToSrgb(c) * 255).toString(16);
+    const h = Math.round(Math.max(0, Math.min(1, Number(c) || 0)) * 255).toString(16);
     return h.length === 1 ? '0' + h : h;
 }).join('');
-const hexToRgb = (hex) => [1, 3, 5].map((i) => srgbToLin(parseInt(hex.slice(i, i + 2), 16) / 255));
+const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
 
 // Shared default texture for `filename` (image) inputs: a UV checker
 // generated on a canvas, so image nodes preview out of the box instead
@@ -500,8 +602,22 @@ const buildPreviewGeometry = async (which) => {
 // output to tap (null = the def's single/default output). multiOutput
 // is true when the node instance must be created as type 'multioutput'.
 const COLOR_VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
-const resolveNodeKind = (doc, nodeName) => {
-    const defs = vecToArray(doc.getMatchingNodeDefs(nodeName));
+// Resolve how to preview a node category. `defFilter` (optional) narrows the
+// matching nodedefs — needed because categories are not unique across
+// libraries ('add' is stdlib math AND pbrlib BSDF/EDF/VDF) and the priority
+// below would otherwise pick the wrong interpretation. Falls back to the
+// unfiltered set if the filter eliminates everything.
+// `preferType` (optional): an explicit output type chosen by the UI's
+// signature selector. When a candidate of that type exists it WINS over the
+// default priority; a non-viewable choice (matrix33, EDF, ...) returns
+// kind:null so the preview shows its honest "isn't a viewable color
+// surface" notice instead of silently previewing something else.
+const resolveNodeKind = (doc, nodeName, defFilter, preferType) => {
+    let defs = vecToArray(doc.getMatchingNodeDefs(nodeName));
+    if (defFilter) {
+        const kept = defs.filter(defFilter);
+        if (kept.length) defs = kept;
+    }
     // Flatten every def into candidate outputs.
     const candidates = []; // { type, outputName, multiOutput }
     const allTypes = [];
@@ -525,6 +641,21 @@ const resolveNodeKind = (doc, nodeName) => {
                 });
             }
         }
+    }
+
+    // Explicit signature selection beats the default priority.
+    if (preferType) {
+        const want = candidates.find((c) => c.type === preferType);
+        if (want) {
+            if (want.type === 'surfaceshader') return { kind: 'surface', ...want };
+            if (want.type === 'BSDF') return { kind: 'bsdf', ...want };
+            if (COLOR_VIEWABLE.indexOf(want.type) !== -1) {
+                return { kind: 'color', outType: want.type, outputName: want.outputName, multiOutput: want.multiOutput };
+            }
+            return { kind: null, types: [want.type] };
+        }
+        // No candidate of that type (spec token didn't map to a real
+        // nodedef): fall through to the automatic priority below.
     }
 
     // Priority: surface shader > BSDF > first viewable color/vector.
@@ -802,6 +933,9 @@ const createMtlxRenderView = async ({
     // visible scene background (setEnvBackground) — the IBL uniforms
     // are bound regardless.
     let envBgTexture = null;
+    // No-OrbitControls fallback only (script blocked): mirrors the
+    // autoRotate state so the fallback spin can be toggled too.
+    let fallbackSpin = !!autoRotate;
     const disposePartial = () => {
         stopped = true;
         if (reqId) cancelAnimationFrame(reqId);
@@ -849,6 +983,7 @@ const createMtlxRenderView = async ({
                 // inject our fallback when the option didn't take in this
                 // wasm build — double-encoding would wash everything out.
                 let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
+                fs = patchUnlitLightingRefs(fs);
                 if (!/srgb/i.test(fs)) fs = encodeDisplay(fs);
                 else if (DEBUG_SHADERS) console.log('generator emitted sRGB encode (hwSrgbEncodeOutput) — no injection');
 
@@ -887,6 +1022,12 @@ const createMtlxRenderView = async ({
                     controls.enablePan = false;
                     controls.minDistance = 1.4;
                     controls.maxDistance = 9;
+                    // Camera auto-orbit (OFF by default; toggled by the
+                    // rotate button). Orbiting the camera keeps the
+                    // specular highlight pinned to the same spot on the
+                    // model — the classic showcase look. The visible
+                    // environment pans while orbiting, which is the
+                    // accepted tradeoff of this mode.
                     controls.autoRotate = !!autoRotate;
                     controls.autoRotateSpeed = 1.5;
                 }
@@ -1062,9 +1203,11 @@ const createMtlxRenderView = async ({
                 };
 
                 // Compile now and surface any GLSL error to the UI instead
-                // of failing to a silent black canvas.
+                // of failing to a silent black canvas. (Filters benign
+                // ANGLE/fxc X4008-style warnings — see
+                // compileFilteringDriverNoise.)
                 setUniforms();
-                renderer.compile(scene, camera);
+                compileFilteringDriverNoise(renderer, scene, camera);
                 const badProg = (renderer.info.programs || []).find(
                     (p) => p.diagnostics && p.diagnostics.runnable === false
                 );
@@ -1082,7 +1225,7 @@ const createMtlxRenderView = async ({
                     reqId = requestAnimationFrame(animate);
                     if (controls) {
                         controls.update(); // damping + autoRotate
-                    } else {
+                    } else if (fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
                         mesh.rotation.y += 0.005;
                     }
@@ -1093,13 +1236,20 @@ const createMtlxRenderView = async ({
 
         return {
             uniforms, introspected, vs, fs, controls, renderer,
-            // Live camera auto-rotation toggle (no regen needed).
-            setAutoRotate: (on) => { if (controls) controls.autoRotate = !!on; },
+            // Live auto-orbit toggle (no regen needed).
+            setAutoRotate: (on) => {
+                fallbackSpin = !!on;
+                if (controls) controls.autoRotate = !!on;
+            },
             // Show/hide the environment map as the visible background.
             // No-op when there is no env (unlit previews).
             setEnvBackground: (on) => {
                 scene.background = (on && envBgTexture) ? envBgTexture : null;
             },
+            // Whether this view HAS an environment to show — lets the
+            // UI hide the toggle for unlit previews instead of
+            // offering a button that can't do anything.
+            hasEnvBackground: () => !!envBgTexture,
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so
             // render synchronously right before reading it back.
@@ -1117,6 +1267,89 @@ const createMtlxRenderView = async ({
 };
 
 // ---- public API ----
+// ------------------------------------------------------------------
+// Fullscreen helpers (shared by the material viewer and the per-node
+// previewer). Standard + webkit-prefixed variants so Safari works.
+// The Fullscreen spec's UA stylesheet makes the fullscreened element
+// fill the viewport with !important rules, and the render view's
+// ResizeObserver picks up the canvas size change — so callers only
+// need to toggle and (optionally) restyle inner fixed-size elements.
+// ------------------------------------------------------------------
+const fullscreenElement = () =>
+    document.fullscreenElement || document.webkitFullscreenElement || null;
+// Enter fullscreen on `el`, or exit if anything is fullscreen now.
+const toggleFullscreen = (el) => {
+    try {
+        if (fullscreenElement()) {
+            const exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); }
+        } else if (el) {
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            if (req) { const p = req.call(el); if (p && p.catch) p.catch(() => {}); }
+        }
+    } catch (e) { /* fullscreen can be denied (iframe policy, user gesture) */ }
+};
+// Subscribe to fullscreen changes; cb receives the current fullscreen
+// element (or null). Returns an unsubscribe function.
+const watchFullscreen = (cb) => {
+    const h = () => cb(fullscreenElement());
+    document.addEventListener('fullscreenchange', h);
+    document.addEventListener('webkitfullscreenchange', h);
+    return () => {
+        document.removeEventListener('fullscreenchange', h);
+        document.removeEventListener('webkitfullscreenchange', h);
+    };
+};
+
+// ------------------------------------------------------------------
+// Shared UI icons (Tabler, https://tabler.io/icons — MIT), inlined so
+// no extra files need deploying and they inherit currentColor.
+// `filled` picks fill vs stroke rendering; `inner` is the icon's
+// path markup (the 24x24 placeholder rect is dropped).
+// ------------------------------------------------------------------
+const MTLX_ICON_PATHS = {
+    'file-upload': { filled: true, inner: '<path d="M12 2l.117 .007a1 1 0 0 1 .876 .876l.007 .117v4l.005 .15a2 2 0 0 0 1.838 1.844l.157 .006h4l.117 .007a1 1 0 0 1 .876 .876l.007 .117v9a3 3 0 0 1 -2.824 2.995l-.176 .005h-10a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-14a3 3 0 0 1 2.824 -2.995l.176 -.005zm0 9l-.09 .004l-.058 .007l-.118 .025l-.105 .035l-.113 .054l-.111 .071a1 1 0 0 0 -.112 .097l-2.5 2.5a1 1 0 0 0 0 1.414l.094 .083a1 1 0 0 0 1.32 -.083l.793 -.793v3.586a1 1 0 0 0 2 0v-3.585l.793 .792a1 1 0 0 0 1.414 -1.414l-2.5 -2.5l-.082 -.073l-.104 -.074l-.098 -.052l-.11 -.044l-.112 -.03l-.126 -.017z"/><path d="M19 7h-4l-.001 -4.001z"/>' },
+    'rotate': { filled: false, inner: '<path d="M19.95 11a8 8 0 1 0 -.5 4m.5 5v-5h-5"/>' },
+    'environment': { filled: false, inner: '<path d="M15 8h.01"/><path d="M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0l3 3"/>' },
+    'environment-off': { filled: false, inner: '<path d="M15 8h.01"/><path d="M7 3h11a3 3 0 0 1 3 3v11m-.856 3.099a2.991 2.991 0 0 1 -2.144 .901h-12a3 3 0 0 1 -3 -3v-12c0 -.845 .349 -1.608 .91 -2.153"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5"/><path d="M16.33 12.338c.574 -.054 1.155 .166 1.67 .662l3 3"/><path d="M3 3l18 18"/>' },
+    'camera': { filled: true, inner: '<path d="M15 3a2 2 0 0 1 1.995 1.85l.005 .15a1 1 0 0 0 .883 .993l.117 .007h1a3 3 0 0 1 2.995 2.824l.005 .176v9a3 3 0 0 1 -2.824 2.995l-.176 .005h-14a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-9a3 3 0 0 1 2.824 -2.995l.176 -.005h1a1 1 0 0 0 1 -1a2 2 0 0 1 1.85 -1.995l.15 -.005h6zm-3 7a3 3 0 0 0 -2.985 2.698l-.011 .152l-.004 .15l.004 .15a3 3 0 1 0 2.996 -3.15z"/>' },
+    'maximize': { filled: false, inner: '<path d="M4 8v-2a2 2 0 0 1 2 -2h2"/><path d="M4 16v2a2 2 0 0 0 2 2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M16 20h2a2 2 0 0 0 2 -2v-2"/>' },
+};
+// React component (plain createElement — this file stays JSX-free).
+// React is loaded by the pages before any Babel script executes, and
+// the reference is resolved at RENDER time anyway.
+const MtlxIcon = (props) => {
+    const ic = MTLX_ICON_PATHS[props.name];
+    if (!ic || typeof React === 'undefined') return null;
+    return React.createElement('svg', {
+        viewBox: '0 0 24 24',
+        className: props.className || 'w-4 h-4',
+        fill: ic.filled ? 'currentColor' : 'none',
+        stroke: ic.filled ? 'none' : 'currentColor',
+        strokeWidth: ic.filled ? undefined : 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+        dangerouslySetInnerHTML: { __html: ic.inner },
+    });
+};
+
+// Shared indeterminate loading bar, used by both viewer pages while a
+// shader generates/compiles. Injected once from the engine so the
+// pages don't need their own copies (both load this file).
+(() => {
+    if (typeof document === 'undefined' || document.getElementById('mtlx-shared-css')) return;
+    const st = document.createElement('style');
+    st.id = 'mtlx-shared-css';
+    st.textContent = [
+        '.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}',
+        '.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;',
+        'background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',
+        '@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}',
+    ].join('');
+    document.head.appendChild(st);
+})();
+
 Object.assign(window, {
     getMxEnv, DEBUG_SHADERS,
     parseUniforms, stripVersion, encodeDisplay,
@@ -1128,4 +1361,6 @@ Object.assign(window, {
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     createMtlxRenderView,
+    fullscreenElement, toggleFullscreen, watchFullscreen,
+    MtlxIcon, MTLX_ICON_PATHS,
 });

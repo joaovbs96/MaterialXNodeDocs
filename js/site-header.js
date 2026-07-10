@@ -1,10 +1,14 @@
-// site-header.js — the shared site shell, used by EVERY page.
+// site-header.js — the shared site shell (header + footer), used by EVERY page.
 //
 // This is a plain (non-Babel) script injected synchronously into
 // <div id="site-header"> so the header paints immediately on navigation —
 // before React, Babel, three.js, or the MaterialX WASM have even started
 // downloading. That instant, identical header on both pages is what makes
 // switching between them feel like one site instead of two cold loads.
+//
+// The footer (the affiliation / source-of-truth note) is shared the same
+// way, but is NOT paint-critical, so it's injected at DOMContentLoaded into
+// <div id="site-footer"> (created automatically if a page omits it).
 //
 // Single source of truth for the site title and project links: doc-ui.jsx
 // reads window.SITE_LINKS / window.SITE_TITLE when present.
@@ -18,14 +22,17 @@
 
     var LINKS = {
         repo: 'https://github.com/joaovbs96/MaterialXNodeDocs',
-        spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification',
+        spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.5/documents/Specification',
+        // The footer's "source of truth" link deliberately points at main,
+        // not the pinned tag: it names the authority, not what we parse.
+        specMain: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification',
     };
     LINKS.issues = LINKS.repo + '/issues';
 
     // Pages of the site, in nav order. `match` tests location.pathname;
     // index.html is also the "/" default.
     var NAV = [
-        { id: 'docs', label: 'Node Library', href: 'index.html', match: /(^|\/)(index\.html)?$/ },
+        { id: 'docs', label: 'Node Library & Documentation', href: 'index.html', match: /(^|\/)(index\.html)?$/ },
         { id: 'viewer', label: 'Material Viewer', href: 'material-viewer.html', match: /material-viewer\.html$/ },
     ];
 
@@ -97,6 +104,37 @@
     };
     if (window.__mtlxVersion) setVer(window.__mtlxVersion);
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
+
+    // ---- Shared footer --------------------------------------------------
+    // The affiliation / source-of-truth note, identical on every page.
+    // Injected at DOMContentLoaded (this script runs before the rest of the
+    // body has parsed, so the mount doesn't exist yet). Pages should place
+    // <div id="site-footer"></div> after their content wrapper; if a page
+    // forgets, the mount is created and appended to <body> as a fallback.
+    var footerHtml =
+        '<footer class="shrink-0 border-t border-gray-800 bg-gray-900">' +
+            '<div class="max-w-[1600px] mx-auto px-3 sm:px-6 py-4 text-sm text-gray-400">' +
+                'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                'In the event of any discrepancies, the specification in the ' +
+                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="underline text-gray-200 hover:text-gray-100">official MaterialX repository</a> ' +
+                'remains the definitive source of truth.' +
+            '</div>' +
+        '</footer>';
+
+    var mountFooter = function () {
+        var el = document.getElementById('site-footer');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'site-footer';
+            document.body.appendChild(el);
+        }
+        el.innerHTML = footerHtml;
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mountFooter);
+    } else {
+        mountFooter();
+    }
 
     // Published for the React apps (page <title>s, doc-ui links, ...).
     window.SITE_TITLE = SITE_TITLE;

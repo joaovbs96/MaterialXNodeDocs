@@ -44,7 +44,13 @@
         // KaTeX failed to load or a span doesn't parse, the raw text shows
         // instead so nothing is ever lost.
         // ------------------------------------------------------------------
-        const RICH_SPLIT_RE = /(\$\$[^$]+\$\$|\$[^$\n]+\$|\[\^[^\]\s]+\])/g;
+        // Node prose may also contain simple inline HTML from the spec
+        // markdown, e.g. "m<sup>−1</sup>" in anisotropic_vdf's absorption
+        // docs. Without explicit handling, the angle-token styler below
+        // renders "<sup>" as a node-reference chip and leaves "</sup>" as
+        // raw text. Captured here (top priority in the split) and rendered
+        // as REAL superscript/subscript elements.
+        const RICH_SPLIT_RE = /(\$\$[^$]+\$\$|\$[^$\n]+\$|\[\^[^\]\s]+\]|<sup>[^<]*<\/sup>|<sub>[^<]*<\/sub>)/g;
         const FOOTNOTE_RE = /^\[\^([^\]\s]+)\]$/;
 
         // Inline styling for plain prose: numeric vectors like
@@ -131,6 +137,14 @@
                 <React.Fragment>
                     {parts.map((part, i) => {
                         if (!part) return null;
+
+                        // Inline HTML super/subscript from the spec markdown
+                        // (e.g. "m<sup>−1</sup>") -> real <sup>/<sub>.
+                        const supSub = part.match(/^<(sup|sub)>([^<]*)<\/\1>$/);
+                        if (supSub) {
+                            const Tag = supSub[1];
+                            return <Tag key={i}>{styleInline(supSub[2], 'ss' + i + '-')}</Tag>;
+                        }
 
                         // Footnote reference -> superscript link [n]
                         const fn = part.match(FOOTNOTE_RE);
@@ -342,8 +356,7 @@
 
         const signatureLabel = (table) => {
             const ports = table.ports || {};
-            const names = Object.keys(ports);
-            const inTypes = uniqTypeTokens(names
+            const names = Object.keys(ports);            const inTypes = uniqTypeTokens(names
                 .filter(n => !isOutputPort(n, ports[n]))
                 .map(n => resolveType(ports, n)));
             const outTypes = uniqTypeTokens(names
@@ -355,6 +368,35 @@
             if (!outStr || inStr === outStr) return inStr || outStr;
             if (!inStr) return `→ ${outStr}`;
             return `${inStr} → ${outStr}`;
+        };
+
+        // Concrete MaterialX type to PREVIEW for a signature table: resolve
+        // the output-type tokens (falling back to input tokens when the
+        // table has no output row), expand the spec's family placeholders
+        // (colorN → color3, ...), and prefer a renderable type. Returns
+        // null when nothing can be derived — the preview then auto-picks.
+        const SIG_CONCRETE_TOKEN = {
+            colorn: 'color3', vectorn: 'vector3', matrixnn: 'matrix33',
+        };
+        const SIG_PREVIEW_PREFERENCE = [
+            'surfaceshader', 'BSDF', 'color3', 'float', 'vector3', 'color4',
+            'vector2', 'vector4', 'integer', 'boolean',
+        ];
+        const signaturePreviewType = (table) => {
+            const ports = (table && table.ports) || {};
+            const names = Object.keys(ports);
+            let tokens = uniqTypeTokens(names
+                .filter(n => isOutputPort(n, ports[n]))
+                .map(n => resolveType(ports, n)));
+            if (!tokens.length) {
+                tokens = uniqTypeTokens(names.map(n => resolveType(ports, n)));
+            }
+            const concrete = tokens.map(t => SIG_CONCRETE_TOKEN[t.toLowerCase()] || t);
+            for (const pref of SIG_PREVIEW_PREFERENCE) {
+                const hit = concrete.find(c => c.toLowerCase() === pref.toLowerCase());
+                if (hit) return pref;
+            }
+            return concrete[0] || null;
         };
 
         function PortTable({ table, columns, refs }) {
@@ -522,6 +564,6 @@
             MathText, RichBlocks,
             getPortTables, buildAutoTablesFromDefs, isUndocumented,
             CANONICAL_ORDER, COL_WIDTHS, COL_REM, DESCRIPTION_MIN_REM, EXTRA_COL_REM, CELL_STYLES,
-            unionColumns, signatureLabel, PortTable,
+            unionColumns, signatureLabel, signaturePreviewType, PortTable,
             specFileForLib, specUrlForNode, NodeDefPortsTable,
         });

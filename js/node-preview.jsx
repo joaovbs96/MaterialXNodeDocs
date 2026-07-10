@@ -3,7 +3,18 @@
 // the shared createMtlxRenderView pipeline (mtlx-engine.js), and owns
 // the dynamic parameter panel + doc-based .mtlx export. Load AFTER
 // mtlx-engine.js and doc-ui.jsx.
-        const Node3DPreview = ({ nodeName, enabled, onEnable }) => {
+        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, enabled, onEnable }) => {
+            // Node categories are NOT unique across libraries ('add' exists in
+            // stdlib [math] AND pbrlib [pbr: BSDF/EDF/VDF]) — nodeName alone
+            // cannot identify the selected node. nodeKey does, and drives
+            // everything that must react to a SELECTION change (effects,
+            // edit preservation, React keys), since switching stdlib/add →
+            // pbrlib/add keeps nodeName identical.
+            const nodeKey = (library || '') + ':' + (nodegroup || '') + ':' + nodeName;
+            // preferredType (the docs page's signature selector) changes which
+            // nodedef is previewed — uniforms and defaults differ per
+            // signature, so it's part of the identity everything re-keys on.
+            const identKey = nodeKey + '::' + (preferredType || 'auto');
             const canvasRef = React.useRef(null);
             // The live three.js uniforms object — mutated directly by the
             // parameter UI so edits render on the next frame with no shader
@@ -44,24 +55,67 @@
             // are any, to avoid a redundant regen pass).
             React.useEffect(() => {
                 setOverrides((prev) => (Object.keys(prev).length ? {} : prev));
-            }, [nodeName]);
+            }, [identKey]);
             // Preview geometry (persisted): 'sphere' | 'cube' | 'shaderball'.
             const [geom, setGeom] = React.useState(() => {
-                try { return localStorage.getItem('mtlx_preview_geom') || 'sphere'; } catch (e) { return 'sphere'; }
+                // Normalize: a stale persisted value that's no longer a valid
+                // option would render the geometry dropdown empty.
+                const valid = ['shaderball', 'sphere', 'cube'];
+                try {
+                    const g = localStorage.getItem('mtlx_preview_geom');
+                    return valid.indexOf(g) !== -1 ? g : 'sphere';
+                } catch (e) { return 'sphere'; }
             });
             const pickGeom = (g) => {
                 try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
                 setGeom(g);
             };
-            // Camera auto-rotation pause. The OrbitControls instance lives in
-            // a ref so toggling doesn't re-init the whole preview.
-            const [paused, setPaused] = React.useState(false);
+            // Live render-view handle (turntable toggle, env background,
+            // snapshot). Set by the preview effect, cleared on dispose.
+            const viewRef = React.useRef(null);
+            // Auto-orbit rotation. OFF by default — the model starts still;
+            // the rotate button switches the camera turntable on/off, applied
+            // live via the render view (survives regens because creation
+            // options read the current value from a fresh effect closure).
+            const [rotating, setRotating] = React.useState(false);
             const controlsRef = React.useRef(null);
-            const togglePaused = () => setPaused((p) => {
-                const np = !p;
-                if (controlsRef.current) controlsRef.current.autoRotate = !np;
-                return np;
+            const toggleRotating = () => setRotating((r) => {
+                const nr = !r;
+                if (viewRef.current && viewRef.current.setAutoRotate) viewRef.current.setAutoRotate(nr);
+                return nr;
             });
+            // Fullscreen: the viewport CONTAINER goes fullscreen so the
+            // geometry/pause controls overlay stays usable; the canvas is
+            // h-full and the engine's ResizeObserver handles the buffer.
+            const viewportRef = React.useRef(null);
+            const [isFullscreen, setIsFullscreen] = React.useState(false);
+            React.useEffect(() => watchFullscreen(
+                (el) => setIsFullscreen(!!el && el === viewportRef.current)
+            ), []);
+            // Environment map as visible background (mirrors the material
+            // viewer). Applied live via the view; regens re-apply it because
+            // the creation options read the current value (the effect re-runs
+            // with a fresh closure). Only offered when the view actually has
+            // an environment (lit previews) — see envAvail below.
+            const [envBg, setEnvBg] = React.useState(false);
+            const [envAvail, setEnvAvail] = React.useState(false);
+            const toggleEnvBg = () => setEnvBg((v) => {
+                const nv = !v;
+                if (viewRef.current && viewRef.current.setEnvBackground) viewRef.current.setEnvBackground(nv);
+                return nv;
+            });
+            // PNG snapshot named after the node + geometry.
+            const takeScreenshot = () => {
+                const view = viewRef.current;
+                if (!view || !view.snapshot) return;
+                let url = null;
+                try { url = view.snapshot(); } catch (e) { return; }
+                if (!url) return;
+                const a = document.createElement('a');
+                a.download = (nodeName + '_' + geom).replace(/[^\w.-]+/g, '_') + '.png';
+                a.href = url;
+                a.click();
+            };
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
             // Live document + created node handles for the doc-based export.
@@ -93,7 +147,7 @@
                 } else if (p.regen) {
                     // String/enum (compile-time) → apply to the node instance and
                     // regenerate by bumping `overrides` (in the effect deps).
-                    overridesNodeRef.current = nodeName;
+                    overridesNodeRef.current = identKey;
                     setOverrides((prev) => Object.assign({}, prev, { [p.input]: { value: v, type: p.type } }));
                 }
             };
@@ -103,7 +157,7 @@
             const onColorspacePick = (p, cs) => {
                 valuesRef.current = Object.assign({}, valuesRef.current, { ['cs::' + p.input]: cs || undefined });
                 setValues((prev) => Object.assign({}, prev, { ['cs::' + p.input]: cs || undefined }));
-                overridesNodeRef.current = nodeName;
+                overridesNodeRef.current = identKey;
                 setOverrides((prev) => {
                     const next = Object.assign({}, prev);
                     if (cs) next[p.input] = { value: cs, type: 'colorspace' };
@@ -266,8 +320,8 @@
                     // Same node re-initializing (geometry switch or string/
                     // colorspace regen)? Then the user's edits are preserved and
                     // re-applied below; only a NODE change wipes them.
-                    const sameNode = prevNodeRef.current === nodeName;
-                    prevNodeRef.current = nodeName;
+                    const sameNode = prevNodeRef.current === identKey;
+                    prevNodeRef.current = identKey;
                     if (!sameNode) {
                         valuesRef.current = {};
                         pickedTexRef.current = {};
@@ -308,12 +362,51 @@
                             doc.importLibrary(stdlib);
                         }
 
+                        // ---- Nodedef identity filter ------------------------
+                        // getMatchingNodeDefs matches by CATEGORY only, so for
+                        // ambiguous names ('add' is stdlib/math float/color/...
+                        // AND pbrlib/pbr BSDF/EDF/VDF) it returns defs from
+                        // every library. resolveNodeKind's priority (surface >
+                        // BSDF > color) then made the BSDF interpretation win
+                        // for BOTH pages — black preview and an empty parameter
+                        // panel for the math node. Filter defs by the selected
+                        // node's library (from each def's sourceUri) and
+                        // nodegroup; fall back to unfiltered if the identity
+                        // info would eliminate every def.
+                        const libOfDef = (def) => {
+                            try {
+                                const uri = def.getSourceUri ? String(def.getSourceUri() || '') : '';
+                                if (!uri) return '';
+                                const parts = uri.replace(/\\/g, '/').toLowerCase().split('/');
+                                const i = parts.indexOf('libraries');
+                                if (i !== -1 && i + 1 < parts.length) return parts[i + 1];
+                                return parts.length > 1 ? parts[parts.length - 2] : '';
+                            } catch (e) { return ''; }
+                        };
+                        const wantLib = (library || '').split('/')[0].toLowerCase();
+                        const wantGroup = (nodegroup || '').toLowerCase();
+                        const defMatchesIdentity = (def) => {
+                            if (wantLib) {
+                                const ul = libOfDef(def);
+                                if (ul && ul !== wantLib) return false;
+                            }
+                            if (wantGroup && def.getNodeGroup) {
+                                const g = String(def.getNodeGroup() || '').toLowerCase();
+                                if (g && g !== wantGroup) return false;
+                            }
+                            return true;
+                        };
+                        const filterDefs = (defs) => {
+                            const kept = defs.filter(defMatchesIdentity);
+                            return kept.length ? kept : defs;
+                        };
+
                         // Translation graphs (nodedef nodegroup "translation",
                         // e.g. standard_surface_to_gltf_pbr) convert between
                         // shading models — rendering one directly is meaningless.
                         let translationDef = null;
                         try {
-                            const defs0 = vecToArray(doc.getMatchingNodeDefs(nodeName));
+                            const defs0 = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
                             const grp = defs0.length && defs0[0].getNodeGroup ? String(defs0[0].getNodeGroup()) : '';
                             if (grp.toLowerCase() === 'translation') translationDef = defs0[0];
                         } catch (probeErr) { /* nodegroup probe is best-effort */ }
@@ -322,7 +415,7 @@
                         // node + target shader + material, wired automatically.
                         const rk = translationDef
                             ? { kind: 'translation', outType: 'multioutput', outputName: null, multiOutput: true, types: [] }
-                            : resolveNodeKind(doc, nodeName);
+                            : resolveNodeKind(doc, nodeName, defMatchesIdentity, preferredType || null);
                         const { kind, outType, outputName, multiOutput, types } = rk;
                         // Element type for the .mtlx export: color-kind nodes use
                         // their resolved output type ('multioutput' when several),
@@ -349,12 +442,64 @@
                             if (outputName) input.setAttribute('output', outputName);
                         };
 
+                        // Find the shortest chain of `convert` hops that turns
+                        // `fromType` into `toType`, USING ONLY CONVERSIONS THE
+                        // LOADED LIBRARY ACTUALLY DEFINES. Returns a list of
+                        // intermediate/target types ([] when no convert is
+                        // needed, null when unreachable).
+                        //
+                        // This must be discovered, not assumed: instantiating a
+                        // convert for a pair with no nodedef (the old code did
+                        // color3→color3 for multi-output color taps, and
+                        // vector2→color3 in one hop) doesn't fail at graph
+                        // construction — the generator quietly resolves the
+                        // instance against the first convert nodedef with the
+                        // right OUTPUT type and emits a call whose argument
+                        // type doesn't match the emitted function (GLSL:
+                        // "'NG_convert_float_color3' : no matching overloaded
+                        // function found").
+                        const findConvertChain = (fromType, toType) => {
+                            if (fromType === toType) return [];
+                            const typeStr = (t) => (t && t.getName) ? t.getName() : String(t || '');
+                            // convert nodedefs -> directed edges inType -> outType
+                            const edges = {};
+                            for (const def of vecToArray(doc.getMatchingNodeDefs('convert'))) {
+                                const ins = vecToArray(def.getInputs ? def.getInputs() : null);
+                                if (ins.length !== 1) continue;
+                                const inT = typeStr(ins[0].getType ? ins[0].getType() : '');
+                                const outT = typeStr(def.getType ? def.getType() : '');
+                                if (!inT || !outT || outT === 'multioutput') continue;
+                                (edges[inT] = edges[inT] || new Set()).add(outT);
+                            }
+                            // BFS, shortest chain wins (converts are cheap but
+                            // each hop is another generated function).
+                            const prev = { [fromType]: null };
+                            let frontier = [fromType];
+                            while (frontier.length) {
+                                const next = [];
+                                for (const t of frontier) {
+                                    for (const n of edges[t] || []) {
+                                        if (n in prev) continue;
+                                        prev[n] = t;
+                                        if (n === toType) {
+                                            const chain = [];
+                                            for (let c = toType; c !== fromType; c = prev[c]) chain.unshift(c);
+                                            return chain;
+                                        }
+                                        next.push(n);
+                                    }
+                                }
+                                frontier = next;
+                            }
+                            return null;
+                        };
+
                         // Apply string/enum overrides (from the parameter panel)
                         // onto the node instance before generation, so they take
                         // effect in the generated shader.
                         const applyOverrides = (nodeInst) => {
                             // Ignore overrides left over from a different node.
-                            if (overridesNodeRef.current && overridesNodeRef.current !== nodeName) return;
+                            if (overridesNodeRef.current && overridesNodeRef.current !== identKey) return;
                             const ov = overridesRef.current || {};
                             for (const inputName of Object.keys(ov)) {
                                 const { value, type } = ov[inputName];
@@ -406,9 +551,25 @@
                                 let defInput = null;
                                 try {
                                     const cat = inst.getCategory ? inst.getCategory() : nodeName;
+                                    // Prefer the def whose input TYPE matches the
+                                    // wanted type. Categories like `convert` have
+                                    // MANY nodedefs sharing the input name 'in'
+                                    // with different types — copying from the
+                                    // first def found (the float variant) used to
+                                    // stamp `float` onto vector inputs, making
+                                    // the generator resolve the WRONG convert
+                                    // nodedef and emit a call whose argument type
+                                    // doesn't match the emitted function
+                                    // ("'NG_convert_float_color3' : no matching
+                                    // overloaded function found" for every
+                                    // vector2/vector3-output node preview).
                                     for (const d of vecToArray(doc.getMatchingNodeDefs(cat))) {
-                                        defInput = (d.getInput && d.getInput(inputName)) || null;
-                                        if (defInput) break;
+                                        const cand = (d.getInput && d.getInput(inputName)) || null;
+                                        if (!cand) continue;
+                                        if (!defInput) defInput = cand; // fallback: first found
+                                        let candType = '';
+                                        try { candType = String(cand.getType()); } catch (e2) { candType = ''; }
+                                        if (wantedType && candType === wantedType) { defInput = cand; break; }
                                     }
                                 } catch (e) { defInput = null; }
                                 inp = inst.addInput(inputName);
@@ -429,11 +590,23 @@
                             }
                             let got = '';
                             try { got = String(inp.getType()); } catch (e) { got = '?'; }
-                            if (wantedType && got !== wantedType && how !== 'copied-from-nodedef') {
+                            // Enforce the caller's type UNCONDITIONALLY. The old
+                            // exemption for the copied-from-nodedef path let a
+                            // wrong-typed copy (see above) survive — the caller
+                            // knows the graph typing; the copy only supplies
+                            // defaults/metadata.
+                            if (wantedType && got !== wantedType) {
                                 try {
                                     if (typeof inp.setType === 'function') inp.setType(wantedType);
                                     else inp.setAttribute('type', wantedType);
                                     got = String(inp.getType());
+                                    // A copied default VALUE (e.g. float "0.0")
+                                    // is malformed for the corrected type —
+                                    // drop it; these inputs get connected or
+                                    // explicitly re-valued anyway.
+                                    if (how === 'copied-from-nodedef') {
+                                        try { inp.removeAttribute('value'); } catch (e2) { /* absent */ }
+                                    }
                                 } catch (e) { /* keep got */ }
                             }
                             if (wantedType && got !== wantedType) {
@@ -490,14 +663,34 @@
                             previewInstance = doc.addNode(nodeName, 'preview_node', multiOutput ? 'multioutput' : outType);
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
+                            // Bridge the tapped output into a color3 emission
+                            // through convert node(s) — but only hops the
+                            // loaded library actually defines, and NO convert
+                            // at all when the tap is already color3 (a
+                            // color3→color3 convert has no nodedef; see
+                            // findConvertChain).
                             let srcName = 'preview_node';
-                            if (outType !== 'color3' || outputName) {
-                                // Bridge the tapped output into a color3 emission.
-                                const conv = doc.addNode('convert', 'preview_convert', 'color3');
-                                connectToPreview(addTypedInput(conv, 'in', outType), 'preview_node');
-                                createdNodes.push(conv);
-                                srcName = 'preview_convert';
+                            let srcIsPreviewNode = true;
+                            const chain = findConvertChain(outType, 'color3');
+                            if (chain === null) {
+                                const eC = new Error(`No preview for "${nodeName}" — the library defines no convert path from ${outType} to color3.`);
+                                eC.isNotice = true;
+                                throw eC;
                             }
+                            let prevType = outType;
+                            chain.forEach((toType, i) => {
+                                const conv = doc.addNode('convert', 'preview_convert' + (i || ''), toType);
+                                const inp = addTypedInput(conv, 'in', prevType);
+                                // The FIRST hop taps the preview node (and, for
+                                // multi-output nodes, carries the `output`
+                                // selection); later hops chain convert→convert.
+                                if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
+                                else inp.setNodeName(srcName);
+                                createdNodes.push(conv);
+                                srcName = 'preview_convert' + (i || '');
+                                srcIsPreviewNode = false;
+                                prevType = toType;
+                            });
                             renderable = doc.addNode('surface_unlit', 'preview_surface', 'surfaceshader');
                             createdNodes.push(renderable);
                             // surface_unlit's `emission` port is a FLOAT weight
@@ -506,7 +699,12 @@
                             // the nodedef's declared float, so NO nodedef matches
                             // the node instance → "Could not find a nodedef for
                             // node 'preview_surface'" for every color-kind node.
-                            addTypedInput(renderable, 'emission_color', 'color3').setNodeName(srcName);
+                            const emiss = addTypedInput(renderable, 'emission_color', 'color3');
+                            // No convert chain: emission_color taps preview_node
+                            // directly and must carry the `output` selection
+                            // itself for multi-output color3 taps.
+                            if (srcIsPreviewNode) connectToPreview(emiss, 'preview_node');
+                            else emiss.setNodeName(srcName);
                         } else {
                             const shown = (types || []).join(', ') || 'unknown';
                             const eN = new Error(`No preview for "${nodeName}" — it outputs ${shown}, which isn't a viewable color surface.`);
@@ -576,13 +774,16 @@
                             label: nodeName,
                             needsLighting,
                             geomName: geom,
-                            autoRotate: !paused,
+                            autoRotate: rotating,
+                            envBackground: envBg,
                             isMounted: () => mounted,
                             debugKind: kind,
                         });
                         if (!view) return; // unmounted mid-setup (already disposed)
                         if (!mounted) { view.dispose(); return; }
                         viewHandle = view;
+                        viewRef.current = view;
+                        setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         controlsRef.current = view.controls;
                         const { uniforms, introspected } = view;
 
@@ -693,7 +894,15 @@
                             }
 
                             // NUMERIC / VECTOR / COLOR / BOOLEAN.
-                            if (LIVE_TYPES.indexOf(type) === -1) return null;
+                            if (LIVE_TYPES.indexOf(type) === -1) {
+                                // Closure/shader/matrix/etc. inputs (BSDF, EDF,
+                                // VDF, ...) have no editable widget, but the
+                                // panel shouldn't look broken for nodes made
+                                // ONLY of them (pbrlib add/mix/multiply):
+                                // show them as read-only connections.
+                                return { uniform: 'in::' + inputName, input: inputName, label, type,
+                                    def: '(connection)', readonly: true, live: false };
+                            }
                             // Numeric enum (name→value) → existing select control.
                             let enumNames = null, enumValues = null;
                             if (enumAttr && (type === 'integer' || type === 'float')) {
@@ -733,7 +942,7 @@
                         // like `mix` differ per signature); dedup by input name.
                         const preferType = kind === 'color' ? (multiOutput ? null : outType)
                             : (kind === 'bsdf' ? 'BSDF' : 'surfaceshader');
-                        const defsAll = vecToArray(doc.getMatchingNodeDefs(nodeName));
+                        const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
                         defsAll.sort((a, b) => {
                             const am = (a.getType && a.getType() === preferType) ? 0 : 1;
                             const bm = (b.getType && b.getType() === preferType) ? 0 : 1;
@@ -748,9 +957,13 @@
                                 for (const inp of inputs) {
                                     const nm = inp.getName();
                                     if (seenInput.has(nm)) continue;
-                                    seenInput.add(nm);
                                     const p = buildInputParam(inp);
-                                    if (p) uiParams.push(p);
+                                    // Consume the name only when a param was
+                                    // produced: if this def's signature yields
+                                    // nothing (e.g. a filename without a live
+                                    // sampler), a later overload may still
+                                    // contribute the input.
+                                    if (p) { seenInput.add(nm); uiParams.push(p); }
                                 }
                             }
                         } catch (inputErr) {
@@ -818,9 +1031,10 @@
                 return () => {
                     mounted = false;
                     controlsRef.current = null;
+                    if (viewRef.current === viewHandle) viewRef.current = null;
                     if (viewHandle) viewHandle.dispose();
                 };
-            }, [nodeName, enabled, geom, overrides]);
+            }, [identKey, enabled, geom, overrides]);
 
             // Disabled state: cheap placeholder instead of the canvas/panel.
             if (enabled === false) {
@@ -963,25 +1177,46 @@
                 }
                 if (p.type === 'color3' || p.type === 'color4') {
                     const rgb = cur.slice(0, 3);
+                    // Picker AND spinners both speak LINEAR 0-1: rgbToHex /
+                    // hexToRgb are a plain byte<->float mapping with no sRGB
+                    // transfer (see mtlx-engine.js), and everything renders
+                    // from the same stored value — so editing either control
+                    // updates the other on the next render, losslessly for
+                    // spinner→picker and at 8-bit precision for picker→spinner.
+                    const setComp = (i, s) => {
+                        const n = parseFloat(s);
+                        if (isNaN(n)) return;
+                        const nv = cur.slice();
+                        nv[i] = Math.max(0, Math.min(1, n));
+                        onParamChange(p, nv);
+                    };
+                    // Display rounding only — the stored value keeps full
+                    // precision. 3 decimals still separates adjacent 8-bit
+                    // steps (1/255 ~ 0.004).
+                    const fmt = (n) => Math.round(Number(n) * 1000) / 1000;
+                    const chan = p.type === 'color4' ? 'RGBA' : 'RGB';
                     return (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
                             <input
                                 type="color"
-                                className="h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer"
+                                className="h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer flex-none"
+                                title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
                                 value={rgbToHex(rgb)}
                                 onChange={(e) => {
                                     const nv = hexToRgb(e.target.value);
                                     onParamChange(p, p.type === 'color4' ? nv.concat([cur[3]]) : nv);
                                 }}
                             />
-                            {p.type === 'color4' && (
+                            {cur.map((c, i) => (
                                 <input
-                                    type="range" className="flex-1 accent-blue-500 min-w-0"
-                                    min="0" max="1" step="0.01" value={cur[3]}
-                                    title="alpha"
-                                    onChange={(e) => onParamChange(p, rgb.concat([parseFloat(e.target.value)]))}
+                                    key={i} type="number" min="0" max="1" step="0.01"
+                                    title={chan[i] + ' (linear, 0-1)'}
+                                    className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-gray-200"
+                                    value={fmt(c)}
+                                    onChange={(e) => setComp(i, e.target.value)}
+                                    onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
                                 />
-                            )}
+                            ))}
                         </div>
                     );
                 }
@@ -1024,36 +1259,68 @@
                     </div>
                 )}
                 <div className={'flex flex-col lg:flex-row gap-4' + (suppressed ? ' hidden' : '')}>
-                    <div className="relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+                    <div
+                        ref={viewportRef}
+                        className="relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"
+                        style={isFullscreen ? { height: '100%' } : undefined}
+                    >
                         {loading && (
-                            <div className="absolute inset-0 flex items-center justify-center text-gray-400 z-10 bg-gray-900/80">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80">
                                 <span className="animate-pulse">Generating 3D Preview...</span>
+                                <div className="mtlx-loading-bar w-48" />
                             </div>
                         )}
                         {/* Viewport controls: geometry picker + rotation pause.
                             Drag orbits, wheel/pinch zooms (OrbitControls). */}
                         {(
                             <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
-                                {['sphere', 'cube', 'shaderball'].map((g) => (
+                                <select
+                                    value={geom}
+                                    onChange={(e) => pickGeom(e.target.value)}
+                                    title="Preview geometry"
+                                    className="h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                >
+                                    {['shaderball', 'sphere', 'cube'].map((g) => (
+                                        <option key={g} value={g}>{g}</option>
+                                    ))}
+                                </select>
+                                <button
+                                    onClick={toggleRotating}
+                                    title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
+                                    className={`h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
+                                        rotating
+                                            ? 'bg-blue-600/80 border-blue-500 text-white'
+                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
+                                    }`}
+                                >
+                                    <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
+                                </button>
+                                {envAvail && (
                                     <button
-                                        key={g}
-                                        onClick={() => pickGeom(g)}
-                                        title={'Preview on ' + g}
-                                        className={`text-[11px] px-2 py-1 rounded border transition-colors ${
-                                            geom === g
+                                        onClick={toggleEnvBg}
+                                        title={envBg ? 'Hide the environment map background' : 'Show the environment map as background (lighting is unaffected)'}
+                                        className={`h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
+                                            envBg
                                                 ? 'bg-blue-600/80 border-blue-500 text-white'
                                                 : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
                                         }`}
                                     >
-                                        {g}
+                                        <MtlxIcon name="environment" className="w-3.5 h-3.5" />
                                     </button>
-                                ))}
+                                )}
                                 <button
-                                    onClick={togglePaused}
-                                    title={paused ? 'Resume auto-rotation' : 'Pause auto-rotation (drag to orbit, wheel to zoom)'}
-                                    className="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                    onClick={takeScreenshot}
+                                    title="Save a PNG screenshot of the current view"
+                                    className="h-6 inline-flex items-center text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                 >
-                                    {paused ? '\u{25B6}\u{FE0E}' : '\u{23F8}\u{FE0E}'}
+                                    <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                    onClick={() => toggleFullscreen(viewportRef.current)}
+                                    title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                    className="h-6 inline-flex items-center text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                >
+                                    <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                                 </button>
                             </div>
                         )}
@@ -1079,14 +1346,14 @@
                                     </button>
                                 </div>
                             </div>
-                            <div className="overflow-y-auto p-3 space-y-3 flex-1">
+                            <div className="overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar">
                                 {params.map((p) => (
                                     // Key includes nodeName: different nodes often
                                     // expose SAME-named inputs (image/hextiledimage
                                     // both have `file`), and a reused DOM file
                                     // input still holding the old File emits no
                                     // change event when the same file is re-picked.
-                                    <div key={nodeName + ':' + p.uniform + ':' + resetNonce}>
+                                    <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
                                         <label className="block text-xs text-gray-400 mb-1">
                                             {p.label} <span className="text-gray-600">({p.type})</span>
                                         </label>

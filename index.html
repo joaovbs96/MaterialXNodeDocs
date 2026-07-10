@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MaterialX Playground — Node Library</title>
+    <title>MaterialX Playground — Node Library & Documentation</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <!-- Warm the sibling page in the HTTP cache so switching tabs is snappy. -->
     <link rel="prefetch" href="material-viewer.html">
@@ -23,16 +23,30 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen font-sans">
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col md:h-screen">
     <!-- Shared site shell: injected synchronously (plain JS, no Babel/React)
          so the header paints instantly and identically on every page. -->
     <div id="site-header"></div>
     <script src="js/site-header.js"></script>
 
-    <div class="p-2 sm:p-6">
-        <div id="root" class="max-w-[1600px] mx-auto"></div>
+    <!-- The body is a flex column (100vh-capped on md+): the header and the
+         shared footer take their natural heights and this wrapper absorbs
+         exactly the rest, so on md+ the page never scrolls on normal desktop
+         screens; the node-list/detail panels scroll internally. Below md
+         (mobile) — and when a desktop window is too short for the layout's
+         minimums — the page falls back to scrolling as before. -->
+    <div class="p-2 sm:p-6 flex-1 md:min-h-0">
+        <div id="root" class="max-w-[1600px] mx-auto md:h-full"></div>
     </div>
 
+    <!-- Shared footer: filled by js/site-header.js at DOMContentLoaded. -->
+    <div id="site-footer" class="shrink-0"></div>
+
+
+    <!-- Live spec parser (plain script, no Babel needed): fetches the spec
+         markdown from GitHub (pinned tag) and builds the node database
+         in-browser — window.MtlxSpecParser. -->
+    <script src="js/spec-parser.js"></script>
 
     <!-- Shared code (Babel executes each file in its own scope; every file
          exports its public API onto window — load order matters). -->
@@ -41,11 +55,13 @@
     <script type="text/babel" src="js/node-preview.jsx"></script>
 
     <script type="text/babel">
-        const DATA_URL = 'nodes.json';
-
         function App() {
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
+            // Which signature (port table) of the selected node is shown —
+            // and previewed. Reset on every selection change.
+            const [sigIndex, setSigIndex] = React.useState(0);
+            React.useEffect(() => { setSigIndex(0); }, [selectedNode]);
             const [copied, setCopied] = React.useState(false);
             // Auto-generated port tables (from the nodedef) for undocumented
             // nodes: { name, status: 'loading'|'ready'|'unavailable', tables }.
@@ -129,25 +145,37 @@
                     return;
                 }
 
-                // Expand the first library and group by default for convenience
-                const firstLib = Object.keys(parsedData)[0];
-                if (firstLib) {
-                    setExpandedLibs({ [firstLib]: true });
-                    const firstGroup = Object.keys(parsedData[firstLib])[0];
-                    if (firstGroup) {
-                        setExpandedGroups({ [`${firstLib}-${firstGroup}`]: true });
-
-                        // Select the first node
-                        const firstNode = Object.keys(parsedData[firstLib][firstGroup])[0];
-                        if (firstNode) {
-                            setSelectedNode({
-                                lib: firstLib,
-                                group: firstGroup,
-                                name: firstNode,
-                                info: parsedData[firstLib][firstGroup][firstNode]
-                            });
+                // Default landing node: OpenPBR's surface shader when the
+                // data has it — the flagship uber-shader is a far better
+                // first impression (and a parameter-rich preview) than
+                // whatever node happens to sort first. Falls back to the
+                // first node of the first library/group otherwise.
+                let def = null;
+                for (const lib of Object.keys(parsedData)) {
+                    for (const group of Object.keys(parsedData[lib])) {
+                        for (const name of Object.keys(parsedData[lib][group])) {
+                            if (name.toLowerCase() === 'open_pbr_surface') {
+                                def = { lib, group, name, info: parsedData[lib][group][name] };
+                                break;
+                            }
                         }
+                        if (def) break;
                     }
+                    if (def) break;
+                }
+                if (!def) {
+                    const firstLib = Object.keys(parsedData)[0];
+                    const firstGroup = firstLib && Object.keys(parsedData[firstLib])[0];
+                    const firstNode = firstGroup && Object.keys(parsedData[firstLib][firstGroup])[0];
+                    if (firstNode) {
+                        def = { lib: firstLib, group: firstGroup, name: firstNode,
+                                info: parsedData[firstLib][firstGroup][firstNode] };
+                    }
+                }
+                if (def) {
+                    setExpandedLibs({ [def.lib]: true });
+                    setExpandedGroups({ [`${def.lib}-${def.group}`]: true });
+                    setSelectedNode(def);
                 }
             };
 
@@ -236,25 +264,29 @@
                 return () => { alive = false; };
             }, [selectedNode]);
 
-            // Auto-load the JSON sitting next to the page (works on any web
-            // host incl. GitHub Pages; fails silently on file:// or 404,
-            // leaving the upload input as the way in).
+            // Build the node database LIVE: fetch the spec markdown for the
+            // pinned tag straight from GitHub and parse it in-browser
+            // (spec-parser.js), joining against the nodedefs from the WASM.
+            // There is no local fallback: if GitHub is unreachable
+            // (offline/file://), the page shows the failed state.
             const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
             const [dataSource, setDataSource] = React.useState(null);
             React.useEffect(() => {
-                fetch(DATA_URL)
-                    .then(res => {
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        return res.json();
-                    })
-                    .then(parsed => {
-                        applyData(parsed, DATA_URL);
+                const live = (window.MtlxSpecParser
+                    ? window.MtlxSpecParser.buildNodeDatabase()
+                    : Promise.reject(new Error('spec-parser.js not loaded')));
+                live
+                    .then(db => {
+                        applyData(db, `MaterialX ${window.MtlxSpecParser.SPEC_TAG} specification (parsed live)`);
                         setAutoLoad('done');
                     })
-                    .catch(() => setAutoLoad('failed'));
+                    .catch((err) => {
+                        console.warn('Live spec parse failed', err);
+                        setAutoLoad('failed');
+                    });
             }, []);
 
-            // (Manual upload removed: the page auto-loads DATA_URL only.)
+            // (Manual upload removed: the page auto-loads the live spec only.)
 
             const toggleLib = (lib) => {
                 setExpandedLibs(prev => ({ ...prev, [lib]: !prev[lib] }));
@@ -270,6 +302,14 @@
             // ----------------------------------------------------------------
             // 'all' | 'documented' | 'undocumented'
             const [docFilter, setDocFilter] = React.useState('all');
+            // Help popup (the "?" button in the stats row).
+            const [showHelp, setShowHelp] = React.useState(false);
+            React.useEffect(() => {
+                if (!showHelp) return undefined;
+                const onKey = (e) => { if (e.key === 'Escape') setShowHelp(false); };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, [showHelp]);
             const [searchQuery, setSearchQuery] = React.useState('');
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
@@ -385,9 +425,15 @@
                 && autoDoc.status === 'loading';
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : []);
-            // One shared column set for all tables of the selected node,
-            // so the stacked tables align perfectly.
-            const columns = effectiveTables.length > 0 ? unionColumns(effectiveTables) : [];
+            // Signature selection: with several signatures, show ONLY the
+            // chosen one (dropdown above the table) instead of stacking all.
+            const sigCount = effectiveTables.length;
+            const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
+            const displayTables = sigCount > 1 ? [effectiveTables[sig]] : effectiveTables;
+            // Concrete type this signature previews as (null → auto-pick).
+            const previewType = sigCount > 0 ? signaturePreviewType(displayTables[0]) : null;
+            // Column set for the displayed table(s).
+            const columns = displayTables.length > 0 ? unionColumns(displayTables) : [];
             // Footnote references: map key -> {n, url, text}, numbered by
             // order of first appearance (the parser preserves that order).
             const references = (selectedNode && selectedNode.info.references) || [];
@@ -395,7 +441,7 @@
             references.forEach((r, i) => { refs[r.key] = { n: i + 1, url: r.url, text: r.text }; });
 
             return (
-                <div className="space-y-4 sm:space-y-6">
+                <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
                     {/* Page intro: the site title/nav/links live in the shared
                         header (js/site-header.js); only page-specific bits stay. */}
                     <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -418,12 +464,13 @@
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
-                            Loading <code>{DATA_URL}</code>…
+                            Parsing the MaterialX specification…
                         </div>
                     )}
                     {autoLoad === 'failed' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-amber-700/60 text-sm text-gray-300">
-                            Could not load <code className="text-amber-400">{DATA_URL}</code>.
+                            Could not fetch and parse the MaterialX specification from GitHub.
+                            Check your network connection and reload the page.
                         </div>
                     )}
 
@@ -458,14 +505,107 @@
                                     </button>
                                 ))}
                             </div>
+                            <button
+                                onClick={() => setShowHelp(true)}
+                                title="How to use this page"
+                                className="ml-auto text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors inline-flex items-center gap-1.5"
+                            >
+                                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-current text-[10px] font-bold" aria-hidden="true">?</span>
+                                Help
+                            </button>
                         </div>
                     )}
 
+                    {/* Help popup: click-outside or Esc closes. Rendered
+                        through a portal directly under <body> — a fixed
+                        overlay inside the app tree can end up anchored to an
+                        ancestor instead of the viewport (any transformed /
+                        filtered / backdrop-filtered ancestor becomes the
+                        containing block for position:fixed), which offsets
+                        the panel and dims only part of the screen. */}
+                    {showHelp && ReactDOM.createPortal(
+                        <div
+                            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+                            onClick={() => setShowHelp(false)}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label="Help"
+                        >
+                            <div
+                                className="bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-w-xl w-full max-h-[85vh] overflow-y-auto custom-scrollbar p-5 sm:p-6"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className="flex items-start justify-between gap-4 mb-3">
+                                    <h2 className="text-lg font-semibold text-white">How to use the Node Library</h2>
+                                    <button
+                                        onClick={() => setShowHelp(false)}
+                                        title="Close (Esc)"
+                                        className="text-gray-400 hover:text-gray-200 text-xl leading-none px-1"
+                                        aria-label="Close help"
+                                    >
+                                        &times;
+                                    </button>
+                                </div>
+                                <div className="space-y-3 text-sm text-gray-300">
+                                    <p>
+                                        This page is a browsable reference for the MaterialX node libraries. The
+                                        documentation is parsed live from the official specification (pinned to the
+                                        version shown in the header) and joined with the node definitions reported
+                                        by the MaterialX runtime itself.
+                                    </p>
+                                    <p>
+                                        <span className="font-semibold text-gray-100">Browsing.</span>{' '}
+                                        The left panel lists every node, grouped by library and node group. Use the
+                                        search box to filter by name, the arrows to expand or collapse everything,
+                                        and the chips above to show only documented or undocumented nodes.
+                                    </p>
+                                    <p>
+                                        <span className="font-semibold text-gray-100">Documentation.</span>{' '}
+                                        Selecting a node shows its description, port tables, and references from the
+                                        specification. Links to other nodes open directly in the app; everything else
+                                        opens the official spec on GitHub.
+                                    </p>
+                                    <p>
+                                        <span className="font-semibold text-gray-100">3D preview.</span>{' '}
+                                        Most nodes render live in WebGL: drag to orbit, scroll to zoom. The controls
+                                        on the viewport switch the preview geometry, start/stop the turntable
+                                        rotation, show the environment as background, save a PNG screenshot, and go
+                                        full screen. Editing values in the parameter panel regenerates the shader,
+                                        and the node can be downloaded as a .mtlx document with the current values.
+                                        The global "3D previews" toggle above disables all WebGL rendering to save
+                                        resources.
+                                    </p>
+                                    <p>
+                                        <span className="font-semibold text-gray-100">Material Viewer.</span>{' '}
+                                        The second tab renders complete MaterialX documents: drop a .mtlx file
+                                        (optionally with its textures, a folder, or a .zip) anywhere on that page.
+                                    </p>
+                                    <p className="text-gray-400">
+                                        Something broken or missing? Report it on the{' '}
+                                        <a
+                                            href={(window.SITE_LINKS && window.SITE_LINKS.issues) || 'https://github.com/joaovbs96/MaterialXNodeDocs/issues'}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40"
+                                        >Feedback &amp; Issues</a>{' '}
+                                        page.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>,
+                        document.body
+                    )}
+
                     {jsonData && (
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-6">
+                        /* md+: the grid absorbs all height left between the
+                           stats row and the disclaimers; both panels scroll
+                           internally. The 20rem floor keeps the panels usable
+                           on very short desktop windows by letting the page
+                           scroll again instead of squishing them further. */
+                        <div className="grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]">
 
                             {/* Left Sidebar: Hierarchical Tree Menu */}
-                            <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-[75vh] overflow-y-auto custom-scrollbar">
+                            <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar">
                                 {/* Sticky header: title, expand/collapse, search stay
                                     visible while the tree scrolls underneath. The scroll
                                     container itself is unpadded; the sticky block and the
@@ -587,7 +727,7 @@
                             </div>
 
                             {/* Right Content Area: Node Details */}
-                            <div className="md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:max-h-[75vh] md:overflow-y-auto custom-scrollbar">
+                            <div className="md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar">
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
@@ -648,6 +788,9 @@
                                         {/* INJECTED 3D PREVIEW */}
                                         <Node3DPreview
                                             nodeName={selectedNode.name}
+                                            library={selectedNode.lib}
+                                            nodegroup={selectedNode.group}
+                                            preferredType={previewType}
                                             enabled={showPreviews}
                                             onEnable={togglePreviews}
                                         />
@@ -676,30 +819,32 @@
                                                         </span>
                                                     </div>
                                                 )}
-                                                {effectiveTables.map((table, i) => {
-                                                    const label = signatureLabel(table);
-                                                    return (
-                                                        <div key={i}>
-                                                            {effectiveTables.length > 1 && (
-                                                                <div className="flex items-baseline gap-2 mb-2">
-                                                                    {label ? (
-                                                                        <span className="font-mono text-xs sm:text-sm text-gray-200 break-words min-w-0">{label}</span>
-                                                                    ) : (
-                                                                        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                                                                            Signature {i + 1} of {effectiveTables.length}
-                                                                        </span>
-                                                                    )}
-                                                                    {label && (
-                                                                        <span className="text-xs text-gray-500">
-                                                                            {i + 1} / {effectiveTables.length}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            )}
-                                                            <PortTable table={table} columns={columns} refs={refs} />
-                                                        </div>
-                                                    );
-                                                })}
+                                                {sigCount > 1 && (
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
+                                                            Signature
+                                                        </label>
+                                                        <select
+                                                            id="sig-select"
+                                                            value={sig}
+                                                            onChange={(e) => setSigIndex(Number(e.target.value))}
+                                                            title="This node has several signatures — pick which one to document and preview"
+                                                            className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs sm:text-sm font-mono text-gray-200 max-w-full"
+                                                        >
+                                                            {effectiveTables.map((t, i) => {
+                                                                const l = signatureLabel(t);
+                                                                return (
+                                                                    <option key={i} value={i}>
+                                                                        {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
+                                                                    </option>
+                                                                );
+                                                            })}
+                                                        </select>
+                                                    </div>
+                                                )}
+                                                {displayTables.map((table, i) => (
+                                                    <PortTable key={sigCount > 1 ? sig : i} table={table} columns={columns} refs={refs} />
+                                                ))}
                                             </div>
                                         ) : autoLoading ? (
                                             <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
@@ -764,18 +909,6 @@
                             project repository.
                         </a>{' '}
                     </div>
-                    <div className="text-sm text-gray-400">
-                        This website is an independent open-source project and is not officially affiliated with the MaterialX project or the Academy Software Foundation.
-                        For all intents and purposes, in case of any differences, assume the Markdown specification files in the{' '}
-                        <a
-                            href="https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification"
-                            target="_blank" rel="noopener noreferrer"
-                            className="underline text-gray-200 hover:text-gray-100"
-                        >
-                            official MaterialX repository
-                        </a>{' '}
-                        are the source of truth.
-                    </div>
                 </div>
             );
         }
@@ -835,4 +968,3 @@
     </style>
 </body>
 </html>
-
