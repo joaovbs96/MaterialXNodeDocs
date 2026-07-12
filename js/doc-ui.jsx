@@ -763,6 +763,174 @@
         };
 
 
+        // ------------------------------------------------------------------
+        // Implementation-target matrix: which render targets (genglsl,
+        // genessl, genosl, genmdl, genmsl, ...) the standard library ships an
+        // <implementation> for, per nodedef — a documentation aid, not a
+        // certification tool (best-effort: falls back to an empty matrix on
+        // any WASM binding mismatch rather than throwing).
+        // ------------------------------------------------------------------
+        // Every MaterialX API call goes through `safe`, same convention as
+        // graph-app.jsx's local helper of the same name (not a window
+        // global — this file needs its own copy).
+        const safe = (fn, fallback) => {
+            try { const v = fn(); return v == null ? fallback : v; } catch (e) { return fallback; }
+        };
+
+        const IMPL_TARGET_LABELS = {
+            genglsl: 'GLSL', genessl: 'ESSL', genosl: 'OSL', genmdl: 'MDL', genmsl: 'MSL',
+        };
+        const friendlyTargetLabel = (target) => {
+            if (IMPL_TARGET_LABELS[target]) return IMPL_TARGET_LABELS[target];
+            const stripped = String(target || '').replace(/^gen/i, '');
+            return (stripped || target || '').toUpperCase();
+        };
+
+        // Cached once per page load: nodedefName -> { targets: Set<string>,
+        // graph: boolean }. `graph: true` means the nodedef's implementation
+        // is a <nodegraph> (works for every target) rather than a per-target
+        // source-code implementation.
+        let implIndexPromise = null;
+        function getImplIndex() {
+            if (!implIndexPromise) {
+                implIndexPromise = (async () => {
+                    const { stdlib } = await getMxEnv();
+                    const impls = vecToArray(safe(() => stdlib.getImplementations(), []));
+                    const index = {};
+                    impls.forEach((impl) => {
+                        const nodedefName = safe(() => impl.getAttribute('nodedef'), null);
+                        if (!nodedefName) return;
+                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), graph: false };
+                        const ngAttr = safe(() => impl.getAttribute('nodegraph'), '');
+                        if (ngAttr) {
+                            index[nodedefName].graph = true;
+                            return;
+                        }
+                        const target = safe(() => impl.getAttribute('target'), null);
+                        if (target) index[nodedefName].targets.add(target);
+                    });
+                    return index;
+                })();
+            }
+            return implIndexPromise;
+        }
+
+        // props: { nodeName, signature } — signature is currently informational
+        // only (a re-render trigger alongside nodeName); the component derives
+        // its own per-signature grouping from the live nodedefs so it stays in
+        // sync with whichever overload is selected without extra plumbing.
+        function ImplTargetMatrix({ nodeName, signature }) {
+            const [state, setState] = React.useState({ status: 'idle', rows: [], allTargets: [] });
+
+            React.useEffect(() => {
+                if (!nodeName) { setState({ status: 'idle', rows: [], allTargets: [] }); return undefined; }
+                let alive = true;
+                setState({ status: 'loading', rows: [], allTargets: [] });
+                (async () => {
+                    try {
+                        const { stdlib } = await getMxEnv();
+                        const index = await getImplIndex();
+                        const defs = vecToArray(safe(() => stdlib.getMatchingNodeDefs(nodeName), []));
+                        if (!defs.length) { if (alive) setState({ status: 'empty', rows: [], allTargets: [] }); return; }
+
+                        // One entry per TYPE SIGNATURE (nodeDefSigKey, same key
+                        // groupDefVersions uses) — version-duplicate nodedefs
+                        // (e.g. standard_surface 1.0.1/1.0.0) collapse together
+                        // and their implementations are unioned.
+                        const bySig = {};
+                        const order = [];
+                        defs.forEach((def) => {
+                            let key = null;
+                            try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
+                            const defName = safe(() => def.getName(), null);
+                            if (!key) key = defName || String(order.length);
+                            let outType = '';
+                            try { outType = def.getType(); } catch (e) { /* none */ }
+                            if (!bySig[key]) {
+                                bySig[key] = { key, type: outType, targets: new Set(), graph: false };
+                                order.push(key);
+                            }
+                            const info = defName && index[defName];
+                            if (info) {
+                                if (info.graph) bySig[key].graph = true;
+                                info.targets.forEach((t) => bySig[key].targets.add(t));
+                            }
+                        });
+
+                        const sigRows = order.map((key) => bySig[key]);
+                        const sameImpl = (a, b) => a.graph === b.graph
+                            && a.targets.size === b.targets.size
+                            && [...a.targets].every((t) => b.targets.has(t));
+                        // Collapse to a single row when every signature shares
+                        // the exact same implementation set — the common case.
+                        const rows = sigRows.length > 1 && sigRows.every((r) => sameImpl(r, sigRows[0]))
+                            ? [sigRows[0]] : sigRows;
+
+                        const allTargets = new Set();
+                        Object.values(index).forEach((info) => info.targets.forEach((t) => allTargets.add(t)));
+                        sigRows.forEach((r) => r.targets.forEach((t) => allTargets.add(t)));
+
+                        if (alive) {
+                            setState({ status: 'ready', rows, allTargets: [...allTargets].sort() });
+                        }
+                    } catch (e) {
+                        if (alive) setState({ status: 'error', rows: [], allTargets: [] });
+                    }
+                })();
+                return () => { alive = false; };
+            }, [nodeName, signature]);
+
+            if (state.status === 'idle' || state.status === 'empty' || state.status === 'error') return null;
+            if (state.status === 'loading') {
+                return (
+                    <div className="text-xs text-gray-500 italic mt-3">
+                        Checking shading-language implementations…
+                    </div>
+                );
+            }
+            if (!state.rows.length) return null;
+
+            const targets = state.allTargets;
+            const badgeBase = 'px-2 py-0.5 rounded border font-mono text-[11px]';
+
+            return (
+                <div className="mt-3 mb-2 text-xs">
+                    <div className="flex items-start gap-2 flex-wrap">
+                        <span className="text-gray-500 uppercase tracking-wider font-semibold pt-0.5">
+                            Implementations:
+                        </span>
+                        <div className="flex flex-col gap-1.5">
+                            {state.rows.map((row, i) => (
+                                <div key={row.key || i} className="flex items-center gap-1.5 flex-wrap">
+                                    {row.graph ? (
+                                        <span className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}>
+                                            Graph (all targets)
+                                        </span>
+                                    ) : targets.length ? (
+                                        targets.map((t) => (
+                                            <span
+                                                key={t}
+                                                title={t}
+                                                className={badgeBase + (
+                                                    row.targets.has(t)
+                                                        ? ' border-green-700/60 bg-green-950/30 text-green-400'
+                                                        : ' border-gray-700 bg-gray-900 text-gray-600'
+                                                )}
+                                            >
+                                                {row.targets.has(t) ? '✓' : '–'} {friendlyTargetLabel(t)}
+                                            </span>
+                                        ))
+                                    ) : (
+                                        <span className="text-gray-600 italic">No implementations found.</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // ---- public API ----
         Object.assign(window, {
             REPO_URL, ISSUES_URL, SPEC_DOCS_URL,
@@ -773,4 +941,5 @@
             CANONICAL_ORDER, COL_WIDTHS, COL_REM, DESCRIPTION_MIN_REM, EXTRA_COL_REM, CELL_STYLES,
             unionColumns, signatureLabel, signaturePreviewType, pickTableForType, PortTable,
             specFileForLib, specUrlForNode, NodeDefPortsTable,
+            ImplTargetMatrix,
         });

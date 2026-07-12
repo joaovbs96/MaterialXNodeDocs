@@ -607,6 +607,7 @@
                                 style={{ height: 22 }}
                                 title={inp.authored === false ? 'Not set in the document — nodedef default' : undefined}>
                                 <Handle type="target" position={Position.Left} id={'in:' + inp.name}
+                                    onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: inp.name, portType: inp.type, dir: 'in' }); }}
                                     style={handleStyle(typeColor(inp.type))} />
                                 <span className="text-gray-300 truncate">{inp.name}</span>
                                 {!inp.connected && inp.value !== '' && (
@@ -627,6 +628,7 @@
                                 <span className="text-[9px]" style={{ color: typeColor(out.type) }}>{out.type}</span>
                                 <span className="text-gray-300 truncate">{out.name}</span>
                                 <Handle type="source" position={Position.Right} id={'out:' + out.name}
+                                    onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: out.name, portType: out.type, dir: 'out' }); }}
                                     style={handleStyle(typeColor(out.type))} />
                             </div>
                         ))}
@@ -884,6 +886,9 @@
                 const name = elName(o);
                 const type = elType(o);
                 if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
+                if (containerName) {
+                    return wrapAsSurface({ nodegraph: containerName, output: name }, type, name);
+                }
                 const srcRef = resolveConnSrc(container, containerName, o);
                 if (!srcRef) return fail('"' + name + '" has no upstream connection to preview.');
                 return wrapAsSurface(srcRef, type, name);
@@ -899,7 +904,25 @@
                 const type = elType(inp);
                 if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
                 const srcRef = resolveConnSrc(container, containerName, inp);
-                if (srcRef) return wrapAsSurface(srcRef, type, name);
+                if (srcRef) {
+                    if (containerName && srcRef.nodename) {
+                        // The connection target is graph-internal (a plain
+                        // node name); tap it through a transient output on
+                        // that graph, same as previewNode's containerName
+                        // branch, since a root-level nodename= can't resolve
+                        // a node that lives inside a nodegraph.
+                        const g = container;
+                        const oName = typeof g.createValidChildName === 'function'
+                            ? safe(() => g.createValidChildName('__pv_out'), '__pv_out') : '__pv_out';
+                        const o = safe(() => g.addOutput(oName, type), null);
+                        if (!o) return fail('Could not tap "' + name + '" for the preview.');
+                        temps.push({ container: g, name: oName });
+                        safe(() => { o.setAttribute('nodename', srcRef.nodename); return true; }, false);
+                        if (srcRef.output) safe(() => { o.setAttribute('output', srcRef.output); return true; }, false);
+                        return wrapAsSurface({ nodegraph: containerName, output: oName }, type, name);
+                    }
+                    return wrapAsSurface(srcRef, type, name);
+                }
                 const val = safe(() => (inp.getValueString ? inp.getValueString() : ''), '') || elAttr(inp, 'value');
                 const constEl = addTempNode('constant', '__pv_const', type);
                 if (!constEl) return fail('Could not build the preview graph (constant).');
@@ -954,7 +977,7 @@
         // default — rendered with the SAME createMtlxRenderView pipeline
         // as the docs page. Re-inits whenever the target, the document,
         // or a committed parameter edit (docRev) changes.
-        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true }) {
+        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay }) {
             const canvasRef = React.useRef(null);
             // Mirrors NodeGraphApp's activeRef — pauses the render loop while
             // a future multi-view shell hides this view without unmounting it.
@@ -1088,6 +1111,10 @@
                             {error}
                         </div>
                     )}
+                    {/* Rendered last so it stacks above the loading/notice/
+                        error overlays regardless of z-index ties (item 10's
+                        pin toggle, passed in by the caller). */}
+                    {overlay}
                 </div>
             );
         }
@@ -1219,7 +1246,8 @@
             { keys: 'Drag between ports', desc: 'Connect an output to an input' },
             { keys: 'Drag an edge end off', desc: 'Disconnect it' },
             { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope' },
-            { keys: 'Del / Backspace', desc: 'Delete the selected node(s), or disconnect the selected edge' },
+            { keys: 'Delete', desc: 'Delete the selected node(s), or disconnect the selected edge' },
+            { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)' },
             { keys: 'F', desc: 'Fit the whole graph in view' },
             { keys: 'A', desc: 'Re-run the automatic layout once' },
             { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs)' },
@@ -1339,6 +1367,129 @@
             );
         }
 
+        // View-only XML dialog (item 8's "Document" button): shows the
+        // current document exactly as Export would write it, without
+        // triggering a download — a quick way to eyeball or copy the raw
+        // MaterialX. `xml` is computed once by the caller when the dialog
+        // opens (not on every render). Same backdrop/Esc/stopPropagation
+        // contract as KeybindsHelp/DocsDialog above.
+        function XmlDialog({ xml, open, onClose }) {
+            const [copied, setCopied] = React.useState(false);
+            const copyTimerRef = React.useRef(null);
+            React.useEffect(() => {
+                const onKey = (e) => { if (open && e.key === 'Escape') onClose(); };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, [open, onClose]);
+            React.useEffect(() => () => {
+                if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            }, []);
+            if (!open) return null;
+
+            // navigator.clipboard needs a secure context; some browsers also
+            // reject it outside a "fresh" user gesture. execCommand via a
+            // throwaway textarea is the fallback for both cases.
+            const copyXml = async () => {
+                let ok = false;
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(xml);
+                        ok = true;
+                    }
+                } catch (e) { ok = false; }
+                if (!ok) {
+                    try {
+                        const ta = document.createElement('textarea');
+                        ta.value = xml;
+                        ta.style.position = 'fixed';
+                        ta.style.top = '-1000px';
+                        ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.focus();
+                        ta.select();
+                        ok = document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    } catch (e) { ok = false; }
+                }
+                if (!ok) return;
+                setCopied(true);
+                if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+                copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
+            };
+
+            return (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+                    onMouseDown={onClose}>
+                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+                        onMouseDown={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                            <span className="text-[13px] font-bold text-gray-100">Document</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={copyXml}
+                                    title="Copy the XML to the clipboard"
+                                    className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
+                                        + (copied
+                                            ? 'bg-green-600/70 border-green-500 text-white'
+                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                >
+                                    <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                                </button>
+                                <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
+                            </div>
+                        </div>
+                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">{xml}</pre>
+                    </div>
+                </div>
+            );
+        }
+
+        // Validation popup (item 9's "Validate" button): a defensive,
+        // best-effort check over the CURRENT document. `result` is computed
+        // by the caller (in a useEffect gated on validateOpen) so it stays
+        // fresh across re-opens without recomputing on every render; this
+        // component only renders whatever it was handed.
+        function ValidateDialog({ result, open, onClose }) {
+            React.useEffect(() => {
+                const onKey = (e) => { if (open && e.key === 'Escape') onClose(); };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, [open, onClose]);
+            if (!open) return null;
+            return (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+                    onMouseDown={onClose}>
+                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                        onMouseDown={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                            <span className="text-[13px] font-bold text-gray-100">Validate</span>
+                            <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
+                        </div>
+                        <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
+                            {!result && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
+                            {result && result.kind === 'valid' && (
+                                <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
+                            )}
+                            {result && result.kind === 'invalid' && (
+                                <div>
+                                    <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
+                                    {result.issues && result.issues.length > 0 && (
+                                        <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
+                                            {result.issues.map((s, i) => <li key={i}>{s}</li>)}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
+                            {result && result.kind === 'unavailable' && (
+                                <div className="text-gray-400">Validation is not available in this build.</div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // The Tab search palette: type-to-filter over the catalog,
         // arrows + Enter to add, Esc (or Tab again, or clicking away)
         // to close.
@@ -1349,8 +1500,16 @@
             'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
             'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
 
-        function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose }) {
+        // filterMode/filterType power the port-dot double-click flow (item
+        // 4): filterMode 'in' means the new node must be able to FEED the
+        // port that was double-clicked (match on OUTPUT type, same as the
+        // plain type-filter dropdown); 'out' means the new node must be able
+        // to CONSUME it (match on some INPUT's type instead). null/'' is the
+        // normal Tab/button-triggered flow, where the user drives the
+        // dropdown themselves.
+        function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
+            const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
             const inputRef = React.useRef(null);
             const listRef = React.useRef(null);
@@ -1368,6 +1527,13 @@
                 const t = setTimeout(() => { if (nameRef.current) nameRef.current.focus(); }, 0);
                 return () => clearTimeout(t);
             }, [!!ifaceDraft]);
+            // Distinct output types present across the whole catalog, for
+            // the type-filter dropdown next to the search box.
+            const typeOptions = React.useMemo(() => {
+                const s = new Set();
+                (catalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
+                return Array.from(s).sort();
+            }, [catalog]);
             const items = React.useMemo(() => {
                 const s = q.trim().toLowerCase();
                 const synth = [];
@@ -1380,9 +1546,20 @@
                     }
                 }
                 if (!catalog) return synth;
-                const match = s ? catalog.filter((c) =>
+                let pool = catalog;
+                if (typeFilter) {
+                    pool = filterMode === 'out'
+                        // The double-clicked port is an OUTPUT: the new node
+                        // must be able to consume it, i.e. have some INPUT
+                        // of that type.
+                        ? pool.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
+                        // Default (including filterMode 'in'): the new node
+                        // must produce that type as its OUTPUT.
+                        : pool.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
+                }
+                const match = s ? pool.filter((c) =>
                     c.category.toLowerCase().indexOf(s) !== -1 ||
-                    (c.group || '').toLowerCase().indexOf(s) !== -1) : catalog;
+                    (c.group || '').toLowerCase().indexOf(s) !== -1) : pool;
                 const rank = (c) => {
                     if (!s) return 2;
                     const n = c.category.toLowerCase();
@@ -1394,7 +1571,7 @@
                 return synth.concat(match.slice()
                     .sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category))
                     .slice(0, 60));
-            }, [catalog, q, ifaceMode]);
+            }, [catalog, q, ifaceMode, typeFilter, filterMode]);
             React.useEffect(() => { setHi(0); }, [q]);
             React.useEffect(() => { // keep the highlighted row in view
                 const el = listRef.current && listRef.current.children[hi];
@@ -1402,7 +1579,7 @@
             }, [hi, items]);
             const pick = (c) => {
                 if (c.synthetic) setIfaceDraft({ kind: c.synthetic, name: '', type: 'color3' });
-                else onPick(c);
+                else onPick(c, typeFilter);
             };
             const confirmIface = () => {
                 if (!ifaceDraft) return;
@@ -1464,15 +1641,31 @@
                                 </div>
                             </div>
                         ) : (<React.Fragment>
-                        <input
-                            ref={inputRef}
-                            className="w-full bg-gray-900 border-b border-gray-700 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
-                            placeholder={'Add a node — type to search…'}
-                            value={q}
-                            spellCheck={false}
-                            onChange={(e) => setQ(e.target.value)}
-                            onKeyDown={onKeyDown}
-                        />
+                        <div className="flex items-stretch border-b border-gray-700">
+                            <input
+                                ref={inputRef}
+                                className="flex-1 min-w-0 bg-gray-900 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
+                                placeholder={filterMode ? 'Add a connected node…' : 'Add a node — type to search…'}
+                                value={q}
+                                spellCheck={false}
+                                onChange={(e) => setQ(e.target.value)}
+                                onKeyDown={onKeyDown}
+                            />
+                            <select
+                                className="flex-none w-24 bg-gray-900 border-l border-gray-700 px-1.5 text-[11px] font-mono text-gray-300 rounded-none focus:outline-none focus:border-blue-500 disabled:opacity-70"
+                                value={typeFilter}
+                                title={filterMode
+                                    ? ('Locked to the port you double-clicked (' + typeFilter + ')')
+                                    : 'Filter by output type'}
+                                disabled={!!filterMode}
+                                onChange={(e) => setTypeFilter(e.target.value)}
+                            >
+                                <option value="">Any type</option>
+                                {typeOptions.map((t) => (
+                                    <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
+                                ))}
+                            </select>
+                        </div>
                         <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar">
                             {!catalog && !items.length && (
                                 <div className="px-3 py-3 text-[11px] text-gray-500 animate-pulse">Loading the node library {'…'}</div>
@@ -1837,6 +2030,7 @@
                     onOpen: (d.kind === 'nodegraph' && o.onOpenScope)
                         ? () => o.onOpenScope(d.name) : undefined,
                     onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,
+                    onPortAdd: o.onPortAdd,
                 });
             });
             const posOf = layoutScope(shaped, edges);
@@ -1911,7 +2105,7 @@
             const [nameEditing, setNameEditing] = React.useState(false);
             const [nameDraft, setNameDraft] = React.useState('');
             // The selected EDGE (single selection, mutually exclusive with
-            // the node selection) — Del/Backspace disconnects it.
+            // the node selection) — Delete disconnects it.
             const [selectedEdgeId, setSelectedEdgeId] = React.useState(null);
             const [paramsOpen, setParamsOpen] = React.useState(true);
             // The LAST node the preview showed — { scope, id } — so the
@@ -1921,6 +2115,11 @@
             // Tab quick-add: whether the search palette is open, and the
             // stdlib node catalog once loaded.
             const [addOpen, setAddOpen] = React.useState(false);
+            // Set while the add-search palette was opened by double-clicking
+            // a port dot (item 4): { mode: 'in'|'out', type } pre-filters
+            // (and locks) AddNodeSearch's type dropdown so only compatible
+            // nodes show, and drives the auto-wire once one is picked.
+            const [portAddFilter, setPortAddFilter] = React.useState(null);
             // Keybinds reference popup ("?" button, top-right).
             const [helpOpen, setHelpOpen] = React.useState(false);
             // In-tab docs viewer (parameter panel "?" button): { url, fullUrl, label }
@@ -1928,6 +2127,18 @@
             // dialog (and its iframe) can stay mounted-but-hidden between opens.
             const [docsDialog, setDocsDialog] = React.useState(null);
             const [docsDialogOpen, setDocsDialogOpen] = React.useState(false);
+            // View-only XML dialog ("Document" button): the XML is computed
+            // once when the dialog opens (not on every render) and held here.
+            const [xmlDialogOpen, setXmlDialogOpen] = React.useState(false);
+            const [xmlDialogXml, setXmlDialogXml] = React.useState('');
+            // Validate popup: result is recomputed fresh each time the
+            // dialog opens (see the useEffect gated on validateOpen below).
+            const [validateOpen, setValidateOpen] = React.useState(false);
+            const [validateResult, setValidateResult] = React.useState(null);
+            // Freezes the preview panel to a specific node regardless of
+            // what gets selected afterward (item 10's pin toggle) — same
+            // { scope, id } shape as previewSel, reset alongside it.
+            const [pinnedTarget, setPinnedTarget] = React.useState(null);
             const [catalog, setCatalog] = React.useState(null);
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
@@ -2114,7 +2325,7 @@
             React.useEffect(() => { getMxEnv().catch(() => {}); }, []);
 
             // A new document invalidates the remembered preview target.
-            React.useEffect(() => { setPreviewSel(null); }, [parsed]);
+            React.useEffect(() => { setPreviewSel(null); setPinnedTarget(null); }, [parsed]);
 
             // Open the quick-add palette (also kicks off the catalog load
             // the first time).
@@ -2129,6 +2340,20 @@
             openAddRef.current = openAddSearch;
             const parsedLiveRef = React.useRef(null);
             parsedLiveRef.current = parsed;
+
+            // Double-clicking a port dot (item 4): open the add-search
+            // pre-filtered to nodes that can plug into that port, then
+            // auto-wire once one is picked. pendingConnRef carries the
+            // { nodeId, port, portType, dir } across the async pick.
+            const pendingConnRef = React.useRef(null);
+            const openPortAdd = (info) => {
+                if (!info || !info.nodeId || !info.port || !info.portType) return;
+                pendingConnRef.current = info;
+                setPortAddFilter({ mode: info.dir, type: info.portType });
+                openAddRef.current();
+            };
+            const onPortAddRef = React.useRef(openPortAdd);
+            onPortAddRef.current = openPortAdd;
 
             // Tab, while the graph stage is the focus context, opens the
             // add-node search. Tab keeps its normal meaning inside inputs
@@ -2174,9 +2399,10 @@
                 return () => host.removeEventListener('dblclick', onDbl);
             }, []);
 
-            // Del / Backspace: disconnect the selected edge, or delete the
-            // selected node. Same focus rules as the Tab handler — typing in
-            // an input keeps its normal meaning.
+            // Delete: disconnect the selected edge, or delete the selected
+            // node. Backspace: step up out of the current nodegraph scope
+            // (back to document root). Same focus rules as the Tab handler —
+            // typing in an input keeps its normal meaning.
             const deleteSelectionRef = React.useRef(() => false);
             React.useEffect(() => {
                 const onKey = (e) => {
@@ -2189,6 +2415,14 @@
                     const inStage = t === document.body
                         || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
                     if (!inStage) return;
+                    if (e.key === 'Backspace') {
+                        // Never delete on Backspace; just step up one scope
+                        // level. Always prevent default so it can't trigger
+                        // browser back-navigation.
+                        if (scopeRef.current) setScope('');
+                        e.preventDefault();
+                        return;
+                    }
                     if (deleteSelectionRef.current()) e.preventDefault();
                 };
                 window.addEventListener('keydown', onKey);
@@ -2403,6 +2637,40 @@
                 };
             }, []);
 
+            // ---- Receive a material handed off from another view (item 6's
+            // counterpart to the "Send to Editor" buttons in viewer-app.jsx
+            // and node-preview.jsx). Those buttons stash the payload on
+            // window.__mtlxPendingImport, dispatch 'mtlx-load-document', and
+            // jump the hash to #!graph — so on arrival here there may
+            // already be a pending payload (checked once on mount) and/or
+            // more may arrive later while this tab stays open (the event).
+            // Routed through the SAME guardedIngestRef the drag-drop handler
+            // above uses, so a dirty session still gets the unsaved-changes
+            // confirm dialog for free.
+            React.useEffect(() => {
+                const handleImport = (payload) => {
+                    if (!payload) return;
+                    const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    const map = Object.assign({}, payload.files || {}, {
+                        [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
+                    });
+                    guardedIngestRef.current(map);
+                };
+                if (window.__mtlxPendingImport) {
+                    const payload = window.__mtlxPendingImport;
+                    window.__mtlxPendingImport = null;
+                    handleImport(payload);
+                }
+                const onLoadDoc = (e) => {
+                    const payload = e.detail;
+                    if (!payload) return;
+                    window.__mtlxPendingImport = null;
+                    handleImport(payload);
+                };
+                window.addEventListener('mtlx-load-document', onLoadDoc);
+                return () => window.removeEventListener('mtlx-load-document', onLoadDoc);
+            }, []);
+
             // Default document: fetched through the normal ingest() path so
             // the session behaves exactly as if the user dropped the file.
             // Skipped silently when offline or when the user was faster.
@@ -2458,6 +2726,7 @@
                         portMode: globalPortsRef.current,
                         onOpenScope: setScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
+                        onPortAdd: (info) => onPortAddRef.current(info),
                     }));
                     setError(null);
                     // Queued after the setFlow above, so it acts on the flow
@@ -2888,32 +3157,41 @@
                 }));
             };
 
-            // Serialize the CURRENT document — edits, connections, layout
-            // positions, everything — and write it out as .mtlx. The stdlib
-            // is attached via setDataLibrary (referenced, not contained), so
-            // the write emits exactly the user's graph. Transient '__pv_*'
-            // preview wrappers exist only inside an in-flight generation;
-            // if one is caught mid-air, retry shortly instead of leaking it
-            // into the file. Prefers a native save-file picker (lets the
-            // user choose where the file goes / overwrite in place) and
-            // falls back to the anchor-download mechanism when the picker
-            // API is unavailable or fails for a reason other than the user
-            // canceling.
-            const doExportMtlx = async (attempt) => {
-                if (!parsed) return false;
-                let xml = null;
+            // Serialize the CURRENT document with a retry against the
+            // transient '__pv_*' preview-tap race (see serializeDocXml):
+            // up to 8 retries, 250ms apart, before giving up. Shared by
+            // Export and the view-only Document XML dialog (item 8) so
+            // both cope with the identical race the same way. Resolves to
+            // { xml, error } — exactly one is set.
+            const resolveDocXml = async (attempt) => {
+                if (!parsed) return { xml: null, error: 'no document' };
                 try {
-                    xml = serializeDocXml(parsed);
+                    return { xml: serializeDocXml(parsed), error: null };
                 } catch (e) {
                     if (e && e.transient) {
                         if ((attempt || 0) < 8) {
                             await new Promise((r) => setTimeout(r, 250));
-                            return doExportMtlx((attempt || 0) + 1);
+                            return resolveDocXml((attempt || 0) + 1);
                         }
-                        setError('Export failed: a preview render is stuck mid-generation — please try again.');
-                    } else {
-                        setError('Export failed: ' + String(e && e.message || e));
+                        return { xml: null, error: 'a preview render is stuck mid-generation — please try again.' };
                     }
+                    return { xml: null, error: String(e && e.message || e) };
+                }
+            };
+
+            // Serialize the CURRENT document — edits, connections, layout
+            // positions, everything — and write it out as .mtlx. The stdlib
+            // is attached via setDataLibrary (referenced, not contained), so
+            // the write emits exactly the user's graph. Prefers a native
+            // save-file picker (lets the user choose where the file goes /
+            // overwrite in place) and falls back to the anchor-download
+            // mechanism when the picker API is unavailable or fails for a
+            // reason other than the user canceling.
+            const doExportMtlx = async () => {
+                if (!parsed) return false;
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) {
+                    setError('Export failed: ' + error);
                     return false;
                 }
                 const base = String(parsed.label || 'document').split('/').pop().replace(/\.mtlx$/i, '');
@@ -2955,15 +3233,70 @@
             // export runs at a time; the retry recursion above stays
             // unguarded so it can keep looping inside that single run.
             const exportBusyRef = React.useRef(false);
-            const exportMtlx = async (attempt) => {
+            const exportMtlx = async () => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportMtlx(attempt);
+                    return await doExportMtlx();
                 } finally {
                     exportBusyRef.current = false;
                 }
             };
+
+            // View-only XML dialog (item 8's "Document" button): same
+            // transient-node handling as Export (resolveDocXml above), but
+            // just opens the popup instead of downloading anything.
+            const openXmlDialog = async () => {
+                if (!parsed) return;
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) {
+                    setError('Could not build the document XML: ' + error);
+                    return;
+                }
+                setXmlDialogXml(xml);
+                setXmlDialogOpen(true);
+            };
+
+            // Validation popup (item 9's "Validate" button): recomputed
+            // fresh every time the dialog opens. The WASM binding's
+            // validate() is boolean-only in this build (see NodePreview's
+            // identical defensive call above — the only other caller), so
+            // a false result is paired with a cheap best-effort scan for
+            // dangling nodename/nodegraph references on top-level nodes
+            // rather than a real diagnostic list. Wrapped in `safe` end to
+            // end so any WASM quirk degrades to the boolean-only view.
+            React.useEffect(() => {
+                if (!validateOpen) return;
+                setValidateResult(null);
+                setValidateResult(safe(() => {
+                    if (!parsed || !parsed.doc || typeof parsed.doc.validate !== 'function') {
+                        return { kind: 'unavailable' };
+                    }
+                    let ok;
+                    try {
+                        ok = parsed.doc.validate();
+                    } catch (e) {
+                        return { kind: 'unavailable' };
+                    }
+                    if (ok) return { kind: 'valid' };
+                    const issues = [];
+                    const nodes = vecToArray(safe(() => parsed.doc.getNodes(), []));
+                    for (const n of nodes) {
+                        const nm = elName(n);
+                        for (const inp of vecToArray(safe(() => n.getInputs(), []))) {
+                            const nn = elAttr(inp, 'nodename');
+                            if (nn && !safe(() => parsed.doc.getNode(nn), null)) {
+                                issues.push(nm + '.' + elName(inp) + ' references missing node "' + nn + '"');
+                            }
+                            const ng = elAttr(inp, 'nodegraph');
+                            if (ng && !safe(() => parsed.doc.getNodeGraph(ng), null)) {
+                                issues.push(nm + '.' + elName(inp) + ' references missing nodegraph "' + ng + '"');
+                            }
+                        }
+                    }
+                    return { kind: 'invalid', issues };
+                }, { kind: 'unavailable' }));
+            }, [validateOpen, parsed]);
 
             // ---- Graph editing: connect / disconnect / delete ------------
             // Same contract as applyParamEdit: every edit is written into
@@ -3429,6 +3762,7 @@
                     portMode: globalPortsRef.current,
                     onOpenScope: setScope,
                     onTogglePorts: (id2) => togglePortsRef.current(id2),
+                    onPortAdd: (info) => onPortAddRef.current(info),
                 });
                 setFlow(rebuilt);
                 focusNode(kind + newName, false);
@@ -3476,6 +3810,9 @@
                 setPreviewSel((prev) => !prev ? prev
                     : ((prev.id === id && prev.scope === scope)
                         || (id.indexOf('g:') === 0 && prev.scope === name)) ? null : prev);
+                setPinnedTarget((prev) => !prev ? prev
+                    : ((prev.id === id && prev.scope === scope)
+                        || (id.indexOf('g:') === 0 && prev.scope === name)) ? null : prev);
                 setFlow((prev) => {
                     // inputs the deleted node fed fall back to unconnected
                     const fed = {};
@@ -3497,8 +3834,8 @@
                 });
             };
 
-            // What Del / Backspace acts on (kept fresh via the ref the
-            // window key handler reads).
+            // What Delete acts on (kept fresh via the ref the window key
+            // handler reads).
             deleteSelectionRef.current = () => {
                 if (selectedEdgeId) {
                     const e = flow.edges.find((e2) => e2.id === selectedEdgeId);
@@ -3515,13 +3852,26 @@
             // scope: written into the real MaterialX document, then patched
             // into the flow IN PLACE at the viewport center — layout and
             // hand-dragged positions survive; Arrange re-lays out.
-            const addNodeFromCatalog = (entry) => {
+            const addNodeFromCatalog = (entry, typeHint) => {
                 setAddOpen(false);
-                if (!parsed) return;
+                if (!parsed) return null;
                 const doc = parsed.doc;
                 const container = scope ? safe(() => doc.getNodeGraph(scope), null) : doc;
-                if (!container) { setError('Cannot add a node: scope "' + scope + '" was not found.'); return; }
-                const def = (entry.defs && entry.defs[0]) || null;
+                if (!container) { setError('Cannot add a node: scope "' + scope + '" was not found.'); return null; }
+                let def = (entry.defs && entry.defs[0]) || null;
+                let pinNodedef = false;
+                if (typeHint) {
+                    // A signature group's `versions` array is built from the
+                    // very same nodeDefInfo objects as entry.defs (see
+                    // groupSignatures/buildNodeCatalog), so versions[0] IS a
+                    // defs[] entry — the default (or first) version of the
+                    // matched signature.
+                    const sig = (entry.signatures || []).find((sg) => sg.type === typeHint);
+                    if (sig && sig.versions && sig.versions[0]) {
+                        def = sig.versions[0];
+                        pinNodedef = true;
+                    }
+                }
                 const type = (def && def.type) || 'color3';
                 let name = entry.category + '1';
                 if (typeof container.createValidChildName === 'function') {
@@ -3531,10 +3881,14 @@
                     while (safe(() => container.getChild(name), null)) name = entry.category + (++i);
                 }
                 const el = safe(() => container.addNode(entry.category, name, type), null);
-                if (!el) { setError('Could not add a "' + entry.category + '" node.'); return; }
-                // When several signatures share this output type, pin the
-                // exact one — otherwise MaterialX could resolve a sibling.
-                if (def && def.ambiguous) {
+                if (!el) { setError('Could not add a "' + entry.category + '" node.'); return null; }
+                if (pinNodedef && def) {
+                    // A type hint was used to disambiguate — lock in that
+                    // exact signature explicitly.
+                    safe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                } else if (def && def.ambiguous) {
+                    // When several signatures share this output type, pin the
+                    // exact one — otherwise MaterialX could resolve a sibling.
                     safe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
                 }
                 // Descriptor → flow node, exactly the shape toFlow builds.
@@ -3553,6 +3907,7 @@
                     outputs: ports.outputs,
                     portMode: mode,
                     onTogglePorts: () => togglePortsRef.current(id),
+                    onPortAdd: (info) => onPortAddRef.current(info),
                 };
                 // Drop it at the center of the current viewport.
                 let pos = { x: 40, y: 40 };
@@ -3580,6 +3935,105 @@
                 }));
                 markDirty();
                 focusNode(id, false); // select it → the preview shows it
+                // Returned so callers that need to auto-wire a connection
+                // right after creation (the port-dot double-click flow) can
+                // find the new node's element/ports without re-querying.
+                return { id, name, el, container, doc, outputs: ports.outputs, inputs: withConn };
+            };
+
+            // Auto-wire the connection implied by a port-dot double-click
+            // (item 4), once the picked node has been created by
+            // addNodeFromCatalog. `pending` is the info captured by
+            // openPortAdd; `created` is addNodeFromCatalog's return value.
+            // Writes the connection attributes exactly the way onConnect
+            // does (ensureTypedInput + nodename/output, output= only when
+            // the source declares several outputs), then applies the same
+            // setDocRev/markDirty/setFlow tail onConnect uses.
+            const wirePendingConnection = (created, pending) => {
+                if (!created || !pending || !parsed) return;
+                const doc = parsed.doc;
+                let point, srcId, srcOutName, targetFlowId, targetInputName;
+                if (pending.dir === 'in') {
+                    // The double-clicked port is an INPUT on an existing
+                    // node (or collapsed nodegraph) — feed it from the new
+                    // node's matching output.
+                    const existingName = pending.nodeId.slice(2);
+                    const existingEl = pending.nodeId.indexOf('g:') === 0
+                        ? safe(() => doc.getNodeGraph(existingName), null)
+                        : safe(() => created.container.getNode(existingName), null);
+                    if (!existingEl) return;
+                    point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
+                    if (!point) return;
+                    clearConnAttrs(point);
+                    const outs = created.outputs || [];
+                    const outMatch = outs.find((o) => o.type === pending.portType) || outs[0];
+                    safe(() => { point.setAttribute('nodename', created.name); return true; }, false);
+                    if (outMatch && outMatch.name && outs.length > 1) {
+                        safe(() => { point.setAttribute('output', outMatch.name); return true; }, false);
+                    }
+                    safe(() => { point.removeAttribute('value'); return true; }, false);
+                    targetFlowId = pending.nodeId;
+                    targetInputName = pending.port;
+                    srcId = created.id;
+                    srcOutName = (outMatch && outMatch.name) || 'out';
+                } else {
+                    // dir === 'out': the double-clicked port is an OUTPUT —
+                    // feed the new node's matching input from it.
+                    const inputs = created.inputs || [];
+                    const inMatch = inputs.find((i) => i.type === pending.portType) || inputs[0];
+                    if (!inMatch) return;
+                    point = ensureTypedInput(doc, created.el, inMatch.name, pending.portType);
+                    if (!point) return;
+                    clearConnAttrs(point);
+                    const srcName = pending.nodeId.slice(2);
+                    if (pending.nodeId.indexOf('i:') === 0) {
+                        // A nodegraph interface input as source is a pin
+                        // reference, not a node — same distinction onConnect
+                        // makes.
+                        safe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
+                    } else {
+                        safe(() => {
+                            point.setAttribute(pending.nodeId.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
+                            return true;
+                        }, false);
+                        // output= only when the source really declares
+                        // several outputs — same guard as onConnect.
+                        const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
+                        const srcOuts = (srcNode && srcNode.data.outputs) || [];
+                        if (pending.port && srcOuts.length > 1) {
+                            safe(() => { point.setAttribute('output', pending.port); return true; }, false);
+                        }
+                    }
+                    safe(() => { point.removeAttribute('value'); return true; }, false);
+                    targetFlowId = created.id;
+                    targetInputName = inMatch.name;
+                    srcId = pending.nodeId;
+                    srcOutName = pending.port;
+                }
+                setDocRev((r) => r + 1);
+                markDirty();
+                setFlow((prev) => ({
+                    edges: prev.edges
+                        .filter((e) => !(e.target === targetFlowId && e.targetHandle === 'in:' + targetInputName))
+                        .concat([toRfEdge({
+                            id: srcId + '.' + srcOutName + '\u2192' + targetFlowId + '.' + targetInputName,
+                            source: srcId, sourceHandle: 'out:' + srcOutName,
+                            target: targetFlowId, targetHandle: 'in:' + targetInputName,
+                            type: pending.portType,
+                        })]),
+                    nodes: prev.nodes.map((n) => n.id === targetFlowId ? patchInputConn(n, targetInputName, true) : n),
+                }));
+            };
+
+            // AddNodeSearch's onPick — creates the node, then (when the
+            // search was opened from a port-dot double-click) auto-wires the
+            // connection implied by that port and clears the pending state.
+            const handleCatalogPick = (entry, typeHint) => {
+                const created = addNodeFromCatalog(entry, typeHint);
+                const pending = pendingConnRef.current;
+                pendingConnRef.current = null;
+                setPortAddFilter(null);
+                if (created && pending) wirePendingConnection(created, pending);
             };
 
             // Add an interface input or output (picked in the Tab palette's
@@ -3675,6 +4129,16 @@
                 const idSet = new Set(ids);
                 const container = scopeContainer();
                 if (!container) return;
+                // Prefer React Flow's live rendered position over the
+                // document's xpos/ypos attributes: nodes that were
+                // auto-laid-out (e.g. the initial default graph, or freshly
+                // imported nodes never dragged) have no xpos/ypos at all, so
+                // storedPos() would return null for every one of them and
+                // they'd all collapse onto { x: 0, y: 0 } on paste.
+                const flowPosById = {};
+                flow.nodes.forEach((n) => {
+                    if (n.selected && n.id.indexOf('n:') === 0) flowPosById[n.id] = n.position;
+                });
                 const entries = [];
                 for (const id of ids) {
                     const name = id.slice(2);
@@ -3700,7 +4164,7 @@
                                 output: internal ? (i.output || '') : '',
                             };
                         });
-                    const pos = storedPos(el) || { x: 0, y: 0 };
+                    const pos = flowPosById[id] || storedPos(el) || { x: 0, y: 0 };
                     entries.push({
                         name, category: elCat(el), type: elType(el),
                         nodedef: elAttr(el, 'nodedef') || '',
@@ -3797,6 +4261,7 @@
                     portMode: globalPortsRef.current,
                     onOpenScope: setScope,
                     onTogglePorts: (id) => togglePortsRef.current(id),
+                    onPortAdd: (info) => onPortAddRef.current(info),
                 });
                 const pastedIds = new Set(created.map((c) => 'n:' + c.newName));
                 setFlow({
@@ -3994,6 +4459,7 @@
                         portMode: globalPortsRef.current,
                         onOpenScope: setScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
+                        onPortAdd: (info) => onPortAddRef.current(info),
                     });
                     const newId = 'g:' + gName;
                     setFlow({
@@ -4218,6 +4684,9 @@
             // so the target object keeps its identity across content-equal
             // transitions (deselecting must not re-render the same node).
             const previewTargetKey = React.useMemo(() => {
+                // A pin (item 10) wins over everything else \u2014 the panel
+                // stays frozen on it no matter what gets selected next.
+                if (pinnedTarget) return pinnedTarget.scope + '\u241F' + pinnedTarget.id;
                 if (selectedId && (selectedId.indexOf('n:') === 0 || selectedId.indexOf('g:') === 0
                         || selectedId.indexOf('i:') === 0 || selectedId.indexOf('o:') === 0)) {
                     return scope + '\u241F' + selectedId;
@@ -4225,7 +4694,7 @@
                 if (previewSel) return previewSel.scope + '\u241F' + previewSel.id;
                 if (defaultPreviewId) return scope + '\u241F' + defaultPreviewId;
                 return '';
-            }, [selectedId, scope, previewSel, defaultPreviewId]);
+            }, [pinnedTarget, selectedId, scope, previewSel, defaultPreviewId]);
             const previewTarget = React.useMemo(() => {
                 if (!previewTargetKey) return null;
                 const i = previewTargetKey.indexOf('\u241F');
@@ -4599,6 +5068,26 @@
                                 <span>Auto Layout</span>
                             </button>
                         )}
+                        {parsed && (
+                            <button
+                                onClick={openXmlDialog}
+                                title="View the current document's raw MaterialX XML"
+                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            >
+                                <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                <span>Document</span>
+                            </button>
+                        )}
+                        {parsed && (
+                            <button
+                                onClick={() => setValidateOpen(true)}
+                                title="Run the MaterialX library's document validation"
+                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            >
+                                <MtlxIcon name="copy-check" className="w-3.5 h-3.5" />
+                                <span>Validate</span>
+                            </button>
+                        )}
                         <button
                             onClick={() => toggleFullscreen(panelRef.current)}
                             title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
@@ -4619,6 +5108,16 @@
 
                     {/* Keybinds reference popup. */}
                     {helpOpen && <KeybindsHelp onClose={() => setHelpOpen(false)} active={active} />}
+
+                    {/* View-only XML dialog ("Document" button, item 8). */}
+                    {xmlDialogOpen && (
+                        <XmlDialog xml={xmlDialogXml} open={xmlDialogOpen} onClose={() => setXmlDialogOpen(false)} />
+                    )}
+
+                    {/* Validation popup ("Validate" button, item 9). */}
+                    {validateOpen && (
+                        <ValidateDialog result={validateResult} open={validateOpen} onClose={() => setValidateOpen(false)} />
+                    )}
 
                     {/* In-tab docs viewer, opened from the parameter panel's
                         "?" button. Mounted whenever a node's docs have ever
@@ -4648,7 +5147,22 @@
                                 render pipeline as the docs page. Square, and
                                 framed to fill. Re-renders on every committed
                                 parameter edit and on every target change. */}
-                            <NodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active} />
+                            <NodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
+                                overlay={
+                                    <button
+                                        onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}
+                                        title={pinnedTarget
+                                            ? 'Preview is pinned to this node — click to unpin and follow the selection again'
+                                            : 'Pin the preview to this node — it stays put regardless of what you select next'}
+                                        className={'absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
+                                            + (pinnedTarget
+                                                ? 'bg-blue-600/80 border-blue-400 text-white hover:bg-blue-500/80'
+                                                : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                    >
+                                        <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />
+                                    </button>
+                                }
+                            />
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
                                 {/* Top Row: Color dot, Name, and Collapse button */}
                                 <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
@@ -4875,10 +5389,12 @@
                     {addOpen && (
                         <AddNodeSearch
                             catalog={catalog}
-                            ifaceMode={scope !== ''}
+                            ifaceMode={scope !== '' && !portAddFilter}
                             onAddInterface={addInterfacePin}
-                            onPick={addNodeFromCatalog}
-                            onClose={() => setAddOpen(false)}
+                            onPick={handleCatalogPick}
+                            filterMode={portAddFilter && portAddFilter.mode}
+                            filterType={portAddFilter && portAddFilter.type}
+                            onClose={() => { setAddOpen(false); pendingConnRef.current = null; setPortAddFilter(null); }}
                         />
                     )}
 

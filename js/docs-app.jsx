@@ -914,6 +914,14 @@
                                             active={active}
                                         />
 
+                                        {/* Implementation-target matrix: which shading
+                                            languages the standard library ships an
+                                            implementation for, per signature. */}
+                                        <ImplTargetMatrix
+                                            nodeName={selectedNode.name}
+                                            signature={selectedGroup ? selectedGroup.key : null}
+                                        />
+
                                         {/* Description: paragraphs before the first table */}
                                         <RichBlocks
                                             text={selectedNode.info.description}

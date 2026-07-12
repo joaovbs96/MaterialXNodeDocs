@@ -171,6 +171,29 @@
                 a.href = url;
                 a.click();
             };
+            // Hand the currently loaded document off to the node graph editor:
+            // serialize it, stash the loose (non-.mtlx) files alongside it, and
+            // let the shell's hash route swap views. The graph editor listens
+            // for 'mtlx-load-document' (see js/graph-app.jsx).
+            const sendToEditor = () => {
+                const loaded = loadedRef.current;
+                if (!loaded || !loaded.doc) return;
+                let xml;
+                try {
+                    xml = loaded.mx.writeToXmlString(loaded.doc);
+                } catch (e) {
+                    console.warn('Send to Editor: failed to serialize the document', e);
+                    return;
+                }
+                const files = {};
+                Object.keys(fileMapRef.current || {}).forEach((k) => {
+                    if (!/\.mtlx$/i.test(k)) files[k] = fileMapRef.current[k];
+                });
+                const name = (chosenMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
+                window.__mtlxPendingImport = { xml, name, files };
+                window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
+                window.location.hash = '#!graph';
+            };
 
             const ingest = async (map) => {
                 setError(null);
@@ -584,6 +607,13 @@
                                             className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                         >
                                             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                            onClick={sendToEditor}
+                                            title="Open this material in the node graph editor"
+                                            className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                        >
+                                            <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                         </button>
                                         <button
                                             onClick={onToggleFullscreen}

@@ -319,6 +319,19 @@
                 setTimeout(() => URL.revokeObjectURL(a.href), 5000);
             };
 
+            // Hand this preview graph off to the node graph editor, the same
+            // way the material viewer's "Send to Editor" button does — see
+            // js/viewer-app.jsx. No loose files: the preview graph never
+            // references external textures.
+            const sendToEditor = () => {
+                const built = buildExportXml();
+                if (!built) return;
+                const name = (built.meta && built.meta.nodeName) || 'node';
+                window.__mtlxPendingImport = { xml: built.xml, name, files: null };
+                window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
+                window.location.hash = '#!graph';
+            };
+
             React.useEffect(() => {
                 let viewHandle = null;
                 let mounted = true;
@@ -1311,6 +1324,14 @@
                                         className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                                     >
                                         Export .mtlx
+                                    </button>
+                                    <button
+                                        onClick={sendToEditor}
+                                        title="Open this node in the node graph editor"
+                                        className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors inline-flex items-center gap-1"
+                                    >
+                                        <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                        Send to Editor
                                     </button>
                                     <button
                                         onClick={onResetDefaults}
