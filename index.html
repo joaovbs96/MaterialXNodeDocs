@@ -22,6 +22,24 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- Embed mode: iframed by the graph editor as
+         index.html?embed=1#/<lib>/<group>/<name> to show a focused view of
+         a single node's documentation (no header/footer/sidebar/chrome).
+         Applied synchronously (before first paint) so there's no flash of
+         the full chrome. -->
+    <script>
+        (function () {
+            if (new URLSearchParams(location.search).get('embed') === '1') {
+                document.documentElement.classList.add('embed-mode');
+                window.__MTLX_EMBED = true;
+            }
+        })();
+    </script>
+    <style>
+        .embed-mode #site-header, .embed-mode #site-footer { display: none; }
+        .embed-mode #page-wrap { padding: 0.5rem; }
+    </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col md:h-screen">
     <!-- Shared site shell: injected synchronously (plain JS, no Babel/React)
@@ -35,7 +53,7 @@
          screens; the node-list/detail panels scroll internally. Below md
          (mobile) — and when a desktop window is too short for the layout's
          minimums — the page falls back to scrolling as before. -->
-    <div class="p-2 sm:p-6 flex-1 md:min-h-0">
+    <div id="page-wrap" class="p-2 sm:p-6 flex-1 md:min-h-0">
         <div id="root" class="max-w-[1600px] mx-auto md:h-full"></div>
     </div>
 
@@ -56,6 +74,10 @@
 
     <script type="text/babel">
         function App() {
+            // Embed mode: focused single-node view, iframed by the graph
+            // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
+            // set synchronously in <head> before first paint.
+            const EMBED = !!window.__MTLX_EMBED;
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown —
@@ -187,7 +209,11 @@
                 if (!selectedNode) return;
                 const h = selToHash(selectedNode);
                 if (window.location.hash !== h) {
-                    try { history.pushState(null, '', h); } catch (e) { window.location.hash = h; }
+                    if (EMBED) {
+                        try { history.replaceState(null, '', h); } catch (e) { window.location.replace(h); }
+                    } else {
+                        try { history.pushState(null, '', h); } catch (e) { window.location.hash = h; }
+                    }
                 }
             }, [selectedNode]);
             React.useEffect(() => {
@@ -210,7 +236,10 @@
 
             const copyPermalink = () => {
                 const loc = window.location;
-                const url = loc.origin + loc.pathname + loc.search + selToHash(selectedNode);
+                // Never carry over the query string (e.g. ?embed=1): the
+                // copied link should always open the full page, never the
+                // focused embed view.
+                const url = loc.origin + loc.pathname + selToHash(selectedNode);
                 const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1500); };
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(url).then(done, () => {
@@ -255,7 +284,7 @@
                             console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
                             doc.importLibrary(stdlib);
                         }
-                        const defs = vecToArray(doc.getMatchingNodeDefs(name));
+                        const defs = dedupeDefsBySignature(vecToArray(doc.getMatchingNodeDefs(name)));
                         const tables = buildAutoTablesFromDefs(defs);
                         if (!alive) return;
                         setAutoDoc({ name, status: tables.length ? 'ready' : 'unavailable', tables });
@@ -263,6 +292,42 @@
                     .catch(() => { if (alive) setAutoDoc({ name, status: 'unavailable', tables: [] }); });
                 return () => { alive = false; };
             }, [selectedNode]);
+
+            // VERSION metadata (standard_surface 1.0.1 default / 1.0.0, …),
+            // read from the live nodedefs for EVERY selection — documented
+            // or not. This is deliberately separate from the autoDoc effect
+            // above: that one only runs for undocumented nodes (its tables
+            // come from the spec instead), so a documented node's version
+            // data would otherwise never be read at all. Grouped the same
+            // way node-graph.html's groupSignatures does (see
+            // groupDefVersions), one entry per type signature.
+            const [nodeVersionGroups, setNodeVersionGroups] = React.useState(null);
+            React.useEffect(() => {
+                if (!selectedNode) { setNodeVersionGroups(null); return undefined; }
+                const name = selectedNode.name;
+                let alive = true;
+                getMxEnv()
+                    .then(({ mx, stdlib }) => {
+                        if (!alive) return;
+                        const doc = mx.createDocument();
+                        if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
+                        else doc.importLibrary(stdlib);
+                        // Intentionally UNFILTERED across libraries: ambiguous categories
+                        // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) should list every
+                        // signature in the dropdown; the previewer itself notices the
+                        // un-compilable closure ones instead of hiding them here.
+                        const groups = groupDefVersions(vecToArray(doc.getMatchingNodeDefs(name)));
+                        if (alive) setNodeVersionGroups(groups);
+                    })
+                    .catch(() => { if (alive) setNodeVersionGroups(null); });
+                return () => { alive = false; };
+            }, [selectedNode]);
+            // Which VERSION is selected within the currently resolved
+            // signature group — reset whenever the selection or signature
+            // changes (a different signature may resolve to a different
+            // group with its own default).
+            const [versionIndex, setVersionIndex] = React.useState(0);
+            React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
 
             // Build the node database LIVE: fetch the spec markdown for the
             // pinned tag straight from GitHub and parse it in-browser
@@ -315,6 +380,7 @@
             // machines stay preview-free. localStorage is best-effort
             // (private mode etc. throws) — default is ON.
             const [showPreviews, setShowPreviews] = React.useState(() => {
+                if (EMBED) return true;
                 try { return localStorage.getItem('mtlx_show_previews') !== '0'; } catch (e) { return true; }
             });
             const togglePreviews = () => setShowPreviews((v) => {
@@ -322,6 +388,20 @@
                 try { localStorage.setItem('mtlx_show_previews', nv ? '1' : '0'); } catch (e) { /* best-effort */ }
                 return nv;
             });
+            // Embed mode: the graph editor posts visibility when its docs dialog
+            // hides/shows this iframe — pause the 3D preview loop while hidden
+            // (display:none does not stop the iframe's rAF). Deliberately NOT
+            // togglePreviews: that would persist to localStorage and pollute the
+            // full page's preference.
+            React.useEffect(() => {
+                if (!EMBED) return undefined;
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (d && d.type === 'mtlx-embed-visible') setShowPreviews(!!d.visible);
+                };
+                window.addEventListener('message', onMsg);
+                return () => window.removeEventListener('message', onMsg);
+            }, []);
 
             const stats = React.useMemo(() => {
                 if (!jsonData) return null;
@@ -425,13 +505,56 @@
                 && autoDoc.status === 'loading';
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : []);
-            // Signature selection: with several signatures, show ONLY the
-            // chosen one (dropdown above the table) instead of stacking all.
-            const sigCount = effectiveTables.length;
+            // Signature selection: the dropdown is now driven by the live
+            // nodedef VERSION GROUPS (nodeVersionGroups), not by counting
+            // markdown tables — a node like fractal3d has ELEVEN nodedefs
+            // (several sharing an output type but differing by the
+            // `amplitude` input type) collapsed into ONE markdown table, so
+            // effectiveTables.length alone could never surface them.
+            const sigGroups = nodeVersionGroups || [];
+            const sigCount = sigGroups.length;
             const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
-            const displayTables = sigCount > 1 ? [effectiveTables[sig]] : effectiveTables;
+            const selectedGroup = sigGroups[sig] || null;
+            // Documented nodes: when the spec write-up authors SEVERAL port
+            // tables under one heading (e.g. `multiply`: scalar/vector table
+            // + matrixNN table) and there's more than one live signature to
+            // choose from, show only the ONE table matching the selected
+            // signature's output type — otherwise every table renders
+            // stacked, which reads as duplicated content. Single-table
+            // documented nodes are unaffected. Undocumented nodes show the
+            // ONE auto-generated table matching the selected group.
+            // groupDefVersions and dedupeDefsBySignature walk the SAME
+            // getMatchingNodeDefs(name) list in the same order with the same
+            // signature key (nodeDefSigKey), so index `sig` lines up across
+            // sigGroups and autoDoc.tables — see buildAutoTablesFromDefs.
+            const displayTables = portTables.length > 0
+                ? (portTables.length > 1 && sigCount > 1 && selectedGroup
+                    ? [pickTableForType(portTables, selectedGroup.type) || portTables[0]]
+                    : portTables)
+                : (sigCount > 1 ? [autoDoc && autoDoc.tables && autoDoc.tables[sig]].filter(Boolean)
+                    : effectiveTables);
             // Concrete type this signature previews as (null → auto-pick).
-            const previewType = sigCount > 0 ? signaturePreviewType(displayTables[0]) : null;
+            // While nodeVersionGroups is still loading (async), fall back to
+            // the markdown-table-derived heuristic so the preview isn't
+            // blocked on it.
+            const previewType = selectedGroup ? selectedGroup.type
+                : (effectiveTables.length > 0 ? signaturePreviewType(effectiveTables[0]) : null);
+            // The VERSION picker (same/multiple defaults within a signature)
+            // now reads directly off the selected group instead of
+            // re-matching by output type.
+            const showVersionPicker = !!selectedGroup && selectedGroup.versions.length > 1;
+            const versionIdx = selectedGroup
+                ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
+            const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
+            // Markdown tables carry only ONE signature's worth of port rows,
+            // so once several signatures exist, the selected version's live
+            // type/default data must be projected onto them — otherwise a
+            // dropdown pick that doesn't match the spec's authored signature
+            // would show stale types/defaults.
+            const typesOverride = (sigCount > 1 && selectedVersion && portTables.length > 0)
+                ? { ...selectedVersion.inputTypes, ...selectedVersion.outputTypes } : null;
+            const defaultsOverride = selectedVersion && (sigCount > 1 || !selectedVersion.isDefaultVersion)
+                ? selectedVersion.defaults : null;
             // Column set for the displayed table(s).
             const columns = displayTables.length > 0 ? unionColumns(displayTables) : [];
             // Footnote references: map key -> {n, url, text}, numbered by
@@ -442,8 +565,9 @@
 
             return (
                 <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
-                    {/* Page intro: the site title/nav/links live in the shared
-                        header (js/site-header.js); only page-specific bits stay. */}
+                    {!EMBED && (
+                    /* Page intro: the site title/nav/links live in the shared
+                       header (js/site-header.js); only page-specific bits stay. */
                     <div className="flex items-center justify-between gap-4 flex-wrap">
                         <p className="text-gray-400 text-sm sm:text-base">
                             Documentation browser and live previews for the MaterialX node libraries.
@@ -460,6 +584,7 @@
                             3D previews: {showPreviews ? 'On' : 'Off'}
                         </button>
                     </div>
+                    )}
 
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
@@ -474,7 +599,7 @@
                         </div>
                     )}
 
-                    {jsonData && stats && (
+                    {!EMBED && jsonData && stats && (
                         <div className="flex items-center gap-3 flex-wrap text-sm">
                             <span className="bg-gray-800 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg">
                                 <span className="font-semibold text-white">{stats.total}</span> nodes total
@@ -523,7 +648,7 @@
                         filtered / backdrop-filtered ancestor becomes the
                         containing block for position:fixed), which offsets
                         the panel and dims only part of the screen. */}
-                    {showHelp && ReactDOM.createPortal(
+                    {!EMBED && showHelp && ReactDOM.createPortal(
                         <div
                             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
                             onClick={() => setShowHelp(false)}
@@ -602,9 +727,12 @@
                            internally. The 20rem floor keeps the panels usable
                            on very short desktop windows by letting the page
                            scroll again instead of squishing them further. */
-                        <div className="grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]">
+                        <div className={EMBED
+                            ? 'grid grid-cols-1 gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'
+                            : 'grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'}>
 
                             {/* Left Sidebar: Hierarchical Tree Menu */}
+                            {!EMBED && (
                             <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar">
                                 {/* Sticky header: title, expand/collapse, search stay
                                     visible while the tree scrolls underneath. The scroll
@@ -725,9 +853,12 @@
                                 </div>
                                 </div>
                             </div>
+                            )}
 
                             {/* Right Content Area: Node Details */}
-                            <div className="md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar">
+                            <div className={EMBED
+                                ? 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                : 'md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'}>
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
@@ -791,6 +922,7 @@
                                             library={selectedNode.lib}
                                             nodegroup={selectedNode.group}
                                             preferredType={previewType}
+                                            preferredDef={selectedVersion ? selectedVersion.name : null}
                                             enabled={showPreviews}
                                             onEnable={togglePreviews}
                                         />
@@ -831,10 +963,10 @@
                                                             title="This node has several signatures — pick which one to document and preview"
                                                             className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs sm:text-sm font-mono text-gray-200 max-w-full"
                                                         >
-                                                            {effectiveTables.map((t, i) => {
-                                                                const l = signatureLabel(t);
+                                                            {sigGroups.map((g, i) => {
+                                                                const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
                                                                 return (
-                                                                    <option key={i} value={i}>
+                                                                    <option key={g.key || i} value={i}>
                                                                         {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
                                                                     </option>
                                                                 );
@@ -842,8 +974,29 @@
                                                         </select>
                                                     </div>
                                                 )}
+                                                {showVersionPicker && (
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
+                                                            Version
+                                                        </label>
+                                                        <select
+                                                            id="version-select"
+                                                            value={versionIdx}
+                                                            onChange={(e) => setVersionIndex(Number(e.target.value))}
+                                                            title="This node has several nodedef versions — same ports, different defaults"
+                                                            className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs sm:text-sm font-mono text-gray-200 max-w-full"
+                                                        >
+                                                            {selectedGroup.versions.map((v, i) => (
+                                                                <option key={v.name || i} value={i}>
+                                                                    {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                )}
                                                 {displayTables.map((table, i) => (
-                                                    <PortTable key={sigCount > 1 ? sig : i} table={table} columns={columns} refs={refs} />
+                                                    <PortTable key={sigCount > 1 ? (sig + ':' + i) : i} table={table} columns={columns} refs={refs}
+                                                        defaultsOverride={defaultsOverride} typesOverride={typesOverride} />
                                                 ))}
                                             </div>
                                         ) : autoLoading ? (
@@ -895,8 +1048,9 @@
                         </div>
                     )}
 
-                    {/* Disclaimer: previews are experimental; the spec MD files
-                        in the MaterialX repository are the source of truth. */}
+                    {!EMBED && (
+                    /* Disclaimer: previews are experimental; the spec MD files
+                       in the MaterialX repository are the source of truth. */
                     <div className="bg-amber-950/40 border border-amber-700/60 text-amber-300/90 text-sm rounded-lg px-4 py-3">
                         <span className="font-semibold text-amber-300">{'\u26A0'} Experimental Preview:</span>{' '}
                         The 3D node previews and parameter values shown here are under development and may not
@@ -909,6 +1063,7 @@
                             project repository.
                         </a>{' '}
                     </div>
+                    )}
                 </div>
             );
         }

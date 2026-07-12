@@ -34,6 +34,7 @@
     var NAV = [
         { id: 'docs', label: 'Node Library & Documentation', href: 'index.html', match: /(^|\/)(index\.html)?$/ },
         { id: 'viewer', label: 'Material Viewer', href: 'material-viewer.html', match: /material-viewer\.html$/ },
+        { id: 'graph', label: 'Node Graph Editor', href: 'node-graph.html', match: /node-graph\.html$/ },
     ];
 
     var path = window.location.pathname || '';

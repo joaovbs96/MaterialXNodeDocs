@@ -3,7 +3,12 @@
 // the shared createMtlxRenderView pipeline (mtlx-engine.js), and owns
 // the dynamic parameter panel + doc-based .mtlx export. Load AFTER
 // mtlx-engine.js and doc-ui.jsx.
-        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, enabled, onEnable }) => {
+        // index.html's docs popup iframe sets window.__MTLX_EMBED synchronously
+        // before this file loads; in that ~1000px-wide dialog the viewport and
+        // parameter panel go side-by-side starting at the md: breakpoint
+        // instead of lg:, since the iframe never reaches lg: width.
+        const EMBED = !!window.__MTLX_EMBED;
+        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, enabled, onEnable }) => {
             // Node categories are NOT unique across libraries ('add' exists in
             // stdlib [math] AND pbrlib [pbr: BSDF/EDF/VDF]) — nodeName alone
             // cannot identify the selected node. nodeKey does, and drives
@@ -14,7 +19,10 @@
             // preferredType (the docs page's signature selector) changes which
             // nodedef is previewed — uniforms and defaults differ per
             // signature, so it's part of the identity everything re-keys on.
-            const identKey = nodeKey + '::' + (preferredType || 'auto');
+            // preferredDef (a specific nodedef NAME, e.g. to disambiguate
+            // float-amplitude overloads that share an output type) is more
+            // precise than preferredType and wins when both key the identity.
+            const identKey = nodeKey + '::' + (preferredDef || preferredType || 'auto');
             const canvasRef = React.useRef(null);
             // The live three.js uniforms object — mutated directly by the
             // parameter UI so edits render on the next frame with no shader
@@ -210,10 +218,14 @@
             // standalone .mtlx document. Values are kept in MaterialX space
             // already (colors linear), so this is a direct dump. Shader-kind
             // nodes get a surfacematerial wrapper for drop-in use.
-            const onExportMtlx = () => {
+            // Update the exportable document with the CURRENT panel values
+            // and serialize it for the "Export" (download) action.
+            // Returns { xml, meta } or null on failure (setError already
+            // called).
+            const buildExportXml = () => {
                 const meta = exportMetaRef.current;
                 const ed = exportDocRef.current;
-                if (!meta || !ed || !ed.instance || !ed.doc) return;
+                if (!meta || !ed || !ed.instance || !ed.doc) return null;
                 const num = (n) => String(parseFloat(Number(n).toFixed(6)));
                 const fmt = (p, v) => {
                     if (p.type === 'boolean') return v ? 'true' : 'false';
@@ -277,19 +289,25 @@
                 } catch (e) {
                     console.error('writeToXmlString failed:', mxErr(ed.mx, e));
                     setError('Export failed: ' + mxErr(ed.mx, e));
-                    return;
+                    return null;
                 }
                 if (xml.indexOf('<nodedef') !== -1) {
                     // Should be impossible with setDataLibrary; surface loudly
                     // rather than shipping a corrupted file.
                     console.error('export unexpectedly contains library definitions — is setDataLibrary bound in this build?');
                     setError('Export failed: document unexpectedly contains the standard library.');
-                    return;
+                    return null;
                 }
-                const blob = new Blob([xml], { type: 'application/xml' });
+                return { xml, meta };
+            };
+
+            const onExportMtlx = () => {
+                const built = buildExportXml();
+                if (!built) return;
+                const blob = new Blob([built.xml], { type: 'application/xml' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
-                a.download = meta.nodeName + '.mtlx';
+                a.download = built.meta.nodeName + '.mtlx';
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 5000);
             };
@@ -415,8 +433,54 @@
                         // node + target shader + material, wired automatically.
                         const rk = translationDef
                             ? { kind: 'translation', outType: 'multioutput', outputName: null, multiOutput: true, types: [] }
-                            : resolveNodeKind(doc, nodeName, defMatchesIdentity, preferredType || null);
+                            : resolveNodeKind(doc, nodeName, defMatchesIdentity, preferredType || null, preferredDef || null);
                         const { kind, outType, outputName, multiOutput, types } = rk;
+                        // Closure-modifier nodes (BSDF/EDF/VDF output that ALSO
+                        // takes a BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix,
+                        // ND_multiply_bsdfC) fail WebGL shader compilation in the
+                        // WASM shadergen/stdlib build ('closureData undeclared', no
+                        // matching overload) — a mismatch we cannot fix here. Show
+                        // the notice instead of attempting to compile. Elemental
+                        // BSDFs (closure output, NO closure inputs, e.g.
+                        // oren_nayar_diffuse_bsdf) and `surface` (closure inputs,
+                        // surfaceshader output) are unaffected and must keep working.
+                        // The gate keys off the SELECTED DEF's own types, not
+                        // rk.outType — resolveNodeKind's bsdf/surface returns spread
+                        // `{type: ...}` and have no outType field, so an outType-based
+                        // outer condition would never fire for kind 'bsdf'.
+                        try {
+                            const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
+                            // Search the pinned preferredDef against the UNFILTERED def
+                            // list: filterDefs' identity filter can exclude the selected
+                            // cross-library def, which would silently disable this gate.
+                            const allMatchingDefs = vecToArray(doc.getMatchingNodeDefs(nodeName));
+                            let closureDef = preferredDef
+                                ? allMatchingDefs.find((d) => d.getName && d.getName() === preferredDef)
+                                : null;
+                            if (!closureDef && outType) {
+                                closureDef = filterDefs(allMatchingDefs).find((d) => d.getType && d.getType() === outType) || null;
+                            }
+                            // No trustworthy signature info -> nothing to gate on (elemental
+                            // defaults must not be blocked).
+                            if (closureDef) {
+                                const defOutTypes = [closureDef.getType && closureDef.getType()]
+                                    .concat(vecToArray(closureDef.getActiveOutputs ? closureDef.getActiveOutputs() : null)
+                                        .map((o) => { try { return o.getType(); } catch (e) { return null; } }));
+                                const closureOut = defOutTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
+                                if (closureOut) {
+                                    const closureInTypes = vecToArray(closureDef.getActiveInputs ? closureDef.getActiveInputs() : null)
+                                        .map((i) => { try { return i.getType(); } catch (e) { return null; } });
+                                    if (closureInTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1)) {
+                                        const eG = new Error(`No preview for "${nodeName}" — closure-modifier nodes (BSDF/EDF/VDF in and out) can't be compiled by the WebGL shader generator.`);
+                                        eG.isNotice = true;
+                                        throw eG;
+                                    }
+                                }
+                            }
+                        } catch (gateErr) {
+                            if (gateErr && gateErr.isNotice) throw gateErr;
+                            // Binding/inspection error — fall through to normal behavior.
+                        }
                         // Element type for the .mtlx export: color-kind nodes use
                         // their resolved output type ('multioutput' when several),
                         // shader/bsdf kinds use the nodedef's declared type.
@@ -618,12 +682,14 @@
 
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
+                            if (preferredDef) { try { renderable.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(renderable);
                             previewInstance = renderable;
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'bsdf') {
                             previewInstance = doc.addNode(nodeName, 'preview_bsdf', 'BSDF');
+                            if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
@@ -638,6 +704,7 @@
                             // (verified against real MaterialX: all four stdlib
                             // translation nodes map fully and generate).
                             previewInstance = doc.addNode(nodeName, 'preview_node', 'multioutput');
+                            if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             const targetCat = nodeName.split('_to_')[1];
@@ -661,6 +728,7 @@
                             // 'multioutput'; the tapped output is selected via
                             // the downstream input's `output` attribute.
                             previewInstance = doc.addNode(nodeName, 'preview_node', multiOutput ? 'multioutput' : outType);
+                            if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             // Bridge the tapped output into a color3 emission
@@ -944,6 +1012,15 @@
                             : (kind === 'bsdf' ? 'BSDF' : 'surfaceshader');
                         const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
                         defsAll.sort((a, b) => {
+                            // An explicit preferredDef (the docs page's exact
+                            // nodedef pick, e.g. to disambiguate float-amplitude
+                            // overloads sharing an output type) wins outright
+                            // over the output-type match below.
+                            if (preferredDef) {
+                                const ad = (a.getName && a.getName() === preferredDef) ? 0 : 1;
+                                const bd = (b.getName && b.getName() === preferredDef) ? 0 : 1;
+                                if (ad !== bd) return ad - bd;
+                            }
                             const am = (a.getType && a.getType() === preferType) ? 0 : 1;
                             const bm = (b.getType && b.getType() === preferType) ? 0 : 1;
                             return am - bm;
@@ -1258,10 +1335,10 @@
                         {error}
                     </div>
                 )}
-                <div className={'flex flex-col lg:flex-row gap-4' + (suppressed ? ' hidden' : '')}>
+                <div className={(EMBED ? 'flex flex-col md:flex-row gap-4' : 'flex flex-col lg:flex-row gap-4') + (suppressed ? ' hidden' : '')}>
                     <div
                         ref={viewportRef}
-                        className="relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"
+                        className={EMBED ? "relative w-full md:flex-1 md:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"}
                         style={isFullscreen ? { height: '100%' } : undefined}
                     >
                         {loading && (
@@ -1327,7 +1404,7 @@
                         <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
                     </div>
                     {params.length > 0 && (
-                        <div className="w-full lg:w-80 lg:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-80 lg:max-h-none">
+                        <div className={EMBED ? "w-full md:w-80 md:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 md:h-80 md:max-h-none" : "w-full lg:w-80 lg:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-80 lg:max-h-none"}>
                             <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-none">
                                 <span className="text-sm font-semibold text-gray-200">Parameters</span>
                                 <div className="flex items-center gap-1.5">

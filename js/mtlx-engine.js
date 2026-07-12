@@ -612,9 +612,25 @@ const COLOR_VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vect
 // default priority; a non-viewable choice (matrix33, EDF, ...) returns
 // kind:null so the preview shows its honest "isn't a viewable color
 // surface" notice instead of silently previewing something else.
-const resolveNodeKind = (doc, nodeName, defFilter, preferType) => {
+// `preferDefName` (optional): an explicit nodedef NAME. More precise than
+// preferType — needed when several nodedefs share an output type but differ
+// by another input's type (e.g. fractal3d's float-amplitude overloads),
+// which preferType alone cannot disambiguate. When it names a real nodedef,
+// the candidate set is narrowed to just that def before anything else runs.
+// The lookup runs on the UNFILTERED list and, when it hits, overrides
+// defFilter entirely — the caller pins this exact nodedef on the preview
+// instance, so kind resolution must honor the same def or generated code
+// diverges from the instantiated type. Unresolvable names fall through to
+// the defFilter-narrowed behavior, unaffected by preferDefName.
+const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) => {
     let defs = vecToArray(doc.getMatchingNodeDefs(nodeName));
-    if (defFilter) {
+    let named = null;
+    if (preferDefName) {
+        named = defs.find((d) => d.getName && d.getName() === preferDefName) || null;
+    }
+    if (named) {
+        defs = [named];
+    } else if (defFilter) {
         const kept = defs.filter(defFilter);
         if (kept.length) defs = kept;
     }
@@ -923,6 +939,9 @@ const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
     autoRotate = true, envBackground = false, isMounted = () => true, debugKind = '',
+    // Initial camera pull-back. 3.6 is the classic roomy framing; small
+    // square previews pass ~2.55 so the radius-1 shape fills the frame.
+    cameraDistance = 3.6,
 }) => {
     let reqId = null;
     let renderer = null;
@@ -1007,9 +1026,11 @@ const createMtlxRenderView = async ({
 
                 const scene = new THREE.Scene();
                 const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
-                // Was z=2.6 — too tight on a radius-1 shape. Slightly
-                // elevated three-quarter framing with breathing room.
-                camera.position.set(0, 0.5, 3.6);
+                // Slightly elevated three-quarter framing; the elevation
+                // scales with the distance so the viewing angle stays the
+                // same whether the caller wants breathing room (3.6) or a
+                // frame-filling close-up (~2.55 in the square previews).
+                camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
 
                 // Orbit + zoom + auto-rotate. Rotating the CAMERA (not
                 // the mesh) lets manual orbiting, zooming, and the
@@ -1308,13 +1329,24 @@ const watchFullscreen = (cb) => {
 // path markup (the 24x24 placeholder rect is dropped).
 // ------------------------------------------------------------------
 const MTLX_ICON_PATHS = {
-    'file-upload': { filled: true, inner: '<path d="M12 2l.117 .007a1 1 0 0 1 .876 .876l.007 .117v4l.005 .15a2 2 0 0 0 1.838 1.844l.157 .006h4l.117 .007a1 1 0 0 1 .876 .876l.007 .117v9a3 3 0 0 1 -2.824 2.995l-.176 .005h-10a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-14a3 3 0 0 1 2.824 -2.995l.176 -.005zm0 9l-.09 .004l-.058 .007l-.118 .025l-.105 .035l-.113 .054l-.111 .071a1 1 0 0 0 -.112 .097l-2.5 2.5a1 1 0 0 0 0 1.414l.094 .083a1 1 0 0 0 1.32 -.083l.793 -.793v3.586a1 1 0 0 0 2 0v-3.585l.793 .792a1 1 0 0 0 1.414 -1.414l-2.5 -2.5l-.082 -.073l-.104 -.074l-.098 -.052l-.11 -.044l-.112 -.03l-.126 -.017z"/><path d="M19 7h-4l-.001 -4.001z"/>' },
+    'file-upload': { filled: true, inner: '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M2 6c0 -.796 .316 -1.558 .879 -2.121c.563 -.563 1.325 -.879 2.121 -.879h4l.099 .005c.229 .023 .444 .124 .608 .288l2.707 2.707h6.586c.796 0 1.558 .316 2.121 .879c.319 .319 .559 .703 .707 1.121l-14.523 0c-.407 0 -.805 .125 -1.14 .356c-.292 .203 -.525 .48 -.674 .801l-.058 .141l-1.379 3.676c-.194 .517 .068 1.093 .585 1.287c.517 .194 1.094 -.068 1.288 -.585l1.134 -3.027c.146 -.39 .519 -.649 .937 -.649h13.002l.217 .012c.216 .024 .426 .082 .624 .173c.054 .025 .107 .053 .159 .083c.199 .115 .377 .263 .525 .439c.188 .222 .325 .482 .403 .762c.077 .28 .092 .573 .045 .859c-.001 .008 -.003 .016 -.005 .024l-.995 5.21c-.131 .686 -.497 1.304 -1.036 1.749c-.47 .389 -1.046 .624 -1.65 .677l-.261 .012h-14.026c-.796 0 -1.558 -.316 -2.121 -.879c-.563 -.563 -.879 -1.325 -.879 -2.121v-11z" />' },
     'rotate': { filled: false, inner: '<path d="M19.95 11a8 8 0 1 0 -.5 4m.5 5v-5h-5"/>' },
     'environment': { filled: false, inner: '<path d="M15 8h.01"/><path d="M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0l3 3"/>' },
     'environment-off': { filled: false, inner: '<path d="M15 8h.01"/><path d="M7 3h11a3 3 0 0 1 3 3v11m-.856 3.099a2.991 2.991 0 0 1 -2.144 .901h-12a3 3 0 0 1 -3 -3v-12c0 -.845 .349 -1.608 .91 -2.153"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5"/><path d="M16.33 12.338c.574 -.054 1.155 .166 1.67 .662l3 3"/><path d="M3 3l18 18"/>' },
     'camera': { filled: true, inner: '<path d="M15 3a2 2 0 0 1 1.995 1.85l.005 .15a1 1 0 0 0 .883 .993l.117 .007h1a3 3 0 0 1 2.995 2.824l.005 .176v9a3 3 0 0 1 -2.824 2.995l-.176 .005h-14a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-9a3 3 0 0 1 2.824 -2.995l.176 -.005h1a1 1 0 0 0 1 -1a2 2 0 0 1 1.85 -1.995l.15 -.005h6zm-3 7a3 3 0 0 0 -2.985 2.698l-.011 .152l-.004 .15l.004 .15a3 3 0 1 0 2.996 -3.15z"/>' },
     'maximize': { filled: false, inner: '<path d="M4 8v-2a2 2 0 0 1 2 -2h2"/><path d="M4 16v2a2 2 0 0 0 2 2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M16 20h2a2 2 0 0 0 2 -2v-2"/>' },
+    'zoom-in': { filled: false, inner: '<path d="M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M7 10l6 0"/><path d="M10 7l0 6"/><path d="M21 21l-6 -6"/>' },
+    'zoom-out': { filled: false, inner: '<path d="M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M7 10l6 0"/><path d="M21 21l-6 -6"/>' },
+    'zoom-in-area': { filled: false, inner: '<path d="M15 13v4"/><path d="M13 15h4"/><path d="M10 15a5 5 0 1 0 10 0a5 5 0 1 0 -10 0"/><path d="M22 22l-3 -3"/><path d="M6 18h-1a2 2 0 0 1 -2 -2v-1"/><path d="M3 11v-1"/><path d="M3 6v-1a2 2 0 0 1 2 -2h1"/><path d="M10 3h1"/><path d="M15 3h1a2 2 0 0 1 2 2v1"/>' },
+    'code': { filled: false, inner: '<path d="M7 8l-4 4l4 4"/><path d="M17 8l4 4l-4 4"/><path d="M14 4l-4 16"/>' },
+    'share': { filled: false, inner: '<path d="M3 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>' },
+    'reorder': { filled: false, inner: '<path d="M3 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M10 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M17 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M5 11v-3a3 3 0 0 1 3 -3h8a3 3 0 0 1 3 3v3"/><path d="M16.5 8.5l2.5 2.5l2.5 -2.5"/>' },
+    'file-download': { filled: true, inner: '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M16 3a1 1 0 0 1 .707 .293l4 4a1 1 0 0 1 .293 .707v10a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h1v4a1 1 0 0 0 .883 .993l.117 .007h6a1 1 0 0 0 1 -1v-4zm-4 8a2.995 2.995 0 0 0 -2.995 2.898a1 1 0 0 0 -.005 .102a3 3 0 1 0 3 -3m1 -8v3h-4v-3z" />' },
+    'arrow-back-up': { filled: false, inner: '<path d="M9 14l-4 -4l4 -4" /><path d="M5 10h11a4 4 0 1 1 0 8h-1" />' },
+    'arrow-forward-up': { filled: false, inner: '<path d="M15 14l4 -4l-4 -4" /><path d="M19 10h-11a4 4 0 1 0 0 8h1" />' },
+    'file-plus': { filled: false, inner: '<path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" /><path d="M12 11l0 6" /><path d="M9 14l6 0" />' },
 };
+
 // React component (plain createElement — this file stays JSX-free).
 // React is loaded by the pages before any Babel script executes, and
 // the reference is resolved at RENDER time anyway.

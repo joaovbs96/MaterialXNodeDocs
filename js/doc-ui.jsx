@@ -14,7 +14,12 @@
         // Permalinks: a node is addressed by lib/group/name in the URL hash,
         // e.g. #/stdlib/math/add — hash routing needs no server config, so it
         // works as-is on GitHub Pages. These convert between a selection and
-        // the hash both ways.
+        // the hash both ways. A NAME-ONLY hash (#/multiply) is also accepted:
+        // other pages (e.g. the node graph's "?" documentation button) know a
+        // node's category but not its library/group, so it's resolved here by
+        // search — exact name first, then the squashed-key convention the
+        // cross-reference index uses (separators stripped, lowercased), with
+        // 'stdlib' winning ties so ambiguous names resolve deterministically.
         const selToHash = (sel) =>
             sel ? '#/' + [sel.lib, sel.group, sel.name].map(encodeURIComponent).join('/') : '';
         const hashToSel = (data, hash) => {
@@ -22,13 +27,38 @@
             const body = hash.replace(/^#\/?/, '');
             if (!body) return null;
             const parts = body.split('/').map((s) => { try { return decodeURIComponent(s); } catch (e) { return s; } });
-            if (parts.length < 3) return null;
-            const name = parts.slice(2).join('/'); // names shouldn't contain '/', but be safe
-            const [lib, group] = parts;
-            if (data[lib] && data[lib][group] && data[lib][group][name]) {
-                return { lib, group, name, info: data[lib][group][name] };
+
+            // Canonical form: #/lib/group/name (what this page itself writes).
+            if (parts.length >= 3) {
+                const name = parts.slice(2).join('/'); // names shouldn't contain '/', but be safe
+                const [lib, group] = parts;
+                if (data[lib] && data[lib][group] && data[lib][group][name]) {
+                    return { lib, group, name, info: data[lib][group][name] };
+                }
+                return null;
             }
-            return null;
+
+            // Name-only deep link: #/<name> (a 2-segment hash resolves by its
+            // last segment too, tolerating a future #/n/<name> style).
+            const want = parts[parts.length - 1];
+            if (!want) return null;
+            const squash = (s) => String(s).replace(/[-_]/g, '').toLowerCase();
+            const wantKey = squash(want);
+            const libs = Object.keys(data).sort((a, b) =>
+                (a === 'stdlib' ? -1 : b === 'stdlib' ? 1 : a.localeCompare(b)));
+            let fuzzy = null; // first squashed-key match, kept only if no exact match exists anywhere
+            for (const lib of libs) {
+                for (const group of Object.keys(data[lib]).sort()) {
+                    const nodes = data[lib][group];
+                    if (nodes[want]) return { lib, group, name: want, info: nodes[want] };
+                    if (!fuzzy) {
+                        for (const name of Object.keys(nodes)) {
+                            if (squash(name) === wantKey) { fuzzy = { lib, group, name, info: nodes[name] }; break; }
+                        }
+                    }
+                }
+            }
+            return fuzzy;
         };
 
         // Turn a normalized header key back into a display label,
@@ -229,10 +259,138 @@
             return [];
         };
 
+        // A TYPE-SIGNATURE key for a WASM nodedef — the ordered input types
+        // plus the resolved output type, independent of version. Two
+        // nodedefs sharing this key are the SAME signature at different
+        // VERSIONS (standard_surface 1.0.1 / 1.0.0: identical ports, only
+        // defaults differ) — see dedupeDefsBySignature.
+        const nodeDefSigKey = (def) => {
+            const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
+                : (def.getInputs ? def.getInputs() : null));
+            const inTypes = inputs.map((inp) => { try { return inp.getType(); } catch (e) { return ''; } }).join(',');
+            let outType = '';
+            try { outType = def.getType(); } catch (e) { /* none */ }
+            const outs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
+                : (def.getOutputs ? def.getOutputs() : null));
+            if (outs.length) outType = outs.map((o) => { try { return o.getType(); } catch (e) { return ''; } }).join('+');
+            return outType + '|' + inTypes;
+        };
+
+        // Group a category's nodedefs into one entry per TYPE SIGNATURE, each
+        // carrying every VERSION of that signature — the docs-page analog of
+        // node-graph.html's groupSignatures/nodeDefInfo, needed because a
+        // DOCUMENTED node (standard_surface: spec port tables exist) never
+        // runs through dedupeDefsBySignature/buildAutoTablesFromDefs at all
+        // (those only fire for undocumented nodes), so its version data
+        // would otherwise never be read. Returns
+        // [{ key, type, inSummary, ambiguous, versions: [{ name, version,
+        // isDefaultVersion, defaults: {portName: valueString},
+        // inputTypes: {portName: type}, outputTypes: {portName: type} }] }],
+        // versions sorted default-first then by version string descending.
+        // `inSummary` (the default version's input types, deduped and
+        // joined) and `ambiguous` (true when another group shares this
+        // group's output type — e.g. fractal3d's float-amplitude variants)
+        // let a caller disambiguate same-output-type signatures in a
+        // dropdown label.
+        const groupDefVersions = (defs) => {
+            const byKey = {};
+            const order = [];
+            for (const def of defs) {
+                let key = null;
+                try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
+                if (!key) continue;
+                let outType = '';
+                try { outType = def.getType(); } catch (e) { /* none */ }
+                let version = '';
+                try { version = def.getVersionString() || ''; } catch (e) { /* none */ }
+                let isDefaultVersion = false;
+                try { isDefaultVersion = !!(def.getDefaultVersion && def.getDefaultVersion()); } catch (e) { /* none */ }
+                const defaults = {};
+                const inputTypes = {};
+                const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
+                    : (def.getInputs ? def.getInputs() : null));
+                for (const inp of inputs) {
+                    let nm = '', dv = '';
+                    try { nm = inp.getName(); } catch (e) { /* skip */ }
+                    if (!nm) continue;
+                    try { dv = (inp.getValueString && inp.getValueString()) || ''; } catch (e) { /* none */ }
+                    defaults[nm] = dv;
+                    try { inputTypes[nm] = inp.getType(); } catch (e) { /* none */ }
+                }
+                const outputTypes = {};
+                const outputs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
+                    : (def.getOutputs ? def.getOutputs() : null));
+                if (outputs.length) {
+                    for (const out of outputs) {
+                        let nm = '';
+                        try { nm = out.getName(); } catch (e) { /* skip */ }
+                        if (!nm) continue;
+                        try { outputTypes[nm] = out.getType(); } catch (e) { /* none */ }
+                    }
+                } else {
+                    outputTypes['out'] = outType;
+                }
+                if (!byKey[key]) { byKey[key] = { key, type: outType, versions: [] }; order.push(key); }
+                byKey[key].versions.push({
+                    name: def.getName ? def.getName() : '', version, isDefaultVersion,
+                    defaults, inputTypes, outputTypes,
+                });
+            }
+            const groups = order.map((key) => {
+                const g = byKey[key];
+                g.versions.sort((a, b) => {
+                    if (a.isDefaultVersion !== b.isDefaultVersion) return a.isDefaultVersion ? -1 : 1;
+                    return b.version.localeCompare(a.version, undefined, { numeric: true });
+                });
+                return g;
+            });
+            const typeCounts = {};
+            groups.forEach((g) => { typeCounts[g.type] = (typeCounts[g.type] || 0) + 1; });
+            groups.forEach((g) => {
+                g.ambiguous = typeCounts[g.type] > 1;
+                const defaultVersion = g.versions[0];
+                const seen = new Set();
+                const ordered = [];
+                if (defaultVersion) {
+                    Object.keys(defaultVersion.inputTypes).forEach((nm) => {
+                        const t = defaultVersion.inputTypes[nm];
+                        if (t && !seen.has(t)) { seen.add(t); ordered.push(t); }
+                    });
+                }
+                g.inSummary = ordered.join(', ');
+            });
+            return groups;
+        };
+
+        // Collapse version-duplicate nodedefs down to their DEFAULT version
+        // before building auto tables — one table per genuine SIGNATURE, not
+        // one per nodedef. Without this, a node like standard_surface (whose
+        // 1.0.1/1.0.0 nodedefs share every port, differing only in default
+        // values) would show two identical-looking "signatures" in the
+        // dropdown. A nodedef that can't be keyed (API unbound) always keeps
+        // its own entry, so degrade to the old one-table-per-nodedef
+        // behavior rather than dropping it.
+        const dedupeDefsBySignature = (defs) => {
+            const chosen = new Map(); // sigKey -> def (preferring the default version)
+            const order = []; // sigKey, or the def itself when unkeyable
+            for (const def of defs) {
+                let key = null;
+                try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
+                if (!key) { order.push(def); continue; }
+                let isDefault = false;
+                try { isDefault = !!(def.getDefaultVersion && def.getDefaultVersion()); } catch (e) { /* none */ }
+                if (!chosen.has(key)) { chosen.set(key, def); order.push(key); }
+                else if (isDefault) { chosen.set(key, def); }
+            }
+            return order.map((item) => (typeof item === 'string' ? chosen.get(item) : item));
+        };
+
         // Build port tables (same shape the viewer renders) directly from a
         // node's MaterialX nodedefs, for nodes with NO spec documentation. One
-        // table per nodedef (overload/signature); inputs first, then outputs.
-        // `vecToArray` normalizes the MaterialX vector<->array binding.
+        // table per SIGNATURE (overload) — version-duplicate nodedefs are
+        // already collapsed by dedupeDefsBySignature before this runs; inputs
+        // first, then outputs. `vecToArray` normalizes the MaterialX
+        // vector<->array binding.
         const buildAutoTablesFromDefs = (defs) => {
             const tables = [];
             for (const def of defs) {
@@ -399,7 +557,44 @@
             return concrete[0] || null;
         };
 
-        function PortTable({ table, columns, refs }) {
+        // Which markdown table documents the signature with this output
+        // type? Spec write-ups that cover several signatures under one
+        // heading (e.g. `multiply`: scalar/vector table + matrixNN table)
+        // author family tokens ('float, colorN or vectorN', 'matrixNN')
+        // rather than splitting per concrete type. Expand those tokens the
+        // same way signaturePreviewType does and pick the first table whose
+        // port types (resolving "Same as X" chains via resolveType) cover
+        // the wanted concrete type.
+        const SIG_FAMILY_EXPANSIONS = {
+            colorn: ['color2', 'color3', 'color4'],
+            vectorn: ['vector2', 'vector3', 'vector4'],
+            matrixnn: ['matrix33', 'matrix44'],
+        };
+        const expandSigToken = (tok) => {
+            const key = (tok || '').trim().toLowerCase();
+            return SIG_FAMILY_EXPANSIONS[key] || [key];
+        };
+        const pickTableForType = (tables, type) => {
+            if (!type || !tables || !tables.length) return null;
+            const want = type.trim().toLowerCase();
+            for (const table of tables) {
+                const ports = table.ports || {};
+                const names = Object.keys(ports);
+                const tokens = uniqTypeTokens(names.map(n => resolveType(ports, n)));
+                const expanded = tokens.reduce((acc, t) => acc.concat(expandSigToken(t)), []);
+                if (expanded.some(t => t === want)) return table;
+            }
+            return null;
+        };
+
+        // `defaultsOverride`: an optional {portName: valueString} map — used
+        // when the docs page's Version picker (index.html) selects a
+        // non-default nodedef version. The spec's own "default" column
+        // reflects whichever version the write-up was authored against
+        // (usually the current default); switching versions overrides just
+        // that cell with the SELECTED version's live nodedef default,
+        // leaving descriptions/types untouched.
+        function PortTable({ table, columns, refs, defaultsOverride, typesOverride }) {
             // Minimum table width (small screens only, via the .port-table
             // media rule): sum of the fixed column widths plus a readable
             // minimum for the flexible description column. Below this the
@@ -429,13 +624,22 @@
                         <tbody>
                             {Object.entries(table.ports).map(([portName, portData]) => (
                                 <tr className="border-b border-gray-700 last:border-b-0 hover:bg-gray-750" key={portName}>
-                                    {columns.map(col => (
-                                        <td key={col} className={`px-4 py-3 align-top ${CELL_STYLES[col] || ''}`}>
-                                            {col === 'port'
-                                                ? portName
-                                                : <MathText text={portData[col] || ''} refs={refs} />}
-                                        </td>
-                                    ))}
+                                    {columns.map(col => {
+                                        const overridden = col === 'default' && defaultsOverride
+                                            && Object.prototype.hasOwnProperty.call(defaultsOverride, portName);
+                                        const typeOverridden = col === 'type' && typesOverride
+                                            && Object.prototype.hasOwnProperty.call(typesOverride, portName);
+                                        const cellText = overridden ? defaultsOverride[portName]
+                                            : typeOverridden ? typesOverride[portName]
+                                            : (portData[col] || '');
+                                        return (
+                                            <td key={col} className={`px-4 py-3 align-top ${CELL_STYLES[col] || ''}`}>
+                                                {col === 'port'
+                                                    ? portName
+                                                    : <MathText text={cellText} refs={refs} />}
+                                            </td>
+                                        );
+                                    })}
                                 </tr>
                             ))}
                         </tbody>
@@ -562,8 +766,8 @@
             selToHash, hashToSel, headerLabel,
             styleInlinePlain, styleInline, openDocLink,
             MathText, RichBlocks,
-            getPortTables, buildAutoTablesFromDefs, isUndocumented,
+            getPortTables, buildAutoTablesFromDefs, dedupeDefsBySignature, groupDefVersions, isUndocumented,
             CANONICAL_ORDER, COL_WIDTHS, COL_REM, DESCRIPTION_MIN_REM, EXTRA_COL_REM, CELL_STYLES,
-            unionColumns, signatureLabel, signaturePreviewType, PortTable,
+            unionColumns, signatureLabel, signaturePreviewType, pickTableForType, PortTable,
             specFileForLib, specUrlForNode, NodeDefPortsTable,
         });
