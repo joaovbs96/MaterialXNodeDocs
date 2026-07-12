@@ -2,6 +2,15 @@
 // block. Uses the same literal \uXXXX escape-text convention as the rest of
 // this codebase (e.g. an em-dash may appear as the source text —, not
 // an actual glyph) — do not normalize or "fix" these.
+//
+// This file now holds only NodeGraphApp itself; the document model, layout/
+// color, node card, per-node preview, catalog, dialogs and panel pieces it
+// used to also define have been split out (pure move, no behavior change)
+// into js/graph/model.jsx, js/graph/style.jsx, js/graph/node-component.jsx,
+// js/graph/preview.jsx, js/graph/catalog.jsx, js/graph/dialogs.jsx and
+// js/graph/panels.jsx — all loaded before this file (see js/shell.jsx's
+// VIEW_DEPS.graph) and consumed here as window globals like the rest of the
+// shared engine API.
 
         // node-graph — drag & drop a MaterialX document and see its node
         // tree laid out as an interactive React Flow graph. Accepts exactly
@@ -17,2125 +26,6 @@
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
         const { Background, MiniMap, Handle, Position, MarkerType } = RF;
-
-        // Loaded automatically on page open — an official example whose
-        // nodegraph (NG_marble1) makes a much better first graph than a
-        // single-node document.
-        const DEFAULT_GRAPH_URL =
-            'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/' +
-            'v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx';
-
-        // ---- Ingestion (same pipeline as material-viewer.html) -------------
-        // normPath, readDroppedItems, expandZips, findFileForRef and
-        // resolveIncludes now live in js/mtlx-engine.js (loaded before this
-        // script) and are used here as window globals like the rest of the
-        // shared engine API.
-
-        // ---- MaterialX document → graph model -------------------------------
-
-        // Every MaterialX API call goes through `safe`: the JS bindings vary
-        // between builds, and a missing method on ONE element must not take
-        // the whole graph down.
-        const safe = (fn, fb) => { try { const v = fn(); return v == null ? fb : v; } catch (e) { return fb; } };
-        const elName = (el) => safe(() => el.getName(), '');
-        const elCat = (el) => safe(() => el.getCategory(), '');
-        const elType = (el) => safe(() => String(el.getType()), '');
-        const elAttr = (el, a) => safe(() => { const v = el.getAttribute(a); return v || null; }, null);
-
-        // Parse an .mtlx string into a fresh document, with the standard
-        // library attached as a DATA LIBRARY (doc.setDataLibrary): nodedef
-        // matching, validation, and shader generation all consult it, while
-        // getNodes()/getNodeGraphs() still return ONLY the document's own
-        // content and writeToXmlString stays clean — the library is
-        // referenced, never merged. This is what lets untyped ports inherit
-        // their type from nodedefs, and what makes the document renderable.
-        // The stdlib itself is already loaded once by the engine at startup,
-        // so attaching it here costs nothing extra.
-        const parseMtlxDocument = async (xmlText) => {
-            const { mx, stdlib } = await getMxEnv();
-            const doc = mx.createDocument();
-            if (typeof mx.readFromXmlString !== 'function') {
-                throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
-            }
-            try {
-                await mx.readFromXmlString(doc, xmlText);
-            } catch (e) {
-                throw new Error('MaterialX could not parse the document: ' + mxErr(mx, e));
-            }
-            if (typeof doc.setDataLibrary === 'function') {
-                doc.setDataLibrary(stdlib);
-            } else {
-                console.warn('setDataLibrary is not bound in this MaterialX build — nodedef type inheritance and the material preview are degraded.');
-            }
-
-            // In MaterialX, a <nodegraph> can act as a function implementation.
-            // It might carry a "nodedef" attribute directly, OR it might omit it
-            // and be linked via a separate <implementation nodegraph="..."> element.
-            const implGraphNames = new Set();
-            const collectImpls = (container) => {
-                vecToArray(safe(() => container.getImplementations(), [])).forEach((impl) => {
-                    const ngName = elAttr(impl, 'nodegraph');
-                    if (ngName) implGraphNames.add(ngName);
-                });
-            };
-            collectImpls(doc);
-            if (stdlib) collectImpls(stdlib);
-
-            // Instance nodegraphs only — graphs acting as function DEFINITIONS
-            // are skipped so they don't clutter the user's workspace.
-            const nodegraphs = vecToArray(safe(() => doc.getNodeGraphs(), []))
-                .filter((g) => !elAttr(g, 'nodedef') && !implGraphNames.has(elName(g)))
-                .map((g) => elName(g));
-            
-            return { mx, doc, nodegraphs, implGraphNames };
-        };
-
-        // Serialize a parsed document to XML — shared by Export and the
-        // undo/redo snapshot capture. Transient '__pv_*' preview wrappers
-        // only exist inside an in-flight generation; if one is caught
-        // mid-air this throws (marked .transient) so the caller can decide
-        // whether to retry (Export) or just skip this round (undo).
-        const serializeDocXml = (parsed) => {
-            if (!parsed) throw new Error('no document');
-            const hasTransients = vecToArray(safe(() => parsed.doc.getNodes(), []))
-                .some((n) => /^__pv_/.test(elName(n)));
-            if (hasTransients) {
-                const err = new Error('transient preview nodes present');
-                err.transient = true;
-                throw err;
-            }
-            return parsed.mx.writeToXmlString(parsed.doc);
-        };
-
-        // Kind decides the accent color and (for nodegraphs) the
-        // double-click-to-open affordance.
-        const kindOfNode = (el) => {
-            const t = elType(el);
-            if (t === 'material') return 'material';
-            if (/shader$/i.test(t) || t === 'BSDF' || t === 'EDF' || t === 'VDF') return 'shader';
-            return 'node';
-        };
-
-        // getNodeDef() in this wasm build is not reliably version-aware: an
-        // instance authoring version="1.0.0" can still resolve the default
-        // nodedef. Resolve explicitly: pinned nodedef= attr wins, then an
-        // authored version= is matched against the category's nodedefs
-        // (filtered to a compatible output type when the instance is typed),
-        // and only then the binding's own resolution.
-        const resolveVersionedNodeDef = (el, docMaybe) => {
-            const fallback = () => safe(() => el.getNodeDef(), null) || safe(() => el.getNodeDef(''), null);
-            const pinned = elAttr(el, 'nodedef');
-            const ver = elAttr(el, 'version');
-            if (!pinned && !ver) return fallback();
-            const doc = docMaybe || (typeof el.getDocument === 'function' ? safe(() => el.getDocument(), null) : null);
-            if (!doc) return fallback();
-            const cat = elCat(el);
-            const type = elType(el);
-            const defs = vecToArray(safe(() => doc.getMatchingNodeDefs(cat), []));
-            if (!defs.length) return fallback();
-            if (pinned) {
-                return defs.find((d) => elName(d) === pinned) || fallback();
-            }
-            // ver is authored: narrow to nodedefs whose resolved output type
-            // is compatible with the instance's (untyped/multioutput skip
-            // the filter — nothing to compare against).
-            const defMatchesType = (d) => {
-                if (elType(d) === type) return true;
-                return vecToArray(safe(() => d.getActiveOutputs(), []))
-                    .concat(vecToArray(safe(() => d.getOutputs(), [])))
-                    .some((o) => elType(o) === type);
-            };
-            const candidates = (!type || type === 'multioutput')
-                ? defs : defs.filter(defMatchesType);
-            const pool = candidates.length ? candidates : defs;
-            return pool.find((d) => safe(() => d.getVersionString(), '') === ver) || fallback();
-        };
-
-        // Every input type the node's signature exposes: authored inputs, the
-        // resolved nodedef's active inputs, and — when the resolved def is
-        // missing or doesn't match the node's output type (getNodeDef() can
-        // mis-resolve unpinned closure overloads) — every category nodedef
-        // with a matching output type.
-        const signatureInputTypes = (doc, el, outType) => {
-            const authoredInTypes = vecToArray(safe(() => el.getInputs(), [])).map(elType);
-            const def = resolveVersionedNodeDef(el);
-            let defInTypes = def ? vecToArray(safe(() => def.getActiveInputs(), [])).map(elType) : [];
-            const defMatchesOut = def && (elType(def) === outType
-                || vecToArray(safe(() => def.getActiveOutputs(), [])).some((o) => elType(o) === outType));
-            if (!defMatchesOut) {
-                // getNodeDef() can miss (or mis-resolve) unpinned closure overloads;
-                // scan every nodedef of this category with a matching output type.
-                const candDefs = vecToArray(safe(() => doc.getMatchingNodeDefs(elCat(el)), []))
-                    .filter((d) => elType(d) === outType
-                        || vecToArray(safe(() => d.getActiveOutputs(), [])).some((o) => elType(o) === outType));
-                for (const d of candDefs) {
-                    defInTypes = defInTypes.concat(vecToArray(safe(() => d.getActiveInputs(), [])).map(elType));
-                }
-            }
-            return authoredInTypes.concat(defInTypes);
-        };
-        const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
-        const isClosureModifier = (outType, inTypes) =>
-            CLOSURE_TYPES.indexOf(outType) !== -1
-            && inTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
-
-        // Inputs/outputs of an element, with the raw connection attributes
-        // kept verbatim (nodename / nodegraph / interfacename / output).
-        // Port types the document leaves implicit are resolved from the
-        // element's NODEDEF — matched through the data library attached in
-        // parseMtlxDocument. Each input also carries its nodedef DEFAULT
-        // value (defValue) and an `authored` flag; inputs the document does
-        // not author are appended from the nodedef (authored: false) so the
-        // "all inputs" display mode can show them.
-        const collectPorts = (el) => {
-            let defMemo; // undefined = not looked up yet; null = no def found
-            const nodeDef = () => {
-                if (defMemo === undefined) {
-                    defMemo = resolveVersionedNodeDef(el)
-                        || safe(() => el.getNodeDef(), null)
-                        || safe(() => el.getNodeDef(''), null); // binding variant with required target arg
-                }
-                return defMemo;
-            };
-            const defInputEl = (portName) => {
-                const def = nodeDef();
-                if (!def) return null;
-                return safe(() => def.getActiveInput(portName), null)
-                    || safe(() => def.getInput(portName), null);
-            };
-            const defPortType = (portName, isOutput) => {
-                const def = nodeDef();
-                if (!def) return '';
-                const p = isOutput
-                    ? (safe(() => def.getActiveOutput(portName), null) || safe(() => def.getOutput(portName), null))
-                    : defInputEl(portName);
-                return p ? elType(p) : '';
-            };
-            // Slider ranges + enum choices + colorspace come from the
-            // nodedef input; the authored colorspace from the instance.
-            const uiMeta = (dIn) => !dIn ? {} : {
-                uimin: elAttr(dIn, 'uimin'), uimax: elAttr(dIn, 'uimax'),
-                uisoftmin: elAttr(dIn, 'uisoftmin'), uisoftmax: elAttr(dIn, 'uisoftmax'),
-                enumNames: elAttr(dIn, 'enum'), enumValues: elAttr(dIn, 'enumvalues'),
-                defColorspace: elAttr(dIn, 'colorspace'),
-            };
-            // Node output type(s), resolved BEFORE the inputs below so each
-            // input can be flagged colorManaged — colorspace only means
-            // anything for color3/color4 DATA, and for filename inputs only
-            // when the node's resolved output is itself color3/color4 (a
-            // filename feeding e.g. a float/vector displacement input has
-            // no colorspace to speak of).
-            const def0 = nodeDef();
-            const outTypes = new Set(
-                vecToArray(safe(() => el.getOutputs(), [])).length
-                    ? vecToArray(safe(() => el.getOutputs(), [])).map((o) => elType(o) || defPortType(elName(o), true))
-                    : (def0 ? vecToArray(safe(() => def0.getActiveOutputs(), [])).map(elType) : [])
-            );
-            const isColorOutput = outTypes.has('color3') || outTypes.has('color4');
-            const isColorType = (t) => t === 'color3' || t === 'color4';
-            const colorManagedFor = (type) => (type === 'filename' && isColorOutput) || isColorType(type);
-
-            const inputs = vecToArray(safe(() => el.getInputs(), [])).map((inp) => {
-                const dIn = defInputEl(elName(inp));
-                const type = elType(inp) || defPortType(elName(inp), false);
-                return Object.assign({
-                    name: elName(inp),
-                    type,
-                    value: safe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
-                    defValue: dIn ? safe(() => (dIn.getValueString ? dIn.getValueString() : ''), '') : undefined,
-                    authored: true,
-                    colorspace: elAttr(inp, 'colorspace'),
-                    nodename: elAttr(inp, 'nodename'),
-                    nodegraph: elAttr(inp, 'nodegraph'),
-                    interfacename: elAttr(inp, 'interfacename'),
-                    output: elAttr(inp, 'output'),
-                    colorManaged: colorManagedFor(type),
-                }, uiMeta(dIn));
-            });
-            // Unauthored nodedef inputs (shown only in "all" mode). Their
-            // value IS the default.
-            const authoredNames = new Set(inputs.map((i) => i.name));
-            const def = nodeDef();
-            if (def) {
-                const defIns = vecToArray(safe(() => def.getActiveInputs(), []))
-                    .concat(vecToArray(safe(() => def.getInputs(), [])));
-                const seen = new Set();
-                for (const dIn of defIns) {
-                    const nm = elName(dIn);
-                    if (!nm || authoredNames.has(nm) || seen.has(nm)) continue;
-                    seen.add(nm);
-                    const v = safe(() => (dIn.getValueString ? dIn.getValueString() : ''), '');
-                    const type = elType(dIn);
-                    inputs.push(Object.assign({
-                        name: nm, type, value: v, defValue: v,
-                        authored: false, colorspace: '',
-                        nodename: '', nodegraph: '', interfacename: '', output: '',
-                        colorManaged: colorManagedFor(type),
-                    }, uiMeta(dIn)));
-                }
-            }
-            const outputs = vecToArray(safe(() => el.getOutputs(), [])).map((o) => ({
-                name: elName(o), type: elType(o) || defPortType(elName(o), true),
-            }));
-
-            // Extract the library and group for conflict-free documentation links
-            let lib = '', group = '';
-            if (def) {
-                group = safe(() => def.getNodeGroup(), '');
-                const uri = safe(() => def.getSourceUri(), '');
-                const m = uri.match(/libraries\/([^/]+)/);
-                if (m) lib = m[1];
-            }
-
-            return { inputs, outputs, lib, group };
-        };
-
-        // Node-editor xpos/ypos attributes (written by the MaterialX Graph
-        // Editor among others). Used verbatim — scaled to pixels — when
-        // EVERY element in the scope carries them; otherwise dagre lays out.
-        const storedPos = (el) => {
-            const x = parseFloat(elAttr(el, 'xpos'));
-            const y = parseFloat(elAttr(el, 'ypos'));
-            return (isFinite(x) && isFinite(y)) ? { x, y } : null;
-        };
-
-        // Build the descriptor + edge lists for one scope: '' = the document
-        // root (top-level nodes, instance nodegraphs as single collapsed
-        // nodes, root <output> elements), or the name of a nodegraph (its
-        // internal nodes, plus pseudo-nodes for the graph's interface inputs
-        // and its outputs).
-        const buildScope = (parsed, scope) => {
-            const { doc, implGraphNames } = parsed;
-            const descs = [];
-            const byId = {};
-            const push = (d) => { descs.push(d); byId[d.id] = d; };
-
-            if (!scope) {
-                for (const n of vecToArray(safe(() => doc.getNodes(), []))) {
-                    if (/^__pv_/.test(elName(n))) continue; // transient preview wrapper
-                    const ports = collectPorts(n);
-                    if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: elType(n) }];
-                    push({ id: 'n:' + elName(n), kind: kindOfNode(n), name: elName(n),
-                           category: elCat(n), type: elType(n),
-                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n) });
-                }
-                for (const g of vecToArray(safe(() => doc.getNodeGraphs(), []))) {
-                    if (elAttr(g, 'nodedef') || (implGraphNames && implGraphNames.has(elName(g)))) continue; // function definition
-                    
-                    const outs = vecToArray(safe(() => g.getOutputs(), []))
-                        .filter((o) => !/^__pv_/.test(elName(o))) // transient preview tap
-                        .map((o) => ({ name: elName(o), type: elType(o) }));
-                    const ins = vecToArray(safe(() => g.getInputs(), [])).map((inp) => ({
-                        name: elName(inp), type: elType(inp),
-                        value: safe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
-                        nodename: elAttr(inp, 'nodename'), nodegraph: elAttr(inp, 'nodegraph'),
-                        interfacename: null, output: elAttr(inp, 'output'),
-                    }));
-                    push({ id: 'g:' + elName(g), kind: 'nodegraph', name: elName(g),
-                           category: 'nodegraph', type: '',
-                           inputs: ins, outputs: outs.length ? outs : [{ name: 'out', type: '' }],
-                           pos: storedPos(g) });
-                }
-                for (const o of vecToArray(safe(() => doc.getOutputs(), []))) {
-                    push({ id: 'o:' + elName(o), kind: 'output', name: elName(o),
-                           category: 'output', type: elType(o),
-                           inputs: [{ name: 'in', type: elType(o), value: '',
-                                      nodename: elAttr(o, 'nodename'), nodegraph: elAttr(o, 'nodegraph'),
-                                      interfacename: null, output: elAttr(o, 'output') }],
-                           outputs: [], pos: storedPos(o) });
-                }
-            } else {
-                const g = safe(() => doc.getNodeGraph(scope), null);
-                if (!g) throw new Error('Nodegraph "' + scope + '" not found in the document.');
-                for (const inp of vecToArray(safe(() => g.getInputs(), []))) {
-                    push({ id: 'i:' + elName(inp), kind: 'input', name: elName(inp),
-                           category: 'interface input', type: elType(inp),
-                           inputs: [], value: safe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
-                           outputs: [{ name: 'out', type: elType(inp) }], pos: storedPos(inp) });
-                }
-                for (const n of vecToArray(safe(() => g.getNodes(), []))) {
-                    const ports = collectPorts(n);
-                    if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: elType(n) }];
-                    push({ id: 'n:' + elName(n), kind: kindOfNode(n), name: elName(n),
-                           category: elCat(n), type: elType(n),
-                           lib: ports.lib, group: ports.group,
-                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n) });
-                }
-                for (const o of vecToArray(safe(() => g.getOutputs(), []))) {
-                    if (/^__pv_/.test(elName(o))) continue; // transient preview tap
-                    push({ id: 'o:' + elName(o), kind: 'output', name: elName(o),
-                           category: 'output', type: elType(o),
-                           inputs: [{ name: 'in', type: elType(o), value: '',
-                                      nodename: elAttr(o, 'nodename'), nodegraph: elAttr(o, 'nodegraph'),
-                                      interfacename: elAttr(o, 'interfacename'), output: elAttr(o, 'output') }],
-                           outputs: [], pos: storedPos(o) });
-                }
-            }
-
-            // Edges: one per connected input, resolved exactly like MaterialX
-            // does — interfacename beats nodegraph beats nodename. A source
-            // output referenced by name but not declared on the source (the
-            // common single-output case, or multioutput without explicit
-            // <output> children) is synthesized so the handle exists.
-            const edges = [];
-            for (const d of descs) {
-                for (const inp of d.inputs) {
-                    let srcId = null, outName = null;
-                    if (inp.interfacename) { srcId = 'i:' + inp.interfacename; outName = 'out'; }
-                    else if (inp.nodegraph) { srcId = 'g:' + inp.nodegraph; outName = inp.output || null; }
-                    else if (inp.nodename) { srcId = 'n:' + inp.nodename; outName = inp.output || 'out'; }
-                    if (!srcId) continue;
-                    const src = byId[srcId];
-                    if (!src) { console.warn('node-graph: dangling connection to', srcId, 'from', d.id); continue; }
-                    if (!outName) outName = (src.outputs[0] && src.outputs[0].name) || 'out';
-                    if (!src.outputs.some((o) => o.name === outName)) {
-                        src.outputs.push({ name: outName, type: inp.type });
-                    }
-                    edges.push({
-                        id: srcId + '.' + outName + '\u2192' + d.id + '.' + inp.name,
-                        source: srcId, sourceHandle: 'out:' + outName,
-                        target: d.id, targetHandle: 'in:' + inp.name,
-                        type: inp.type || (src.outputs.find((o) => o.name === outName) || {}).type || '',
-                    });
-                }
-            }
-
-            // Type-resolution pass: nodedef lookup (collectPorts) already
-            // resolves most implicit types; this pass covers the rest —
-            // pseudo-nodes (interface inputs, outputs, collapsed nodegraphs),
-            // custom nodes with no nodedef, and builds without setDataLibrary.
-            // Types propagate across connections in both directions until
-            // stable, so every port and edge in the CURRENT scope — the
-            // document root or any nodegraph interior — is colored by its
-            // real type. Iterating to a fixed point carries types through
-            // chains of untyped pass-through ports.
-            let changed = true, guard = 0;
-            while (changed && guard++ < 8) {
-                changed = false;
-                for (const e of edges) {
-                    const src = byId[e.source], dst = byId[e.target];
-                    if (!src || !dst) continue;
-                    const out = src.outputs.find((o) => 'out:' + o.name === e.sourceHandle);
-                    const inp = dst.inputs.find((i) => 'in:' + i.name === e.targetHandle);
-                    const t = e.type || (inp && inp.type) || (out && out.type) || '';
-                    if (!t) continue;
-                    if (!e.type) { e.type = t; changed = true; }
-                    if (inp && !inp.type) { inp.type = t; changed = true; }
-                    if (out && !out.type) { out.type = t; changed = true; }
-                }
-            }
-
-            return { descs, edges };
-        };
-
-        // ---- Layout ----------------------------------------------------------
-
-        const NODE_W = 240;
-        // Must track MtlxGraphNode's real metrics (header ~34px, row 22px)
-        // or dagre's ranks drift apart from what actually renders.
-        const nodeHeight = (d) => 38 + (d.inputs.length + d.outputs.length) * 22 + 6;
-
-        const layoutScope = (descs, edges) => {
-            const stored = descs.length > 1 && descs.every((d) => d.pos);
-            if (stored) {
-                // Editor coordinates are unit-ish; scale to pixels. Distinct
-                // positions required — some exporters write all-zeros.
-                const uniq = new Set(descs.map((d) => d.pos.x + '/' + d.pos.y));
-                if (uniq.size > 1) {
-                    const posOf = {};
-                    for (const d of descs) posOf[d.id] = { x: d.pos.x * 240, y: d.pos.y * 240 };
-                    return posOf;
-                }
-            }
-            const g = new dagre.graphlib.Graph();
-            g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 70, marginx: 24, marginy: 24 });
-            g.setDefaultEdgeLabel(() => ({}));
-            for (const d of descs) g.setNode(d.id, { width: NODE_W, height: nodeHeight(d) });
-            for (const e of edges) g.setEdge(e.source, e.target);
-            dagre.layout(g);
-            const posOf = {};
-            for (const d of descs) {
-                const n = g.node(d.id); // dagre positions are CENTERS
-                posOf[d.id] = { x: n.x - NODE_W / 2, y: n.y - nodeHeight(d) / 2 };
-            }
-            return posOf;
-        };
-
-        // ---- React Flow node rendering ---------------------------------------
-
-        // MaterialX type → port/edge color. Every standard type has a curated,
-        // hand-spread hue (so co-occurring types are never confusable — the old
-        // table gave matrix33 and matrix44 the SAME color, and made integer a
-        // near-twin of float). The shader family intentionally clusters in the
-        // green band but separated by lightness. Anything not in the table
-        // (custom/struct/array types) falls back to a deterministic hash of the
-        // type name, so a given type keeps the exact same color in every scope,
-        // every document, every session.
-        const TYPE_COLORS = {
-            boolean: '#d2372b',            // crimson red
-            BSDF: '#2e7d32',               // forest green
-            color3: '#fdd835',             // sunflower yellow
-            color4: '#f4511e',             // coral orange
-            displacementshader: '#8d6e63', // warm taupe
-            EDF: '#cddc39',                // yellow-green
-            filename: '#90a4ae',           // cool blue-gray
-            float: '#3949ab',              // deep indigo blue
-            integer: '#8e24aa',            // royal violet
-            lightshader: '#ff934f',        // warm apricot orange
-            material: '#ff404f',           // vivid red
-            matrix33: '#cfd8dc',           // pale blue-gray
-            matrix44: '#546e7a',           // slate blue-gray
-            string: '#d7c4a3',             // warm sand
-            surfaceshader: '#00897b',      // deep teal
-            vector2: '#5c6bc0',            // muted indigo
-            vector3: '#b388ff',            // soft lavender
-            vector4: '#ec407a',            // rose pink
-            VDF: '#9ccc65',                // fresh green
-            volumeshader: '#00bcd4',       // bright cyan
-            node: '#a1887f',               // muted warm stone
-            nodegraph: '#854d0e'           // bronze brown
-        };
-        // Stable string hash → hue; fixed saturation/lightness keeps hashed
-        // colors legible on the dark stage.
-        const typeHue = (s) => {
-            let h = 0;
-            for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-            return ((h % 360) + 360) % 360;
-        };
-        const typeColor = (t) => {
-            if (!t) return '#94a3b8'; // untyped: default slate
-            if (TYPE_COLORS[t]) return TYPE_COLORS[t];
-            return 'hsl(' + typeHue(String(t)) + ', 65%, 62%)';
-        };
-
-        // Node-kind accents (header dot + minimap) derive from TYPE_COLORS so
-        // they always track the palette; nodegraph/generic have no MaterialX
-        // type, so they keep their own hues.
-        const getNodeColor = (data) => {
-            if (!data) return typeColor('node');
-            
-            // 1. Structural nodes explicitly pull their assigned TYPE_COLORS
-            if (data.kind === 'nodegraph') return typeColor('nodegraph');
-            if (data.kind === 'input' || data.kind === 'output') return typeColor(data.type);
-            
-            // 2. Data nodes pull directly from their output type (color3, float, etc)
-            if (data.type) return typeColor(data.type);
-            
-            // 3. Fallbacks just in case a shader/material lacks a type string
-            if (data.kind === 'material') return typeColor('material');
-            if (data.kind === 'shader') return typeColor('surfaceshader');
-            
-            return typeColor('node');
-        };
-
-        const handleStyle = (color) => ({
-            width: 9, height: 9, border: '1.5px solid #111827', background: color,
-        });
-
-        // One node card: header (accent dot + name + category:type), then a
-        // 22px row per port — inputs with a left target handle (showing the
-        // literal value when unconnected), outputs with a right source
-        // handle. Row height must stay in sync with nodeHeight() above.
-        // Interface inputs / outputs are GRAPH BOUNDARY pseudo-nodes, not
-        // real nodes — they render with a dashed border, darker translucent
-        // body and a diamond (not a dot) so they can't be mistaken for one.
-        function MtlxGraphNode({ data, selected }) {
-            const isIface = data.kind === 'input' || data.kind === 'output';
-            const openScope = data.onOpen
-                ? (e) => { e.stopPropagation(); data.onOpen(); }
-                : undefined;
-            // Corner toggle: reveal/hide this node's nodedef-default inputs.
-            // Only offered when the node actually has some.
-            const hasDefaults = (data.allInputs || []).some((i) => i.authored === false);
-            const expanded = data.portMode === 'all';
-            return (
-                <div
-                    title={data.kind === 'nodegraph' ? 'Double-click to open this nodegraph' : undefined}
-                    className={'relative rounded-lg border font-mono text-[11px] '
-                        + (isIface ? 'border-dashed bg-gray-900/70 ' : 'bg-gray-800 shadow-md ')
-                        + (selected ? 'border-blue-500 ring-1 ring-blue-500/50'
-                                    : (isIface ? 'border-gray-500' : 'border-gray-600'))}
-                    style={{ width: NODE_W }}>
-                    {hasDefaults && data.onTogglePorts && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); data.onTogglePorts(); }}
-                            onDoubleClick={(e) => e.stopPropagation()}
-                            title={expanded ? 'Hide the inputs left at their defaults' : 'Show all inputs (defaults included)'}
-                            className={'absolute -top-2 -right-2 z-10 w-4 h-4 rounded-full border text-[10px] leading-none flex items-center justify-center transition-colors '
-                                + (expanded
-                                    ? 'bg-blue-600 border-blue-400 text-white hover:bg-blue-500'
-                                    : 'bg-gray-700 border-gray-500 text-gray-300 hover:bg-gray-600 hover:text-gray-100')}
-                        >{expanded ? '\u2212' : '+'}</button>
-                    )}
-                    <div className={'px-2 py-1.5 border-b rounded-t-lg leading-tight '
-                            + (isIface ? 'border-gray-700/70 border-dashed bg-transparent'
-                                       : 'border-gray-700 bg-gray-900/70')}>
-                        <div className="flex items-center gap-1.5 min-w-0">
-                            {isIface ? (
-                                <span className="w-2 h-2 rotate-45 flex-none border"
-                                    style={{ background: 'transparent',
-                                            borderColor: getNodeColor(data) }} />
-                            ) : (
-                                <span className="w-2 h-2 rounded-full flex-none"
-                                    style={{ background: getNodeColor(data) }} />
-                            )}
-                            <span className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100') + ' truncate'}>
-                                {data.name}
-                            </span>
-                            {isIface && (
-                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
-                                    {data.kind === 'input' ? 'interface' : 'output'}
-                                </span>
-                            )}
-                            {data.kind === 'nodegraph' && (
-                                <button
-                                    onClick={openScope}
-                                    onDoubleClick={openScope}
-                                    title="Open this nodegraph"
-                                    className="ml-auto flex-none text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
-                                >open ⏎</button>
-                            )}
-                        </div>
-                        <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-gray-600 italic' : 'text-gray-500')}>
-                            {data.category}{data.type ? ' : ' + data.type : ''}
-                        </div>
-                    </div>
-                    <div className="py-0.5">
-                        {data.inputs.map((inp) => (
-                            <div key={'in:' + inp.name}
-                                className={'relative flex items-center gap-1.5 px-2' + (inp.authored === false ? ' opacity-50' : '')}
-                                style={{ height: 22 }}
-                                title={inp.authored === false ? 'Not set in the document — nodedef default' : undefined}>
-                                <Handle type="target" position={Position.Left} id={'in:' + inp.name}
-                                    onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: inp.name, portType: inp.type, dir: 'in' }); }}
-                                    style={handleStyle(typeColor(inp.type))} />
-                                <span className="text-gray-300 truncate">{inp.name}</span>
-                                {!inp.connected && inp.value !== '' && (
-                                    <span className="ml-auto text-gray-500 truncate max-w-[7.5rem] text-right"
-                                        title={inp.value}>{inp.value}</span>
-                                )}
-                                {inp.connected && (
-                                    <span className="ml-auto text-[9px]" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
-                                )}
-                            </div>
-                        ))}
-                        {data.value !== undefined && data.value !== '' && (
-                            <div className="px-2 text-gray-500 truncate" style={{ height: 22, lineHeight: '22px' }}
-                                title={data.value}>= {data.value}</div>
-                        )}
-                        {data.outputs.map((out) => (
-                            <div key={'out:' + out.name} className="relative flex items-center justify-end gap-1.5 px-2" style={{ height: 22 }}>
-                                <span className="text-[9px]" style={{ color: typeColor(out.type) }}>{out.type}</span>
-                                <span className="text-gray-300 truncate">{out.name}</span>
-                                <Handle type="source" position={Position.Right} id={'out:' + out.name}
-                                    onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: out.name, portType: out.type, dir: 'out' }); }}
-                                    style={handleStyle(typeColor(out.type))} />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            );
-        }
-        // Defined ONCE at module scope — React Flow warns (and thrashes) when
-        // the nodeTypes object identity changes between renders.
-        const NODE_TYPES = { mtlx: MtlxGraphNode };
-
-        // ---- Parameter panel --------------------------------------------------
-
-        // The docs page (index.html) routes with hash permalinks
-        // (#/lib/group/name — see selToHash/hashToSel in doc-ui.jsx). The
-        // graph only knows a node's CATEGORY, so it uses the name-only form
-        // (#/<name>), which hashToSel resolves to the full permalink.
-        // The docs page (index.html) routes with hash permalinks.
-        // By supplying the full library and group path, we avoid search conflicts.
-        const nodeDocsUrl = (data, embed) => {
-            const prefix = embed ? 'index.html?embed=1#/' : 'index.html#/';
-            if (data.lib && data.group && data.category) {
-                return prefix + [data.lib, data.group, data.category].map(encodeURIComponent).join('/');
-            }
-            // Fallback for nodes that lack definition metadata
-            return prefix + encodeURIComponent(data.category || '');
-        };
-
-        // The document's final look: the surfaceshader feeding the first
-        // material node, else the first surfaceshader node in the document.
-        // This is the node the render pipeline generates from — the same
-        // contract as the docs page's Node3DPreview.
-        const findDocRenderable = (doc) => {
-            const nodes = vecToArray(safe(() => doc.getNodes(), []));
-            for (const n of nodes) {
-                if (elType(n) !== 'material') continue;
-                for (const inp of vecToArray(safe(() => n.getInputs(), []))) {
-                    if (elType(inp) !== 'surfaceshader') continue;
-                    const nn = elAttr(inp, 'nodename');
-                    const s = nn ? safe(() => doc.getNode(nn), null) : null;
-                    if (s) return s;
-                }
-            }
-            for (const n of nodes) { if (elType(n) === 'surfaceshader') return n; }
-            return null;
-        };
-
-        // Shaderball preview of the document's material, rendered with the
-        // SAME createMtlxRenderView pipeline as the docs page's preview. It
-        // renders the live parsed document, so it re-inits whenever the
-        // document changes or a parameter edit is committed (docRev).
-
-        // TEXTURE_CACHE, textureCacheKey and bindDroppedTextures now live in
-        // js/mtlx-engine.js (loaded before this script) and are used here
-        // as window globals like the rest of the shared engine API. The
-        // cache-hit synchronous path plus the onBound callback are shared
-        // identically with the material viewer's binding pass.
-        // ---- Per-node preview --------------------------------------------
-
-        // findConvertChain(doc, fromType, toType) and
-        // ensureTypedInput(doc, node, inputName, wantedType) now live in
-        // js/mtlx-engine.js (loaded before this script) and are used here
-        // as window globals like the rest of the shared engine API.
-
-        // First (preferably color-viewable) output of a node instance:
-        // authored outputs first, the instance's own type next, and the
-        // nodedef's outputs for 'multioutput' instances.
-        const nodeOutInfo = (el) => {
-            const outs = vecToArray(safe(() => el.getOutputs(), []));
-            if (outs.length) {
-                const pick = outs.find((o) => COLOR_VIEWABLE.indexOf(elType(o)) !== -1) || outs[0];
-                return { type: elType(pick), name: outs.length > 1 ? elName(pick) : null };
-            }
-            const t = elType(el);
-            if (t !== 'multioutput') return { type: t, name: null };
-            const def = safe(() => el.getNodeDef(), null) || safe(() => el.getNodeDef(''), null);
-            const dOuts = def ? vecToArray(safe(() => def.getOutputs(), [])) : [];
-            const pick = dOuts.find((o) => COLOR_VIEWABLE.indexOf(elType(o)) !== -1) || dOuts[0];
-            return pick ? { type: elType(pick), name: elName(pick) } : { type: '', name: null };
-        };
-
-        // Resolve WHAT the preview renders and build any transient wrapper
-        // nodes needed to make it renderable.
-        //   target: { scope, id } of a graph node ('n:...') / nodegraph
-        //   ('g:...'), or null for the document default — the surface
-        //   shader, else the material itself, else the first node found.
-        // Wrappers are named '__pv_*' (buildScope skips them) and MUST be
-        // removed via cleanup() as soon as shader generation is done, so
-        // they never leak into the on-screen graph or the live document.
-        // Returns { renderable, label, cleanup, notice }.
-        const buildPreviewRenderable = (parsed, target) => {
-            const doc = parsed.doc;
-            const temps = []; // { container, name } in creation order
-            const cleanup = () => {
-                for (let i = temps.length - 1; i >= 0; i--) {
-                    safe(() => { temps[i].container.removeChild(temps[i].name); return true; }, false);
-                }
-                temps.length = 0;
-            };
-            const addTempNode = (category, base, type) => {
-                const nm = typeof doc.createValidChildName === 'function'
-                    ? safe(() => doc.createValidChildName(base), base + '_' + temps.length)
-                    : base + '_' + temps.length;
-                const el = safe(() => doc.addNode(category, nm, type), null);
-                if (el) temps.push({ container: doc, name: nm });
-                return el;
-            };
-            const ok = (renderable, label) => ({ renderable, label, cleanup, notice: null });
-            const fail = (notice) => { cleanup(); return { renderable: null, label: '', cleanup: () => {}, notice }; };
-
-            // Wrap a tapped value — srcRef = { nodename | nodegraph,
-            // output? } of type outType — into a renderable root:
-            // surfaceshader → surfacematerial shell, BSDF/EDF → a
-            // `surface` closure shell, anything color-ish → surface_unlit
-            // through a discovered convert chain.
-            const wrapAsSurface = (srcRef, outType, label) => {
-                let pendingSrc = srcRef;
-                const connectSrc = (inp, fallbackName) => {
-                    if (!inp) return;
-                    if (pendingSrc) {
-                        if (pendingSrc.nodename) safe(() => { inp.setAttribute('nodename', pendingSrc.nodename); return true; }, false);
-                        if (pendingSrc.nodegraph) safe(() => { inp.setAttribute('nodegraph', pendingSrc.nodegraph); return true; }, false);
-                        if (pendingSrc.output) safe(() => { inp.setAttribute('output', pendingSrc.output); return true; }, false);
-                        pendingSrc = null; // only the FIRST hop taps the target
-                    } else if (fallbackName) {
-                        safe(() => { inp.setAttribute('nodename', fallbackName); return true; }, false);
-                    }
-                };
-                if (outType === 'surfaceshader') {
-                    const mat = addTempNode('surfacematerial', '__pv_material', 'material');
-                    if (!mat) return fail('Could not build the preview graph.');
-                    connectSrc(ensureTypedInput(doc, mat, 'surfaceshader', 'surfaceshader'));
-                    return ok(mat, label);
-                }
-                if (outType === 'BSDF' || outType === 'EDF') {
-                    const surf = addTempNode('surface', '__pv_surface', 'surfaceshader');
-                    if (!surf) return fail('Could not build the preview graph.');
-                    connectSrc(ensureTypedInput(doc, surf, outType === 'BSDF' ? 'bsdf' : 'edf', outType));
-                    return ok(surf, label);
-                }
-                const direct = findConvertChain(doc, outType, 'surfaceshader');
-                if (direct !== null) {
-                    let dSrcName = null, dPrevType = outType, lastConv = null;
-                    for (let i = 0; i < direct.length; i++) {
-                        const conv = addTempNode('convert', '__pv_convert' + i, direct[i]);
-                        if (!conv) return fail('Could not build the preview graph (convert).');
-                        connectSrc(ensureTypedInput(doc, conv, 'in', dPrevType), dSrcName);
-                        dSrcName = elName(conv);
-                        dPrevType = direct[i];
-                        lastConv = conv;
-                    }
-                    return ok(lastConv, label);
-                }
-                const chain = findConvertChain(doc, outType, 'color3');
-                if (chain === null) {
-                    return fail('No preview for "' + label + '" \u2014 it outputs '
-                        + (outType || 'an unknown type') + ', which isn\u2019t viewable as a color surface.');
-                }
-                let srcName = null, prevType = outType;
-                for (let i = 0; i < chain.length; i++) {
-                    const conv = addTempNode('convert', '__pv_convert' + i, chain[i]);
-                    if (!conv) return fail('Could not build the preview graph (convert).');
-                    connectSrc(ensureTypedInput(doc, conv, 'in', prevType), srcName);
-                    srcName = elName(conv);
-                    prevType = chain[i];
-                }
-                const unlit = addTempNode('surface_unlit', '__pv_surface', 'surfaceshader');
-                if (!unlit) return fail('Could not build the preview graph.');
-                // emission_color, NOT emission — emission is a float weight.
-                connectSrc(ensureTypedInput(doc, unlit, 'emission_color', 'color3'), srcName);
-                return ok(unlit, label);
-            };
-
-            // Preview one node instance in `container` (the doc root when
-            // containerName is '', else the nodegraph of that name).
-            const previewNode = (container, containerName, el) => {
-                const name = elName(el);
-                const t = elType(el);
-                if (t === 'material') {
-                    for (const inp of vecToArray(safe(() => el.getInputs(), []))) {
-                        if (elType(inp) !== 'surfaceshader') continue;
-                        const nn = elAttr(inp, 'nodename');
-                        const s = nn ? safe(() => container.getNode(nn), null) : null;
-                        if (s) return ok(s, name);
-                    }
-                    return ok(el, name); // let the generator resolve the material
-                }
-                if (t === 'surfaceshader') return ok(el, name);
-                const out = nodeOutInfo(el);
-                if (!out.type) return fail('No preview for "' + name + '" \u2014 its output type is unknown.');
-                let srcRef;
-                if (!containerName) {
-                    srcRef = { nodename: name, output: out.name };
-                } else {
-                    // The node lives inside a nodegraph: tap it through a
-                    // transient output on that graph, referenced from the
-                    // root-level wrapper via nodegraph= / output=.
-                    const g = container;
-                    const oName = typeof g.createValidChildName === 'function'
-                        ? safe(() => g.createValidChildName('__pv_out'), '__pv_out') : '__pv_out';
-                    const o = safe(() => g.addOutput(oName, out.type), null);
-                    if (!o) return fail('Could not tap "' + name + '" for the preview.');
-                    temps.push({ container: g, name: oName });
-                    safe(() => { o.setAttribute('nodename', name); return true; }, false);
-                    if (out.name) safe(() => { o.setAttribute('output', out.name); return true; }, false);
-                    srcRef = { nodegraph: containerName, output: oName };
-                }
-                // Closure-modifier nodes (BSDF/EDF/VDF output that ALSO takes a
-                // BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix) fail WebGL
-                // shader compilation in the WASM shadergen/stdlib build.
-                if (isClosureModifier(out.type, signatureInputTypes(doc, el, out.type))) {
-                    return fail('No preview for "' + name + '" \u2014 closure-modifier nodes (BSDF/EDF/VDF in and out) can\u2019t be compiled for preview.');
-                }
-                return wrapAsSurface(srcRef, out.type, name);
-            };
-
-            // Preview a (collapsed) nodegraph via its first viewable output.
-            const previewNodegraph = (g) => {
-                const gName = elName(g);
-                const outs = vecToArray(safe(() => g.getOutputs(), []))
-                    .filter((o) => !/^__pv_/.test(elName(o)));
-                if (!outs.length) return fail('Nodegraph "' + gName + '" has no outputs to preview.');
-                const pick = outs.find((o) => COLOR_VIEWABLE.indexOf(elType(o)) !== -1) || outs[0];
-                return wrapAsSurface({ nodegraph: gName, output: elName(pick) }, elType(pick), gName);
-            };
-
-            // What a connectable element (an <output>, or an <input> used as
-            // a pass-through) points AT — chasing an interfacename hop (an
-            // output that reads through the enclosing graph's own interface
-            // pin) down to the underlying node/nodegraph tap. `container` is
-            // the enclosing nodegraph when `containerName` is set (needed to
-            // resolve interfacename); null/'' means the document root, where
-            // interfacename cannot occur.
-            const resolveConnSrc = (container, containerName, el) => {
-                let cur = el, hops = 0;
-                while (cur && hops++ < 8) {
-                    const nn = elAttr(cur, 'nodename');
-                    const ng = elAttr(cur, 'nodegraph');
-                    const ifn = elAttr(cur, 'interfacename');
-                    const out = elAttr(cur, 'output');
-                    if (nn) return { nodename: nn, output: out || null };
-                    if (ng) return { nodegraph: ng, output: out || null };
-                    if (ifn && containerName && container) {
-                        cur = safe(() => container.getInput(ifn), null);
-                        continue;
-                    }
-                    return null;
-                }
-                return null;
-            };
-
-            // Preview a graph-boundary <output> pseudo-node: whatever feeds
-            // it, wrapped exactly like previewing that source directly.
-            const previewOutput = (container, containerName, o) => {
-                const name = elName(o);
-                const type = elType(o);
-                if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
-                if (containerName) {
-                    return wrapAsSurface({ nodegraph: containerName, output: name }, type, name);
-                }
-                const srcRef = resolveConnSrc(container, containerName, o);
-                if (!srcRef) return fail('"' + name + '" has no upstream connection to preview.');
-                return wrapAsSurface(srcRef, type, name);
-            };
-
-            // Preview a graph-boundary interface <input> pseudo-node: a flat
-            // swatch of its literal value (or of what it's wired to, for the
-            // rarer case an interface input itself carries a connection). A
-            // transient `constant` node carries the value into the same
-            // wrapAsSurface pipeline every other preview uses.
-            const previewInterfaceInput = (container, containerName, inp) => {
-                const name = elName(inp);
-                const type = elType(inp);
-                if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
-                const srcRef = resolveConnSrc(container, containerName, inp);
-                if (srcRef) {
-                    if (containerName && srcRef.nodename) {
-                        // The connection target is graph-internal (a plain
-                        // node name); tap it through a transient output on
-                        // that graph, same as previewNode's containerName
-                        // branch, since a root-level nodename= can't resolve
-                        // a node that lives inside a nodegraph.
-                        const g = container;
-                        const oName = typeof g.createValidChildName === 'function'
-                            ? safe(() => g.createValidChildName('__pv_out'), '__pv_out') : '__pv_out';
-                        const o = safe(() => g.addOutput(oName, type), null);
-                        if (!o) return fail('Could not tap "' + name + '" for the preview.');
-                        temps.push({ container: g, name: oName });
-                        safe(() => { o.setAttribute('nodename', srcRef.nodename); return true; }, false);
-                        if (srcRef.output) safe(() => { o.setAttribute('output', srcRef.output); return true; }, false);
-                        return wrapAsSurface({ nodegraph: containerName, output: oName }, type, name);
-                    }
-                    return wrapAsSurface(srcRef, type, name);
-                }
-                const val = safe(() => (inp.getValueString ? inp.getValueString() : ''), '') || elAttr(inp, 'value');
-                const constEl = addTempNode('constant', '__pv_const', type);
-                if (!constEl) return fail('Could not build the preview graph (constant).');
-                const valInput = ensureTypedInput(doc, constEl, 'value', type);
-                if (valInput && val) mxWriteValue(valInput, val, type);
-                return wrapAsSurface({ nodename: elName(constEl) }, type, name);
-            };
-
-            if (target && target.id) {
-                const tScope = target.scope || '';
-                const name = target.id.slice(2);
-                if (target.id.indexOf('g:') === 0) {
-                    const g = safe(() => doc.getNodeGraph(name), null);
-                    if (g) return previewNodegraph(g);
-                } else if (target.id.indexOf('n:') === 0) {
-                    const container = tScope ? safe(() => doc.getNodeGraph(tScope), null) : doc;
-                    const el = container ? safe(() => container.getNode(name), null) : null;
-                    if (el) return previewNode(container, tScope, el);
-                } else if (target.id.indexOf('o:') === 0) {
-                    const container = tScope ? safe(() => doc.getNodeGraph(tScope), null) : doc;
-                    const o = container ? safe(() => container.getOutput(name), null) : null;
-                    if (o) return previewOutput(container, tScope, o);
-                } else if (target.id.indexOf('i:') === 0) {
-                    // Interface inputs only exist inside a nodegraph scope.
-                    const g = tScope ? safe(() => doc.getNodeGraph(tScope), null) : null;
-                    const inp = g ? safe(() => g.getInput(name), null) : null;
-                    if (inp) return previewInterfaceInput(g, tScope, inp);
-                }
-                // Stale target (new document, renamed scope, ...) → default.
-                return buildPreviewRenderable(parsed, null);
-            }
-
-            // Document default: the surface shader, else the material
-            // itself, else the first node that can be found.
-            const r = findDocRenderable(doc);
-            if (r) return ok(r, elName(r));
-            const nodes = vecToArray(safe(() => doc.getNodes(), []))
-                .filter((n) => !/^__pv_/.test(elName(n)));
-            const mat = nodes.find((n) => elType(n) === 'material');
-            if (mat) return ok(mat, elName(mat));
-            if (nodes.length) return previewNode(doc, '', nodes[0]);
-            for (const g of vecToArray(safe(() => doc.getNodeGraphs(), []))) {
-                if (elAttr(g, 'nodedef')) continue;
-                if (parsed.implGraphNames && parsed.implGraphNames.has(elName(g))) continue;
-                return previewNodegraph(g);
-            }
-            return fail('Nothing to preview yet \u2014 add a node (Tab) or drop a .mtlx.');
-        };
-
-        // Square shaderball preview of the CURRENT preview target — the
-        // selected node, else the last selected one, else the document
-        // default — rendered with the SAME createMtlxRenderView pipeline
-        // as the docs page. Re-inits whenever the target, the document,
-        // or a committed parameter edit (docRev) changes.
-        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay }) {
-            const canvasRef = React.useRef(null);
-            // Mirrors NodeGraphApp's activeRef — pauses the render loop while
-            // a future multi-view shell hides this view without unmounting it.
-            const activeRef = React.useRef(active);
-            activeRef.current = active;
-            const [error, setError] = React.useState(null);
-            const [notice, setNotice] = React.useState(null);
-            const [loading, setLoading] = React.useState(true);
-            const [label, setLabel] = React.useState('');
-            // Last rendered frame, kept around so the preview doesn't flash
-            // back to blank/checker while a docRev-triggered rebuild is in
-            // flight — the new view starts every filename uniform on the
-            // checker texture until bindDroppedTextures resolves it (see
-            // TEXTURE_CACHE above), and even a cache hit still needs a
-            // render view to exist first.
-            const lastFrameRef = React.useRef(null);
-            const [lastFrame, setLastFrame] = React.useState(null);
-
-            React.useEffect(() => {
-                let mounted = true;
-                let viewHandle = null;
-                setLastFrame(lastFrameRef.current);
-                (async () => {
-                    setLoading(true); setError(null); setNotice(null);
-                    try {
-                        const { mx, gen, genContext, lightData } = await getMxEnv();
-                        if (!mounted) return;
-                        const built = buildPreviewRenderable(parsed, target);
-                        if (!built.renderable) {
-                            setLabel('');
-                            setNotice(built.notice || 'This document has nothing to preview.');
-                            setLoading(false);
-                            setLastFrame(null);
-                            lastFrameRef.current = null;
-                            if (canvasRef.current) {
-                                const c = canvasRef.current;
-                                const w = c.width, h = c.height;
-                                c.width = 0; c.height = 0;
-                                c.width = w; c.height = h;
-                            }
-                            return;
-                        }
-                        setLabel(built.label || '');
-                        // The canvas may need a frame to mount after a
-                        // notice/error row from the previous target.
-                        let canvas = canvasRef.current;
-                        if (!canvas) {
-                            await new Promise((r) => requestAnimationFrame(r));
-                            canvas = canvasRef.current;
-                            if (!canvas || !mounted) { built.cleanup(); return; }
-                        }
-                        let view = null;
-                        try {
-                            view = await createMtlxRenderView({
-                                canvas, mx, gen, genContext, renderable: built.renderable, lightData,
-                                label: built.label || parsed.label,
-                                needsLighting: true,
-                                geomName: 'shaderball',
-                                autoRotate: false,
-                                envBackground: false,
-                                // The preview is square now — pull the camera
-                                // in so the shaderball fills the frame.
-                                cameraDistance: 2.55,
-                                isMounted: () => mounted,
-                                isActive: () => activeRef.current,
-                                debugKind: 'graph-preview',
-                            });
-                        } finally {
-                            // The '__pv_*' wrappers only exist for shader
-                            // generation — remove them before anything can
-                            // rebuild the graph from the live document.
-                            built.cleanup();
-                        }
-                        if (!view) return;
-                        if (!mounted) { view.dispose(); return; }
-                        viewHandle = view;
-                        if (viewRef) viewRef.current = view;
-                        // Bind any dropped texture files onto the shader's
-                        // filename uniforms (same pass as the viewer). Missing
-                        // references keep the built-in checker texture.
-                        const rep = bindDroppedTextures(view, fileMap || {});
-                        if (rep.missing.length) {
-                            console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
-                        }
-                        setLoading(false);
-                        setLastFrame(null);
-                    } catch (e) {
-                        if (!mounted) return;
-                        setLoading(false);
-                        setLastFrame(null);
-                        const msg = String((e && e.message) || e);
-                        if (/Could not find a matching implementation/i.test(msg)) {
-                            setNotice('No preview \u2014 this node has no WebGL (essl) implementation in the MaterialX libraries.');
-                        } else {
-                            setError(msg);
-                        }
-                    }
-                })();
-                return () => {
-                    if (viewRef) viewRef.current = null;
-                    mounted = false;
-                    if (viewHandle) {
-                        // Grab the last-drawn frame before tearing the view
-                        // down so the NEXT run (see setLastFrame above) can
-                        // paint it over the checker-texture gap instead of
-                        // showing a blank/flashing canvas.
-                        try {
-                            const shot = viewHandle.snapshot && viewHandle.snapshot();
-                            if (shot) lastFrameRef.current = shot;
-                        } catch (e) { /* best-effort — keep the previous frame */ }
-                        viewHandle.dispose();
-                    }
-                };
-            }, [parsed, target, docRev, fileMap]);
-
-            return (
-                <div className="relative flex-none w-full aspect-square border-b border-gray-700 bg-gray-900/60">
-                    <canvas ref={canvasRef} className="block w-full h-full" />
-                    {loading && lastFrame && !notice && !error && (
-                        // Hold the previous frame over the canvas while the
-                        // view rebuilds \u2014 otherwise the checker-texture
-                        // placeholder (and blank canvas) flash for a beat on
-                        // every committed parameter edit.
-                        <img src={lastFrame} className="absolute inset-0 w-full h-full object-cover pointer-events-none" alt="" />
-                    )}
-                    {loading && !notice && !error && (
-                        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 animate-pulse pointer-events-none bg-gray-900/40">
-                            Rendering material {'\u2026'}
-                        </div>
-                    )}
-                    {notice && (
-                        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 px-3 text-center bg-gray-900/60">
-                            {notice}
-                        </div>
-                    )}
-                    {error && (
-                        <div className="absolute inset-0 overflow-y-auto custom-scrollbar text-[10px] text-red-300 bg-red-950/80 px-2 py-1 break-words">
-                            {error}
-                        </div>
-                    )}
-                    {/* Rendered last so it stacks above the loading/notice/
-                        error overlays regardless of z-index ties (item 10's
-                        pin toggle, passed in by the caller). */}
-                    {overlay}
-                </div>
-            );
-        }
-
-        // ---- Tab quick-add: the standard-library node catalog -------------
-
-        // One entry per stdlib node category (name, group, signature
-        // groups), built once from the loaded library.
-        // One nodedef → its raw info: name, resolved output type, the input
-        // list (name/type/default — inheritance-resolved via
-        // getActiveInputs, so a versioned nodedef that only overrides a
-        // couple of defaults still reports its FULL port list), and version
-        // metadata. A category with several nodedefs (add, mix, …) can vary
-        // along two independent axes — see groupSignatures below, which
-        // tells a genuine type SIGNATURE apart from a mere VERSION of the
-        // same signature (standard_surface 1.0.1 / 1.0.0: identical ports,
-        // different defaults).
-        const nodeDefInfo = (def) => {
-            const seen = new Set();
-            const inputs = [];
-            const defIns = vecToArray(safe(() => def.getActiveInputs(), []))
-                .concat(vecToArray(safe(() => def.getInputs(), [])));
-            for (const dIn of defIns) {
-                const nm = elName(dIn);
-                if (!nm || seen.has(nm)) continue;
-                seen.add(nm);
-                inputs.push({
-                    name: nm, type: elType(dIn),
-                    value: safe(() => (dIn.getValueString ? dIn.getValueString() : ''), '') || elAttr(dIn, 'value'),
-                });
-            }
-            // Modern nodedefs declare their type on <output> children only.
-            const outTypes = vecToArray(safe(() => def.getActiveOutputs(), [])).map(elType).filter(Boolean);
-            const type = elType(def)
-                || (outTypes.length === 1 ? outTypes[0] : (outTypes.length ? 'multioutput' : ''));
-            const outLabel = type === 'multioutput' ? outTypes.join(' + ') : type;
-            return {
-                name: elName(def), type, outLabel, inputs,
-                version: safe(() => def.getVersionString(), '') || '',
-                isDefaultVersion: !!safe(() => def.getDefaultVersion(), false),
-                sig: (inputs.map((i) => i.type).join(', ') || '\u2014') + ' \u2192 ' + (outLabel || '?'),
-            };
-        };
-
-        // Deduped, order-preserving token list \u2014 "color3, color3, float"
-        // becomes "color3, float" \u2014 used for the compact signature label
-        // (task 7) exactly like the docs page's uniqTypeTokens.
-        const uniqTokens = (arr) => {
-            const seen = new Set();
-            const out = [];
-            arr.forEach((t) => { if (t && !seen.has(t)) { seen.add(t); out.push(t); } });
-            return out;
-        };
-
-        // A TYPE-SIGNATURE key \u2014 the ordered input types plus the
-        // resolved output type \u2014 independent of version. Two nodedefs
-        // sharing this key are the SAME signature at different versions;
-        // nodedefs with different keys are genuinely different signatures
-        // (mix: float vs color3 vs \u2026).
-        const sigKeyOf = (d) => d.type + '|' + d.inputs.map((i) => i.type).join(',');
-
-        // Group a category's nodedefs into one entry per TYPE SIGNATURE,
-        // each carrying every VERSION of that signature:
-        //   { key, type, outLabel, inputs, inSummary, ambiguous, versions }
-        // `inputs`/`outLabel` describe the DEFAULT (or first) version \u2014
-        // what applySignature retypes/reconciles against; `versions` is
-        // sorted default-first, then by version string descending.
-        // Ambiguity (the output type alone can't resolve which nodedef to
-        // use) is a SIGNATURE-level concern, never a version-level one.
-        const groupSignatures = (defs) => {
-            const byKey = {};
-            const order = [];
-            for (const d of defs) {
-                const key = sigKeyOf(d);
-                if (!byKey[key]) { byKey[key] = []; order.push(key); }
-                byKey[key].push(d);
-            }
-            const groups = order.map((key) => {
-                const versions = byKey[key].slice().sort((a, b) => {
-                    if (a.isDefaultVersion !== b.isDefaultVersion) return a.isDefaultVersion ? -1 : 1;
-                    return b.version.localeCompare(a.version, undefined, { numeric: true });
-                });
-                const rep = versions[0];
-                return {
-                    key, type: rep.type, outLabel: rep.outLabel, inputs: rep.inputs,
-                    inSummary: uniqTokens(rep.inputs.map((i) => i.type)).join(', '),
-                    full: rep.sig, versions,
-                };
-            });
-            const byType = {};
-            groups.forEach((g) => { byType[g.type] = (byType[g.type] || 0) + 1; });
-            groups.forEach((g) => { g.ambiguous = byType[g.type] > 1; });
-            return groups;
-        };
-
-        let nodeCatalogPromise = null;
-        const buildNodeCatalog = () => {
-            if (!nodeCatalogPromise) {
-                nodeCatalogPromise = getMxEnv().then(({ stdlib }) => {
-                    const byCat = {};
-                    for (const def of vecToArray(safe(() => stdlib.getNodeDefs(), []))) {
-                        const cat = safe(() => def.getNodeString(), '');
-                        if (!cat) continue;
-                        const group = safe(() => def.getNodeGroup(), '') || '';
-                        const e = byCat[cat] || (byCat[cat] = { category: cat, group, defs: [] });
-                        if (!e.group && group) e.group = group;
-                        e.defs.push(nodeDefInfo(def)); // library order = the canonical one
-                    }
-                    return Object.keys(byCat).sort().map((k) => {
-                        const e = byCat[k];
-                        e.signatures = groupSignatures(e.defs);
-                        return e;
-                    });
-                });
-                nodeCatalogPromise.catch(() => { nodeCatalogPromise = null; }); // allow retry
-            }
-            return nodeCatalogPromise;
-        };
-
-        // Every keyboard shortcut and mouse interaction currently live in
-        // the editor — kept as one list so it can't silently drift from
-        // reality; update it alongside whatever handler it documents.
-        const KEYBINDS = [
-            { keys: 'Click', desc: 'Select a node — opens the parameter panel and the preview' },
-            { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection' },
-            { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee' },
-            { keys: 'Middle-drag', desc: 'Pan the canvas' },
-            { keys: 'Drag a node', desc: 'Move it (Auto Layout re-lays out afterward if it’s on)' },
-            { keys: 'Drag between ports', desc: 'Connect an output to an input' },
-            { keys: 'Drag an edge end off', desc: 'Disconnect it' },
-            { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope' },
-            { keys: 'Delete', desc: 'Delete the selected node(s), or disconnect the selected edge' },
-            { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)' },
-            { keys: 'F', desc: 'Fit the whole graph in view' },
-            { keys: 'A', desc: 'Re-run the automatic layout once' },
-            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs)' },
-            { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)' },
-            { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)' },
-            { keys: 'Ctrl/Cmd + G', desc: 'Encapsulate the selected nodes into a nodegraph' },
-            { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit' },
-            { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo' },
-            { keys: 'Esc', desc: 'Close the add-node search, or exit full screen' },
-            { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page' },
-        ];
-
-        function KeybindsHelp({ onClose, active = true }) {
-            React.useEffect(() => {
-                const onKey = (e) => { if (!active) return; if (e.key === 'Escape') onClose(); };
-                window.addEventListener('keydown', onKey);
-                return () => window.removeEventListener('keydown', onKey);
-            }, [onClose, active]);
-            return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <div className="text-sm font-bold text-gray-100">Keyboard shortcuts</div>
-                            <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-4 py-3">
-                            <table className="w-full text-[11px] font-mono">
-                                <tbody>
-                                    {KEYBINDS.map((k) => (
-                                        <tr key={k.keys} className="align-top">
-                                            <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
-                                            <td className="py-1 text-gray-300">{k.desc}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        // In-tab docs viewer: opens index.html?embed=1#/<lib>/<group>/<name>
-        // in an iframe instead of a new tab. Stays MOUNTED while closed (just
-        // hidden) so the iframe keeps its state warm across re-opens; the src
-        // is only navigated imperatively when the requested URL changes.
-        function DocsDialog({ url, fullUrl, label, open, onClose, active = true }) {
-            const iframeRef = React.useRef(null);
-            const lastUrlRef = React.useRef(null);
-            const openRef = React.useRef(open);
-            openRef.current = open;
-            const [frameLoaded, setFrameLoaded] = React.useState(false);
-
-            // Tell the embed page whether it's visible so it can pause its WebGL
-            // render loop while hidden (display:none does not stop rAF).
-            const postVisibility = (visible) => {
-                const iframe = iframeRef.current;
-                if (!iframe || !iframe.contentWindow) return;
-                try { iframe.contentWindow.postMessage({ type: 'mtlx-embed-visible', visible: !!visible }, '*'); } catch (e) { /* best-effort */ }
-            };
-
-            React.useEffect(() => {
-                const onKey = (e) => { if (active && open && e.key === 'Escape') onClose(); };
-                window.addEventListener('keydown', onKey);
-                return () => window.removeEventListener('keydown', onKey);
-            }, [open, onClose, active]);
-
-            React.useEffect(() => { postVisibility(open); }, [open]);
-
-            React.useEffect(() => {
-                const iframe = iframeRef.current;
-                if (!iframe || !url) return;
-                if (!lastUrlRef.current) {
-                    iframe.src = url;
-                } else if (url !== lastUrlRef.current) {
-                    try {
-                        // Same-document (hash-only) navigation: the embed page
-                        // swaps content in place — no reload, no `load` event —
-                        // so the previous loaded state stays valid; don't reset.
-                        iframe.contentWindow.location.replace(url);
-                    } catch (err) {
-                        // Full reload fallback — this WILL fire `load`.
-                        setFrameLoaded(false);
-                        iframe.src = url;
-                    }
-                }
-                lastUrlRef.current = url;
-            }, [url]);
-
-            return (
-                <div className={'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70' + (open ? '' : ' hidden')}
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">{label}</span>
-                            <div className="flex items-center gap-2">
-                                <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
-                                    className="text-gray-400 hover:text-gray-200 leading-none text-sm px-1">{'↗'}</a>
-                                <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                            </div>
-                        </div>
-                        <div className="relative flex-1 min-h-0">
-                            <iframe ref={iframeRef} title="Node documentation"
-                                className="absolute inset-0 w-full h-full border-0 bg-gray-950"
-                                onLoad={() => { setFrameLoaded(true); postVisibility(openRef.current); }} />
-                            {!frameLoaded && (
-                                <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 animate-pulse">
-                                    {'Loading documentation…'}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        // View-only XML dialog (item 8's "Document" button): shows the
-        // current document exactly as Export would write it, without
-        // triggering a download — a quick way to eyeball or copy the raw
-        // MaterialX. `xml` is computed once by the caller when the dialog
-        // opens (not on every render). Same backdrop/Esc/stopPropagation
-        // contract as KeybindsHelp/DocsDialog above.
-        function XmlDialog({ xml, open, onClose }) {
-            const [copied, setCopied] = React.useState(false);
-            const copyTimerRef = React.useRef(null);
-            React.useEffect(() => {
-                const onKey = (e) => { if (open && e.key === 'Escape') onClose(); };
-                window.addEventListener('keydown', onKey);
-                return () => window.removeEventListener('keydown', onKey);
-            }, [open, onClose]);
-            React.useEffect(() => () => {
-                if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-            }, []);
-            // Syntax highlighting via highlight.js (lazy-loaded per the
-            // graph view's manifest in js/shell.jsx — see VIEW_DEPS.graph).
-            // Purely cosmetic: if the CDN script hasn't landed yet, failed
-            // to load, or throws for any reason, fall back to the plain
-            // <pre>{xml}</pre> text below rather than showing a blank/
-            // broken dialog.
-            const highlighted = React.useMemo(() => {
-                if (typeof window === 'undefined' || !window.hljs || typeof window.hljs.highlight !== 'function') return null;
-                try {
-                    return window.hljs.highlight(xml, { language: 'xml' }).value;
-                } catch (e) {
-                    return null;
-                }
-            }, [xml]);
-            if (!open) return null;
-
-            // navigator.clipboard needs a secure context; some browsers also
-            // reject it outside a "fresh" user gesture. execCommand via a
-            // throwaway textarea is the fallback for both cases.
-            const copyXml = async () => {
-                let ok = false;
-                try {
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        await navigator.clipboard.writeText(xml);
-                        ok = true;
-                    }
-                } catch (e) { ok = false; }
-                if (!ok) {
-                    try {
-                        const ta = document.createElement('textarea');
-                        ta.value = xml;
-                        ta.style.position = 'fixed';
-                        ta.style.top = '-1000px';
-                        ta.style.opacity = '0';
-                        document.body.appendChild(ta);
-                        ta.focus();
-                        ta.select();
-                        ok = document.execCommand('copy');
-                        document.body.removeChild(ta);
-                    } catch (e) { ok = false; }
-                }
-                if (!ok) return;
-                setCopied(true);
-                if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-                copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
-            };
-
-            return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Document</span>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={copyXml}
-                                    title="Copy the XML to the clipboard"
-                                    className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
-                                        + (copied
-                                            ? 'bg-green-600/70 border-green-500 text-white'
-                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
-                                >
-                                    <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
-                                    <span>{copied ? 'Copied' : 'Copy'}</span>
-                                </button>
-                                <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                            </div>
-                        </div>
-                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">
-                            {highlighted != null
-                                ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
-                                : xml}
-                        </pre>
-                    </div>
-                </div>
-            );
-        }
-
-        // Validation popup (item 9's "Validate" button): a defensive,
-        // best-effort check over the CURRENT document. `result` is computed
-        // by the caller (in a useEffect gated on validateOpen) so it stays
-        // fresh across re-opens without recomputing on every render; this
-        // component only renders whatever it was handed.
-        function ValidateDialog({ result, open, onClose }) {
-            React.useEffect(() => {
-                const onKey = (e) => { if (open && e.key === 'Escape') onClose(); };
-                window.addEventListener('keydown', onKey);
-                return () => window.removeEventListener('keydown', onKey);
-            }, [open, onClose]);
-            if (!open) return null;
-            return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Validate</span>
-                            <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
-                            {!result && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
-                            {result && result.kind === 'valid' && (
-                                <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
-                            )}
-                            {result && result.kind === 'invalid' && (
-                                <div>
-                                    <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
-                                    {result.issues && result.issues.length > 0 && (
-                                        <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
-                                            {result.issues.map((s, i) => <li key={i}>{s}</li>)}
-                                        </ul>
-                                    )}
-                                </div>
-                            )}
-                            {result && result.kind === 'unavailable' && (
-                                <div className="text-gray-400">Validation is not available in this build.</div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        // The Tab search palette: type-to-filter over the catalog,
-        // arrows + Enter to add, Esc (or Tab again, or clicking away)
-        // to close.
-        // Value types offered for a new interface input/output — every
-        // scalar/aggregate MaterialX data type plus the shader-ish ones a
-        // nodegraph's boundary can carry.
-        const IFACE_VALUE_TYPES = ['boolean', 'color3', 'color4', 'filename', 'float', 'integer',
-            'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
-            'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
-
-        // filterMode/filterType power the port-dot double-click flow (item
-        // 4): filterMode 'in' means the new node must be able to FEED the
-        // port that was double-clicked (match on OUTPUT type, same as the
-        // plain type-filter dropdown); 'out' means the new node must be able
-        // to CONSUME it (match on some INPUT's type instead). null/'' is the
-        // normal Tab/button-triggered flow, where the user drives the
-        // dropdown themselves.
-        function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
-            const [q, setQ] = React.useState('');
-            const [typeFilter, setTypeFilter] = React.useState(filterType || '');
-            const [hi, setHi] = React.useState(0);
-            const inputRef = React.useRef(null);
-            const listRef = React.useRef(null);
-            // Second step for the two synthetic "interface input"/"output"
-            // rows below — picking one doesn't add anything yet, it swaps
-            // the palette body to this small name+type form.
-            const [ifaceDraft, setIfaceDraft] = React.useState(null); // { kind, name, type }
-            const nameRef = React.useRef(null);
-            React.useEffect(() => {
-                const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0);
-                return () => clearTimeout(t);
-            }, []);
-            React.useEffect(() => {
-                if (!ifaceDraft) return;
-                const t = setTimeout(() => { if (nameRef.current) nameRef.current.focus(); }, 0);
-                return () => clearTimeout(t);
-            }, [!!ifaceDraft]);
-            // Distinct output types present across the whole catalog, for
-            // the type-filter dropdown next to the search box.
-            const typeOptions = React.useMemo(() => {
-                const s = new Set();
-                (catalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
-                return Array.from(s).sort();
-            }, [catalog]);
-            const items = React.useMemo(() => {
-                const s = q.trim().toLowerCase();
-                const synth = [];
-                if (ifaceMode) {
-                    if (!s || 'interface input'.indexOf(s) !== -1 || 'input'.indexOf(s) !== -1) {
-                        synth.push({ synthetic: 'iface-input', category: 'interface input' });
-                    }
-                    if (!s || 'output'.indexOf(s) !== -1) {
-                        synth.push({ synthetic: 'iface-output', category: 'output' });
-                    }
-                }
-                if (!catalog) return synth;
-                let pool = catalog;
-                if (typeFilter) {
-                    pool = filterMode === 'out'
-                        // The double-clicked port is an OUTPUT: the new node
-                        // must be able to consume it, i.e. have some INPUT
-                        // of that type.
-                        ? pool.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
-                        // Default (including filterMode 'in'): the new node
-                        // must produce that type as its OUTPUT.
-                        : pool.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
-                }
-                const match = s ? pool.filter((c) =>
-                    c.category.toLowerCase().indexOf(s) !== -1 ||
-                    (c.group || '').toLowerCase().indexOf(s) !== -1) : pool;
-                const rank = (c) => {
-                    if (!s) return 2;
-                    const n = c.category.toLowerCase();
-                    if (n === s) return 0;
-                    if (n.indexOf(s) === 0) return 1;
-                    if (n.indexOf(s) !== -1) return 2;
-                    return 3; // matched on the group only
-                };
-                return synth.concat(match.slice()
-                    .sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category))
-                    .slice(0, 60));
-            }, [catalog, q, ifaceMode, typeFilter, filterMode]);
-            React.useEffect(() => { setHi(0); }, [q]);
-            React.useEffect(() => { // keep the highlighted row in view
-                const el = listRef.current && listRef.current.children[hi];
-                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
-            }, [hi, items]);
-            const pick = (c) => {
-                if (c.synthetic) setIfaceDraft({ kind: c.synthetic, name: '', type: 'color3' });
-                else onPick(c, typeFilter);
-            };
-            const confirmIface = () => {
-                if (!ifaceDraft) return;
-                onAddInterface(ifaceDraft.kind, ifaceDraft.name, ifaceDraft.type);
-                onClose();
-            };
-            const onKeyDown = (e) => {
-                if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(items.length - 1, 0))); }
-                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-                else if (e.key === 'Enter') { e.preventDefault(); if (items[hi]) pick(items[hi]); }
-                else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); onClose(); }
-            };
-            const onDraftKeyDown = (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); confirmIface(); }
-                else if (e.key === 'Escape') { e.preventDefault(); setIfaceDraft(null); }
-            };
-            return (
-                <div className="absolute inset-0 z-40" onMouseDown={onClose}>
-                    <div
-                        className="absolute left-1/2 -translate-x-1/2 top-16 w-[22rem] max-w-[90%] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
-                        onMouseDown={(e) => e.stopPropagation()}
-                    >
-                        {ifaceDraft ? (
-                            <div onKeyDown={onDraftKeyDown}>
-                                <div className="px-3 py-2 border-b border-gray-700 text-[11px] text-gray-400 italic">
-                                    New {ifaceDraft.kind === 'iface-input' ? 'interface input' : 'output'}
-                                </div>
-                                <div className="px-3 py-2.5 space-y-2">
-                                    <input
-                                        ref={nameRef}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-                                        placeholder={'name (optional — auto)'}
-                                        value={ifaceDraft.name}
-                                        spellCheck={false}
-                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { name: e.target.value }))}
-                                    />
-                                    <select
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
-                                        value={ifaceDraft.type}
-                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { type: e.target.value }))}
-                                    >
-                                        {IFACE_VALUE_TYPES.map((t) => (
-                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                        ))}
-                                    </select>
-                                    <div className="flex items-center gap-2 pt-0.5">
-                                        <button
-                                            onClick={confirmIface}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors"
-                                        >Add</button>
-                                        <button
-                                            onClick={() => setIfaceDraft(null)}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                        >Back</button>
-                                    </div>
-                                </div>
-                                <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
-                                    Enter add {'·'} Esc back
-                                </div>
-                            </div>
-                        ) : (<React.Fragment>
-                        <div className="flex items-stretch border-b border-gray-700">
-                            <input
-                                ref={inputRef}
-                                className="flex-1 min-w-0 bg-gray-900 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
-                                placeholder={filterMode ? 'Add a connected node…' : 'Add a node — type to search…'}
-                                value={q}
-                                spellCheck={false}
-                                onChange={(e) => setQ(e.target.value)}
-                                onKeyDown={onKeyDown}
-                            />
-                            <select
-                                className="flex-none w-24 bg-gray-900 border-l border-gray-700 px-1.5 text-[11px] font-mono text-gray-300 rounded-none focus:outline-none focus:border-blue-500 disabled:opacity-70"
-                                value={typeFilter}
-                                title={filterMode
-                                    ? ('Locked to the port you double-clicked (' + typeFilter + ')')
-                                    : 'Filter by output type'}
-                                disabled={!!filterMode}
-                                onChange={(e) => setTypeFilter(e.target.value)}
-                            >
-                                <option value="">Any type</option>
-                                {typeOptions.map((t) => (
-                                    <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar">
-                            {!catalog && !items.length && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500 animate-pulse">Loading the node library {'…'}</div>
-                            )}
-                            {catalog && !items.length && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500">No node matches {'“'}{q}{'”'}.</div>
-                            )}
-                            {items.map((c, i) => (
-                                <button
-                                    key={(c.synthetic || 'n') + ':' + c.category}
-                                    onMouseEnter={() => setHi(i)}
-                                    onClick={() => pick(c)}
-                                    className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                        + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
-                                >
-                                    {c.synthetic ? (
-                                        <React.Fragment>
-                                            <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
-                                            <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">interface</span>
-                                        </React.Fragment>
-                                    ) : (
-                                        <React.Fragment>
-                                            <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(typeFilter || (c.signatures[0] || {}).type || '') }} />
-                                            <span className="truncate">{c.category}</span>
-                                            {c.signatures.length > 1 && (
-                                                <span className="ml-auto flex-none text-[9px] text-gray-500" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
-                                            )}
-                                            {c.group && <span className={(c.signatures.length > 1 ? '' : 'ml-auto ') + 'flex-none text-[9px] text-gray-500 uppercase tracking-wider'}>{c.group}</span>}
-                                        </React.Fragment>
-                                    )}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
-                            {'↑↓'} select {'·'} Enter add {'·'} Esc close
-                        </div>
-                        </React.Fragment>)}
-                    </div>
-                </div>
-            );
-        }
-
-        // "0.8, 0.8, 0.8" (color3/color4) → CSS color for a preview swatch;
-        // null when the value doesn't parse.
-        // ---- Typed parameter controls --------------------------------------
-        // Mirrors the docs-page node previewer: color3/4 → color picker +
-        // per-channel spinners (both speak LINEAR 0-1; rgbToHex/hexToRgb are
-        // a plain byte↔float map, no sRGB transfer); vectorN → per-component
-        // spinners; float/integer → spinner (+ slider when the nodedef
-        // declares a UI range); enums → dropdowns; boolean → checkbox;
-        // strings/filenames → text committed on blur/Enter.
-        const VEC_SIZE = { color3: 3, color4: 4, vector2: 2, vector3: 3, vector4: 4 };
-        const parseComps = (s, n) => {
-            const parts = String(s || '').split(',').map((x) => parseFloat(x));
-            const out = [];
-            for (let i = 0; i < n; i++) out.push(isFinite(parts[i]) ? parts[i] : 0);
-            return out;
-        };
-        const numStr = (x) => {
-            const n = Number(x);
-            return isFinite(n) ? String(parseFloat(n.toFixed(6))) : '0';
-        };
-        const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter((x) => x.length);
-
-        // One parameter row. Connected inputs show — and jump to — the node
-        // feeding them. Unconnected ones edit the literal value. Text-ish
-        // fields commit on blur or Enter; the structured controls (picker,
-        // spinners, sliders) commit through a short debounce, because every
-        // commit writes the document and recompiles the shader — per-tick
-        // commits while dragging a slider would thrash the generator.
-        // Continuous controls also fire onLive per input tick for a GPU-side
-        // live preview, while the debounced commit owns the document write.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
-            const [draft, setDraft] = React.useState(inp.value || '');
-            React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
-            // Raw per-component TEXT for vector/color inputs — kept separate
-            // from the numeric `comps` derived below so the <input>'s value
-            // is always exactly what the user typed (see commentary at the
-            // vecN branch of control() for why this matters for caret pos).
-            const [compText, setCompText] = React.useState(
-                () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr)
-            );
-            React.useEffect(() => {
-                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr));
-            }, [nodeId, inp.name, inp.value]);
-            const onCommitRef = React.useRef(onCommit);
-            onCommitRef.current = onCommit;
-            const inpValRef = React.useRef(inp.value || '');
-            inpValRef.current = inp.value || '';
-            const timerRef = React.useRef(null);
-            const pendingRef = React.useRef(null);
-            const flush = () => {
-                if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-                if (pendingRef.current !== null && pendingRef.current !== inpValRef.current) {
-                    onCommitRef.current(pendingRef.current);
-                }
-                pendingRef.current = null;
-            };
-            const commitSoon = (v) => {
-                setDraft(v);
-                if (onLive) onLive(v);
-                pendingRef.current = v;
-                if (timerRef.current) clearTimeout(timerRef.current);
-                timerRef.current = setTimeout(flush, 300);
-            };
-            // Like commitSoon, but the DRAFT shown to the user (`raw`, e.g.
-            // the exact text just typed, possibly "-", "1.", "") can differ
-            // from the VALUE that gets committed to the document (`v`, a
-            // canonicalized number string) — controlled numeric <input>s
-            // reset their caret to the end whenever `.value` is reassigned
-            // to something other than what's currently displayed, so
-            // reformatting on every keystroke makes backspace unusable.
-            const commitSoonRaw = (raw, v) => {
-                setDraft(raw);
-                if (onLive) onLive(v);
-                pendingRef.current = v;
-                if (timerRef.current) clearTimeout(timerRef.current);
-                timerRef.current = setTimeout(flush, 300);
-            };
-            const commitNow = (v) => { setDraft(v); pendingRef.current = v; flush(); };
-            React.useEffect(() => flush, []); // unmount: don't drop a pending edit
-            const commit = () => { flush(); if (draft !== (inp.value || '')) onCommit(draft); };
-
-            const vecN = VEC_SIZE[inp.type] || 0;
-            const isColor = inp.type === 'color3' || inp.type === 'color4';
-            const enumNames = splitList(inp.enumNames);
-            const enumValues = splitList(inp.enumValues);
-            const boxCls = 'bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none';
-
-            // color3/color4 VALUE inputs can also carry a colorspace, but
-            // it's rarely touched — the picker starts collapsed and only
-            // auto-expands when the instance (or a signature/version swap)
-            // already authors one, so it doesn't compete for space with
-            // the swatch on every color row.
-            const [csOpen, setCsOpen] = React.useState(!!inp.colorspace);
-            React.useEffect(() => { setCsOpen(!!inp.colorspace); }, [nodeId, inp.name, inp.colorspace]);
-
-            // Shared colorspace <select> row — used by the filename branch
-            // (always) and the color3/color4 branch (behind the collapse
-            // toggle) so the two don't drift apart.
-            const colorspaceRow = () => (
-                <div className="flex items-center gap-1.5">
-                    <span className="flex-none text-[9px] text-gray-500" title="Color space of the image — baked into the generated shader">colorspace</span>
-                    <select
-                        className={'flex-1 min-w-0 px-1 py-0.5 ' + boxCls}
-                        value={inp.colorspace || ''}
-                        onChange={(e) => { if (onSetColorspace) onSetColorspace(e.target.value); }}
-                    >
-                        <option value="">{'(default' + (inp.defColorspace ? ': ' + inp.defColorspace : '') + ')'}</option>
-                        {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                    </select>
-                </div>
-            );
-
-            const textField = () => (
-                <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 ' + boxCls}
-                    value={draft}
-                    placeholder="(no value)"
-                    spellCheck={false}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') { commit(); e.target.blur(); }
-                        if (e.key === 'Escape') { setDraft(inp.value || ''); e.target.blur(); }
-                    }}
-                />
-            );
-
-            const control = () => {
-                // Enum → dropdown. Numeric enums map names onto enumvalues
-                // (or the index); string enums: the name IS the value.
-                if (enumNames.length) {
-                    const isNum = inp.type === 'integer' || inp.type === 'float';
-                    const useValues = isNum && enumValues.length === enumNames.length;
-                    const valOf = (i) => useValues ? enumValues[i] : (isNum ? String(i) : enumNames[i]);
-                    let sel = -1;
-                    for (let i = 0; i < enumNames.length; i++) {
-                        if (isNum ? parseFloat(valOf(i)) === parseFloat(draft) : valOf(i) === draft) { sel = i; break; }
-                    }
-                    return (
-                        <select
-                            className={'w-full px-1.5 py-0.5 ' + boxCls}
-                            value={sel === -1 ? '' : String(sel)}
-                            onChange={(e) => {
-                                const i = parseInt(e.target.value, 10);
-                                if (!isNaN(i)) commitNow(valOf(i));
-                            }}
-                        >
-                            {sel === -1 && <option value="">({draft === '' ? 'unset' : draft})</option>}
-                            {enumNames.map((nm, i) => <option key={i} value={String(i)}>{nm}</option>)}
-                        </select>
-                    );
-                }
-                if (inp.type === 'boolean') {
-                    return (
-                        <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5 accent-blue-500"
-                            checked={draft === 'true'}
-                            onChange={(e) => commitNow(e.target.checked ? 'true' : 'false')}
-                        />
-                    );
-                }
-                // color3/4 and vector2/3/4: per-component spinners; colors
-                // additionally get the native picker on the RGB part.
-                if (vecN) {
-                    // Numeric components (for the color picker + committing)
-                    // derive from the RAW per-component text, not the other
-                    // way around — see compText's declaration up top.
-                    const comps = compText.map((s) => {
-                        const n = parseFloat(s);
-                        return isFinite(n) ? n : 0;
-                    });
-                    const setComp = (i, raw) => {
-                        const nv = compText.slice();
-                        nv[i] = raw;
-                        setCompText(nv);
-                        const n = parseFloat(raw);
-                        if (isNaN(n)) return; // e.g. "", "-", "1." — keep displaying, don't commit yet
-                        const clamped = isColor ? Math.max(0, Math.min(1, n)) : n;
-                        const nums = nv.map((s2, j) => {
-                            if (j === i) return clamped;
-                            const n2 = parseFloat(s2);
-                            return isFinite(n2) ? n2 : 0;
-                        });
-                        // `draft` (the whole-vector string) isn't bound to
-                        // any input's value directly anymore — it only
-                        // needs to hold the canonical committed value.
-                        commitSoon(nums.map(numStr).join(', '));
-                    };
-                    const chan = isColor ? 'RGBA' : 'XYZW';
-                    const fmt = (n) => Math.round(Number(n) * 1000) / 1000; // display only
-                    return (
-                        <div>
-                            <div className="flex items-center gap-1">
-                                {isColor && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setCsOpen((v) => !v)}
-                                        title="Colorspace…"
-                                        className="flex-none text-gray-400 hover:text-gray-200 text-[10px] leading-none px-0.5 self-stretch"
-                                    >{csOpen ? '▾' : '▸'}</button>
-                                )}
-                                {isColor && (
-                                    <input
-                                        type="color"
-                                        className="w-full self-stretch h-6 min-w-0 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
-                                        title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
-                                        value={rgbToHex(comps.slice(0, 3))}
-                                        onChange={(e) => {
-                                            const nv = hexToRgb(e.target.value);
-                                            if (vecN === 4) nv.push(comps[3]);
-                                            setCompText(nv.map(numStr));
-                                            commitSoon(nv.map(numStr).join(', '));
-                                        }}
-                                    />
-                                )}
-                                {compText.map((s, i) => (
-                                    <input
-                                        key={i} type="number"
-                                        min={isColor ? 0 : undefined} max={isColor ? 1 : undefined}
-                                        step={0.01}
-                                        title={chan[i] + (isColor ? ' (linear, 0-1)' : '')}
-                                        className={'w-full min-w-0 px-1 py-0.5 ' + boxCls}
-                                        value={s}
-                                        onChange={(e) => setComp(i, e.target.value)}
-                                        onBlur={(e) => {
-                                            const v = String(fmt(comps[i]));
-                                            e.target.value = v;
-                                            const nv = compText.slice();
-                                            nv[i] = v;
-                                            setCompText(nv);
-                                        }}
-                                    />
-                                ))}
-                            </div>
-                            {isColor && csOpen && (
-                                <div className="mt-1">{colorspaceRow()}</div>
-                            )}
-                        </div>
-                    );
-                }
-                if (inp.type === 'float' || inp.type === 'integer') {
-                    const lo = parseFloat(inp.uisoftmin !== '' && inp.uisoftmin != null ? inp.uisoftmin : inp.uimin);
-                    const hi = parseFloat(inp.uisoftmax !== '' && inp.uisoftmax != null ? inp.uisoftmax : inp.uimax);
-                    const hasRange = isFinite(lo) && isFinite(hi) && hi > lo;
-                    const step = inp.type === 'integer' ? 1 : (hasRange ? Math.max((hi - lo) / 200, 0.001) : 0.01);
-                    const parse = (s) => (inp.type === 'integer' ? parseInt(s, 10) : parseFloat(s));
-                    const cur = parseFloat(draft);
-                    const curN = isFinite(cur) ? cur : 0;
-                    return (
-                        <div className="flex items-center gap-1.5">
-                            {hasRange && (
-                                <input
-                                    type="range" className="flex-1 min-w-0 accent-blue-500"
-                                    min={lo} max={hi} step={step}
-                                    value={Math.max(lo, Math.min(hi, curN))}
-                                    onChange={(e) => commitSoon(numStr(parse(e.target.value)))}
-                                />
-                            )}
-                            <input
-                                type="number"
-                                className={(hasRange ? 'w-16 flex-none' : 'w-full min-w-0') + ' px-1 py-0.5 ' + boxCls}
-                                step={step} value={draft}
-                                onChange={(e) => {
-                                    const raw = e.target.value;
-                                    const n = parse(raw);
-                                    // Bind to the raw typed text, not a
-                                    // reparsed/reformatted number — see
-                                    // commitSoonRaw's comment. Intermediate
-                                    // states like "", "-", "1." stay
-                                    // displayed but don't commit.
-                                    if (!isNaN(n)) commitSoonRaw(raw, numStr(n));
-                                    else setDraft(raw);
-                                }}
-                                onBlur={() => setDraft(numStr(curN))}
-                            />
-                        </div>
-                    );
-                }
-                // Filename → image picker (joins the session's file map,
-                // bound onto the shader like a dropped file) + editable
-                // name field, with the COLORSPACE select right underneath.
-                // Colorspace is a codegen decision (the CMS bakes the
-                // transform into the shader), so picking one recompiles.
-                if (inp.type === 'filename') {
-                    return (
-                        <div className="space-y-1">
-                            <div className="flex items-center gap-1.5">
-                                <label
-                                    className="flex-none text-[10px] px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer"
-                                    title="Load an image file — it joins the session files and binds by name"
-                                >
-                                    Choose{'\u2026'}
-                                    <input
-                                        type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-                                        className="hidden"
-                                        onChange={(e) => {
-                                            const f = e.target.files && e.target.files[0];
-                                            if (f && onPickFile) onPickFile(f);
-                                            // Clear so re-picking the SAME file
-                                            // still fires a change event.
-                                            e.target.value = '';
-                                        }}
-                                    />
-                                </label>
-                                {textField()}
-                            </div>
-                            {/* Colorspace is only meaningful when the node's
-                                resolved output is color3/color4 — never hide
-                                it, though, when the instance already
-                                authors one (e.g. after a signature/version
-                                swap that no longer resolves to a color
-                                output but left the attribute in place). */}
-                            {(inp.colorManaged || inp.colorspace) && colorspaceRow()}
-                        </div>
-                    );
-                }
-                // string / matrices / everything else.
-                return <div className="flex items-center gap-1.5">{textField()}</div>;
-            };
-
-            return (
-                <div className="py-1.5 border-b border-gray-700/60 last:border-b-0">
-                    <div className="flex items-center gap-1.5 text-[11px] font-mono">
-                        <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(inp.type) }} />
-                        <span className="text-gray-300 truncate">{inp.name}</span>
-                        <span className="ml-auto flex-none text-[9px]" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
-                    </div>
-                    {inp.connected ? (
-                        sourceId ? (
-                            <button
-                                onClick={() => onJump(sourceId)}
-                                title="Select and show the node this input is connected to"
-                                className="mt-1 ml-3.5 max-w-[calc(100%-0.875rem)] text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate block"
-                            >{'\u2190'} from {sourceId.slice(2)}</button>
-                        ) : (
-                            <div className="mt-1 ml-3.5 text-[10px] text-gray-500 font-mono">{'\u2190'} set by connection</div>
-                        )
-                    ) : readOnly ? (
-                        <div className="mt-1 ml-3.5 text-[11px] text-gray-400 font-mono truncate" title={inp.value}>
-                            {inp.value !== '' ? inp.value : '\u2014'}
-                        </div>
-                    ) : (
-                        <div className="mt-1 ml-3.5">{control()}</div>
-                    )}
-                </div>
-            );
-        }
-
-        // Descriptors + layout → React Flow nodes/edges.
-        // Input display, per node: 'authored' (only inputs written in the
-        // document — "set") or 'all' (plus every nodedef input at its
-        // default value). Connected inputs are ALWAYS visible so no edge
-        // ever dangles.
-        const visiblePortsFor = (all, mode) => all.filter((inp) =>
-            inp.connected || mode === 'all' || inp.authored !== false);
-
-        const toFlow = (descs, edges, opts) => {
-            const o = opts || {};
-            const mode = o.portMode || 'authored';
-            const connectedIn = new Set(edges.map((e) => e.target + '|' + e.targetHandle));
-            // Filter BEFORE layout: nodeHeight() counts the rows that will
-            // actually render. data.inputs = the visible rows; data.allInputs
-            // = everything (the parameter panel edits from the full list).
-            const shaped = descs.map((d) => {
-                const withConn = d.inputs.map((inp) => Object.assign({}, inp, {
-                    connected: connectedIn.has(d.id + '|in:' + inp.name),
-                }));
-                return Object.assign({}, d, {
-                    allInputs: withConn,
-                    inputs: visiblePortsFor(withConn, mode),
-                    portMode: mode,
-                    onOpen: (d.kind === 'nodegraph' && o.onOpenScope)
-                        ? () => o.onOpenScope(d.name) : undefined,
-                    onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,
-                    onPortAdd: o.onPortAdd,
-                });
-            });
-            const posOf = layoutScope(shaped, edges);
-            const nodes = shaped.map((d) => ({
-                id: d.id,
-                type: 'mtlx',
-                position: posOf[d.id],
-                data: d,
-            }));
-            const rfEdges = edges.map(toRfEdge);
-            return { nodes, edges: rfEdges };
-        };
-
-        // One flow edge, styled by its MaterialX type — used by toFlow AND by
-        // onConnect (live drag-connections), so the two always look identical.
-        const toRfEdge = (e) => ({
-            id: e.id, source: e.source, sourceHandle: e.sourceHandle,
-            target: e.target, targetHandle: e.targetHandle,
-            data: { type: e.type || '' },
-            style: { stroke: typeColor(e.type), strokeWidth: 1.5 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: typeColor(e.type), width: 14, height: 14 },
-        });
-
-        // The attributes that make an <input> (or <output>) element a
-        // CONNECTION in MaterialX. Clearing all of them = disconnecting.
-        const CONN_ATTRS = ['interfacename', 'nodegraph', 'nodename', 'output'];
 
         // ---- App ---------------------------------------------------------------
 
@@ -2685,46 +575,7 @@
             // ---- Page-wide drag & drop (identical to the viewer's) ----
             const ingestRef = React.useRef(ingest);
             ingestRef.current = ingest;
-            React.useEffect(() => {
-                let depth = 0;
-                const hasFiles = (e) => {
-                    const t = e.dataTransfer && e.dataTransfer.types;
-                    return !!t && Array.from(t).indexOf('Files') >= 0;
-                };
-                const onEnter = (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    e.preventDefault();
-                    depth += 1;
-                    setDragOver(true);
-                };
-                const onOver = (e) => { if (!activeRef.current) return; if (hasFiles(e)) e.preventDefault(); };
-                const onLeave = (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    depth = Math.max(0, depth - 1);
-                    if (depth === 0) setDragOver(false);
-                };
-                const onDropAnywhere = async (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    e.preventDefault();
-                    depth = 0;
-                    setDragOver(false);
-                    const map = await readDroppedItems(e.dataTransfer);
-                    guardedIngestRef.current(map);
-                };
-                window.addEventListener('dragenter', onEnter);
-                window.addEventListener('dragover', onOver);
-                window.addEventListener('dragleave', onLeave);
-                window.addEventListener('drop', onDropAnywhere);
-                return () => {
-                    window.removeEventListener('dragenter', onEnter);
-                    window.removeEventListener('dragover', onOver);
-                    window.removeEventListener('dragleave', onLeave);
-                    window.removeEventListener('drop', onDropAnywhere);
-                };
-            }, []);
+            useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver });
 
             // ---- Receive a material handed off from another view (item 6's
             // counterpart to the "Send to Editor" buttons in viewer-app.jsx
@@ -3122,7 +973,7 @@
                 if (parsed) {
                     const name = nodeId.slice(2);
                     const container = scope
-                        ? safe(() => parsed.doc.getNodeGraph(scope), null)
+                        ? mxSafe(() => parsed.doc.getNodeGraph(scope), null)
                         : parsed.doc;
                     let wrote = false;
                     let fastType = '';
@@ -3131,18 +982,18 @@
                         // carries the value. mxWriteValue writes the raw
                         // attribute — setValueString would RETYPE the input
                         // to 'string' in this wasm build (see mtlx-engine).
-                        const target = container ? safe(() => container.getInput(name), null) : null;
-                        wrote = !!target && safe(() => { mxWriteValue(target, newValue, elType(target)); return true; }, false);
-                        fastType = target ? safe(() => elType(target), '') : '';
+                        const target = container ? mxSafe(() => container.getInput(name), null) : null;
+                        wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, mxElType(target)); return true; }, false);
+                        fastType = target ? mxSafe(() => mxElType(target), '') : '';
                     } else {
                         let el = null;
-                        if (nodeId.indexOf('n:') === 0 && container) el = safe(() => container.getNode(name), null);
-                        else if (nodeId.indexOf('g:') === 0) el = safe(() => parsed.doc.getNodeGraph(name), null);
+                        if (nodeId.indexOf('n:') === 0 && container) el = mxSafe(() => container.getNode(name), null);
+                        else if (nodeId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
                         if (revertsToDefault) {
                             // Drop the authored element (when there is one) —
                             // the nodedef default takes over again.
-                            const target = el ? safe(() => el.getInput(inputName), null) : null;
-                            wrote = !target || safe(() => { el.removeChild(inputName); return true; }, false);
+                            const target = el ? mxSafe(() => el.getInput(inputName), null) : null;
+                            wrote = !target || mxSafe(() => { el.removeChild(inputName); return true; }, false);
                             fastType = fMeta.type;
                         } else if (el) {
                             // Create-or-fetch with a GUARANTEED type, then
@@ -3152,8 +1003,8 @@
                             // ("Could not find a nodedef for node …").
                             const t = (fMeta && fMeta.type) || '';
                             const target = ensureTypedInput(parsed.doc, el, inputName, t);
-                            wrote = !!target && safe(() => { mxWriteValue(target, newValue, t || elType(target)); return true; }, false);
-                            fastType = t || (target ? safe(() => elType(target), '') : '');
+                            wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, t || mxElType(target)); return true; }, false);
+                            fastType = t || (target ? mxSafe(() => mxElType(target), '') : '');
                         }
                     }
                     if (wrote) {
@@ -3210,15 +1061,15 @@
                 const type = inputType || 'filename';
                 const name = nodeId.slice(2);
                 const container = scope
-                    ? safe(() => parsed.doc.getNodeGraph(scope), null)
+                    ? mxSafe(() => parsed.doc.getNodeGraph(scope), null)
                     : parsed.doc;
                 let target = null;
                 if (nodeId.indexOf('i:') === 0) {
-                    target = container ? safe(() => container.getInput(name), null) : null;
+                    target = container ? mxSafe(() => container.getInput(name), null) : null;
                 } else {
                     let el = null;
-                    if (nodeId.indexOf('n:') === 0 && container) el = safe(() => container.getNode(name), null);
-                    else if (nodeId.indexOf('g:') === 0) el = safe(() => parsed.doc.getNodeGraph(name), null);
+                    if (nodeId.indexOf('n:') === 0 && container) el = mxSafe(() => container.getNode(name), null);
+                    else if (nodeId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
                     // The input must exist to carry the attribute (an empty
                     // value is valid); created with a guaranteed type.
                     if (el) target = ensureTypedInput(parsed.doc, el, inputName, type);
@@ -3228,20 +1079,20 @@
                     return;
                 }
                 if (cs) {
-                    safe(() => {
+                    mxSafe(() => {
                         if (typeof target.setColorSpace === 'function') target.setColorSpace(cs);
                         else target.setAttribute('colorspace', cs);
                         return true;
                     }, false);
                 } else {
-                    safe(() => { target.removeAttribute('colorspace'); return true; }, false);
+                    mxSafe(() => { target.removeAttribute('colorspace'); return true; }, false);
                     // An input element now carrying NOTHING reverts outright
                     // (same rule as severConnection / value reverts).
-                    const bare = !safe(() => target.getAttribute('value'), '')
-                        && !CONN_ATTRS.some((a) => safe(() => target.getAttribute(a), ''));
+                    const bare = !mxSafe(() => target.getAttribute('value'), '')
+                        && !CONN_ATTRS.some((a) => mxSafe(() => target.getAttribute(a), ''));
                     if (bare && nodeId.indexOf('n:') === 0) {
-                        const par = safe(() => target.getParent(), null);
-                        if (par) safe(() => { par.removeChild(inputName); return true; }, false);
+                        const par = mxSafe(() => target.getParent(), null);
+                        if (par) mxSafe(() => { par.removeChild(inputName); return true; }, false);
                     }
                 }
                 setDocRev((r) => r + 1);
@@ -3379,7 +1230,7 @@
             React.useEffect(() => {
                 if (!validateOpen) return;
                 setValidateResult(null);
-                setValidateResult(safe(() => {
+                setValidateResult(mxSafe(() => {
                     if (!parsed || !parsed.doc || typeof parsed.doc.validate !== 'function') {
                         return { kind: 'unavailable' };
                     }
@@ -3391,17 +1242,17 @@
                     }
                     if (ok) return { kind: 'valid' };
                     const issues = [];
-                    const nodes = vecToArray(safe(() => parsed.doc.getNodes(), []));
+                    const nodes = vecToArray(mxSafe(() => parsed.doc.getNodes(), []));
                     for (const n of nodes) {
-                        const nm = elName(n);
-                        for (const inp of vecToArray(safe(() => n.getInputs(), []))) {
-                            const nn = elAttr(inp, 'nodename');
-                            if (nn && !safe(() => parsed.doc.getNode(nn), null)) {
-                                issues.push(nm + '.' + elName(inp) + ' references missing node "' + nn + '"');
+                        const nm = mxElName(n);
+                        for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
+                            const nn = mxElAttr(inp, 'nodename');
+                            if (nn && !mxSafe(() => parsed.doc.getNode(nn), null)) {
+                                issues.push(nm + '.' + mxElName(inp) + ' references missing node "' + nn + '"');
                             }
-                            const ng = elAttr(inp, 'nodegraph');
-                            if (ng && !safe(() => parsed.doc.getNodeGraph(ng), null)) {
-                                issues.push(nm + '.' + elName(inp) + ' references missing nodegraph "' + ng + '"');
+                            const ng = mxElAttr(inp, 'nodegraph');
+                            if (ng && !mxSafe(() => parsed.doc.getNodeGraph(ng), null)) {
+                                issues.push(nm + '.' + mxElName(inp) + ' references missing nodegraph "' + ng + '"');
                             }
                         }
                     }
@@ -3417,7 +1268,7 @@
 
             // The container the current scope's elements live in.
             const scopeContainer = () => !parsed ? null
-                : (scope ? safe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc);
+                : (scope ? mxSafe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc);
 
             // The document ELEMENT that carries a connection's attributes —
             // the target <input>, or the <output> element itself for output
@@ -3428,14 +1279,14 @@
                 if (!c) return null;
                 const name = targetId.slice(2);
                 if (targetId.indexOf('o:') === 0) {
-                    return safe(() => c.getOutput(name), null) || safe(() => c.getChild(name), null);
+                    return mxSafe(() => c.getOutput(name), null) || mxSafe(() => c.getChild(name), null);
                 }
                 let el = null;
-                if (targetId.indexOf('n:') === 0) el = safe(() => c.getNode(name), null) || safe(() => c.getChild(name), null);
-                else if (targetId.indexOf('g:') === 0) el = safe(() => parsed.doc.getNodeGraph(name), null);
+                if (targetId.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
+                else if (targetId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
                 if (!el) return null;
                 const inputName = String(targetHandle || '').replace(/^in:/, '');
-                let inp = safe(() => el.getInput(inputName), null);
+                let inp = mxSafe(() => el.getInput(inputName), null);
                 if (!inp && create) {
                     const node = flow.nodes.find((n) => n.id === targetId);
                     const meta = node && (node.data.allInputs || node.data.inputs || [])
@@ -3449,9 +1300,9 @@
 
             const clearConnAttrs = (point) => {
                 for (const a of CONN_ATTRS) {
-                    if (!safe(() => point.getAttribute(a), '')) continue;
-                    const ok = safe(() => { point.removeAttribute(a); return true; }, false);
-                    if (!ok) safe(() => { point.setAttribute(a, ''); return true; }, false);
+                    if (!mxSafe(() => point.getAttribute(a), '')) continue;
+                    const ok = mxSafe(() => { point.removeAttribute(a); return true; }, false);
+                    if (!ok) mxSafe(() => { point.setAttribute(a, ''); return true; }, false);
                 }
             };
 
@@ -3464,11 +1315,11 @@
             const severConnection = (point, targetId) => {
                 clearConnAttrs(point);
                 if (String(targetId || '').indexOf('n:') !== 0) return;
-                if (safe(() => point.getAttribute('value'), '')) return;
-                if (safe(() => point.getAttribute('colorspace'), '')) return;
-                const par = safe(() => point.getParent(), null);
-                const nm = elName(point);
-                if (par && nm) safe(() => { par.removeChild(nm); return true; }, false);
+                if (mxSafe(() => point.getAttribute('value'), '')) return;
+                if (mxSafe(() => point.getAttribute('colorspace'), '')) return;
+                const par = mxSafe(() => point.getParent(), null);
+                const nm = mxElName(point);
+                if (par && nm) mxSafe(() => { par.removeChild(nm); return true; }, false);
             };
 
             // A port's type, read from the on-screen flow.
@@ -3531,10 +1382,10 @@
             const applySignature = (flowId, group) => {
                 if (!parsed || !group || String(flowId).indexOf('n:') !== 0) return;
                 const c = scopeContainer();
-                const el = c && safe(() => c.getNode(flowId.slice(2)), null);
+                const el = c && mxSafe(() => c.getNode(flowId.slice(2)), null);
                 if (!el) return;
                 const def = group.versions[0]; // the signature's default version
-                const oldType = elType(el);
+                const oldType = mxElType(el);
 
                 // The OLD nodedef's defaults, captured BEFORE retyping —
                 // collectPorts resolves el.getNodeDef() against the CURRENT
@@ -3546,17 +1397,17 @@
 
                 // Raw attribute write first — the binding's setType has
                 // produced wrong types in this build (see ensureTypedInput).
-                safe(() => { el.setAttribute('type', def.type); return true; }, false);
-                if (elType(el) !== def.type) {
-                    safe(() => { el.setType(def.type); return true; }, false);
+                mxSafe(() => { el.setAttribute('type', def.type); return true; }, false);
+                if (mxElType(el) !== def.type) {
+                    mxSafe(() => { el.setType(def.type); return true; }, false);
                 }
-                if (elType(el) !== def.type) { console.warn('node-graph: could not re-type ' + flowId); return; }
+                if (mxElType(el) !== def.type) { console.warn('node-graph: could not re-type ' + flowId); return; }
                 // Pin the exact nodedef when the output type alone is
                 // ambiguous; otherwise keep the document clean. Any version
                 // pinned to the OLD signature no longer applies.
-                if (group.ambiguous) safe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
-                else safe(() => { el.removeAttribute('nodedef'); return true; }, false);
-                safe(() => { el.removeAttribute('version'); return true; }, false);
+                if (group.ambiguous) mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                else mxSafe(() => { el.removeAttribute('nodedef'); return true; }, false);
+                mxSafe(() => { el.removeAttribute('version'); return true; }, false);
 
                 // Authored inputs: name+type matches survive UNLESS they're
                 // unconnected AND still equal the OLD default (untouched —
@@ -3565,16 +1416,16 @@
                 const wanted = {};
                 def.inputs.forEach((i) => { wanted[i.name] = i; });
                 const droppedInputs = new Set();
-                for (const inp of vecToArray(safe(() => el.getInputs(), []))) {
-                    const nm = elName(inp);
+                for (const inp of vecToArray(mxSafe(() => el.getInputs(), []))) {
+                    const nm = mxElName(inp);
                     const w = wanted[nm];
-                    if (w && elType(inp) === w.type) {
-                        const isWired = elAttr(inp, 'nodename') || elAttr(inp, 'nodegraph') || elAttr(inp, 'interfacename');
-                        const val = safe(() => (inp.getValueString ? inp.getValueString() : ''), '');
+                    if (w && mxElType(inp) === w.type) {
+                        const isWired = mxElAttr(inp, 'nodename') || mxElAttr(inp, 'nodegraph') || mxElAttr(inp, 'interfacename');
+                        const val = mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), '');
                         if (isWired || val !== oldDefault[nm]) continue; // customized or wired: keep as-is
                     }
                     droppedInputs.add(nm);
-                    safe(() => { el.removeChild(nm); return true; }, false);
+                    mxSafe(() => { el.removeChild(nm); return true; }, false);
                 }
                 // Output type changed → sever what this node fed.
                 const typeChanged = def.type !== oldType;
@@ -3594,7 +1445,7 @@
                 // nodedef resolves now), keeping position and port mode; drop
                 // the edges whose ports went away; revert downstream inputs.
                 const ports = collectPorts(el);
-                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: elType(el) }];
+                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: mxElType(el) }];
                 setFlow((prev) => {
                     const edges = prev.edges.filter((e) => {
                         if (e.target === flowId) {
@@ -3614,7 +1465,7 @@
                             if (n.id === flowId) {
                                 return Object.assign({}, n, {
                                     data: Object.assign({}, n.data, {
-                                        type: elType(el) || def.type,
+                                        type: mxElType(el) || def.type,
                                         allInputs: withConn,
                                         inputs: visiblePortsFor(withConn, mode),
                                         outputs: ports.outputs,
@@ -3645,15 +1496,15 @@
             const applyVersion = (flowId, versionDef) => {
                 if (!parsed || !versionDef || String(flowId).indexOf('n:') !== 0) return;
                 const c = scopeContainer();
-                const el = c && safe(() => c.getNode(flowId.slice(2)), null);
+                const el = c && mxSafe(() => c.getNode(flowId.slice(2)), null);
                 if (!el) return;
-                if (versionDef.isDefaultVersion) safe(() => { el.removeAttribute('version'); return true; }, false);
-                else safe(() => { el.setAttribute('version', versionDef.version); return true; }, false);
+                if (versionDef.isDefaultVersion) mxSafe(() => { el.removeAttribute('version'); return true; }, false);
+                else mxSafe(() => { el.setAttribute('version', versionDef.version); return true; }, false);
                 setDocRev((r) => r + 1);
                 markDirty();
 
                 const ports = collectPorts(el);
-                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: elType(el) }];
+                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: mxElType(el) }];
                 setFlow((prev) => {
                     const stillIn = new Set(prev.edges.filter((e) => e.target === flowId)
                         .map((e) => String(e.targetHandle || '').replace(/^in:/, '')));
@@ -3691,9 +1542,9 @@
                         clearConnAttrs(point);
                         const srcName = source.slice(2);
                         if (source.indexOf('i:') === 0) {
-                            safe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
+                            mxSafe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
                         } else {
-                            safe(() => {
+                            mxSafe(() => {
                                 point.setAttribute(source.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
                                 return true;
                             }, false);
@@ -3703,12 +1554,12 @@
                             const srcNode = flow.nodes.find((n) => n.id === source);
                             const outs = (srcNode && srcNode.data.outputs) || [];
                             if (outName && outs.length > 1) {
-                                safe(() => { point.setAttribute('output', outName); return true; }, false);
+                                mxSafe(() => { point.setAttribute('output', outName); return true; }, false);
                             }
                         }
                         // A connected input takes its value from the wire — a
                         // literal alongside it would make the document invalid.
-                        safe(() => { point.removeAttribute('value'); return true; }, false);
+                        mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                         setDocRev((r) => r + 1);
                         markDirty();
                     } else {
@@ -3771,7 +1622,7 @@
                 const checker = parsed && parsed.mx && typeof parsed.mx.isValidName === 'function'
                     ? parsed.mx.isValidName : null;
                 if (checker) {
-                    const r = safe(() => checker(name), null);
+                    const r = mxSafe(() => checker(name), null);
                     if (r !== null) return !!r;
                 }
                 return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
@@ -3787,7 +1638,7 @@
                 if (newName === oldName) return null; // unchanged — a no-op commit
                 const container = id.indexOf('g:') === 0 ? parsed.doc : scopeContainer();
                 if (!container) return null;
-                const existing = safe(() => container.getChild(newName), null);
+                const existing = mxSafe(() => container.getChild(newName), null);
                 if (existing) return 'A sibling element already has this name';
                 return null;
             };
@@ -3806,14 +1657,14 @@
 
                 const c = scopeContainer();
                 let el = null;
-                if (kind === 'n:' && c) el = safe(() => c.getNode(oldName), null) || safe(() => c.getChild(oldName), null);
-                else if (kind === 'g:') el = safe(() => parsed.doc.getNodeGraph(oldName), null) || safe(() => parsed.doc.getChild(oldName), null);
-                else if (kind === 'i:' && c) el = safe(() => c.getInput(oldName), null) || safe(() => c.getChild(oldName), null);
-                else if (kind === 'o:' && c) el = safe(() => c.getOutput(oldName), null) || safe(() => c.getChild(oldName), null);
+                if (kind === 'n:' && c) el = mxSafe(() => c.getNode(oldName), null) || mxSafe(() => c.getChild(oldName), null);
+                else if (kind === 'g:') el = mxSafe(() => parsed.doc.getNodeGraph(oldName), null) || mxSafe(() => parsed.doc.getChild(oldName), null);
+                else if (kind === 'i:' && c) el = mxSafe(() => c.getInput(oldName), null) || mxSafe(() => c.getChild(oldName), null);
+                else if (kind === 'o:' && c) el = mxSafe(() => c.getOutput(oldName), null) || mxSafe(() => c.getChild(oldName), null);
                 if (!el) return false;
 
-                const renamed = safe(() => { el.setName(newName); return true; }, false);
-                if (!renamed || elName(el) !== newName) {
+                const renamed = mxSafe(() => { el.setName(newName); return true; }, false);
+                if (!renamed || mxElName(el) !== newName) {
                     console.warn('node-graph: rename failed for "' + oldName + '" -> "' + newName + '" (' + flowId + ')');
                     return false;
                 }
@@ -3822,22 +1673,22 @@
                 // full set of elements that can carry a reference attribute.
                 const connectables = (container) => {
                     const out = [];
-                    for (const n of vecToArray(safe(() => container.getNodes(), []))) {
-                        out.push.apply(out, vecToArray(safe(() => n.getInputs(), [])));
+                    for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                        out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
                     }
-                    out.push.apply(out, vecToArray(safe(() => container.getOutputs(), [])));
+                    out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
                     return out;
                 };
 
                 if (kind === 'n:' && c) {
                     // Referrers live in the SAME container as the node.
                     for (const p of connectables(c)) {
-                        if (elAttr(p, 'nodename') === oldName) safe(() => { p.setAttribute('nodename', newName); return true; }, false);
+                        if (mxElAttr(p, 'nodename') === oldName) mxSafe(() => { p.setAttribute('nodename', newName); return true; }, false);
                     }
                 } else if (kind === 'g:') {
                     // Referrers to a nodegraph live at the DOC ROOT.
                     for (const p of connectables(parsed.doc)) {
-                        if (elAttr(p, 'nodegraph') === oldName) safe(() => { p.setAttribute('nodegraph', newName); return true; }, false);
+                        if (mxElAttr(p, 'nodegraph') === oldName) mxSafe(() => { p.setAttribute('nodegraph', newName); return true; }, false);
                     }
                     if (parsed.nodegraphs) { // scope dropdown
                         parsed.nodegraphs = parsed.nodegraphs.map((g) => (g === oldName ? newName : g));
@@ -3846,7 +1697,7 @@
                 } else if (kind === 'i:' && c) {
                     // Interface input referrers live inside the SAME graph.
                     for (const p of connectables(c)) {
-                        if (elAttr(p, 'interfacename') === oldName) safe(() => { p.setAttribute('interfacename', newName); return true; }, false);
+                        if (mxElAttr(p, 'interfacename') === oldName) mxSafe(() => { p.setAttribute('interfacename', newName); return true; }, false);
                     }
                 } else if (kind === 'o:' && scope !== '') {
                     // A nodegraph output — referenced from the doc root as
@@ -3854,8 +1705,8 @@
                     // (scope === '') isn't referenced by name from inside
                     // the document, so there's nothing to rewrite there.
                     for (const p of connectables(parsed.doc)) {
-                        if (elAttr(p, 'nodegraph') === scope && elAttr(p, 'output') === oldName) {
-                            safe(() => { p.setAttribute('output', newName); return true; }, false);
+                        if (mxElAttr(p, 'nodegraph') === scope && mxElAttr(p, 'output') === oldName) {
+                            mxSafe(() => { p.setAttribute('output', newName); return true; }, false);
                         }
                     }
                 }
@@ -3898,20 +1749,20 @@
                     const c = scopeContainer();
                     let removed = false;
                     if (id.indexOf('n:') === 0 && c) {
-                        removed = safe(() => { c.removeNode(name); return true; }, false)
-                            || safe(() => { c.removeChild(name); return true; }, false);
+                        removed = mxSafe(() => { c.removeNode(name); return true; }, false)
+                            || mxSafe(() => { c.removeChild(name); return true; }, false);
                     } else if (id.indexOf('g:') === 0) {
-                        removed = safe(() => { parsed.doc.removeNodeGraph(name); return true; }, false)
-                            || safe(() => { parsed.doc.removeChild(name); return true; }, false);
+                        removed = mxSafe(() => { parsed.doc.removeNodeGraph(name); return true; }, false)
+                            || mxSafe(() => { parsed.doc.removeChild(name); return true; }, false);
                         if (removed && parsed.nodegraphs) { // scope dropdown
                             parsed.nodegraphs = parsed.nodegraphs.filter((g) => g !== name);
                         }
                     } else if (id.indexOf('i:') === 0 && c) {
-                        removed = safe(() => { c.removeInput(name); return true; }, false)
-                            || safe(() => { c.removeChild(name); return true; }, false);
+                        removed = mxSafe(() => { c.removeInput(name); return true; }, false)
+                            || mxSafe(() => { c.removeChild(name); return true; }, false);
                     } else if (id.indexOf('o:') === 0 && c) {
-                        removed = safe(() => { c.removeOutput(name); return true; }, false)
-                            || safe(() => { c.removeChild(name); return true; }, false);
+                        removed = mxSafe(() => { c.removeOutput(name); return true; }, false)
+                            || mxSafe(() => { c.removeChild(name); return true; }, false);
                     }
                     if (removed) { setDocRev((r) => r + 1); markDirty(); }
                     else console.warn('node-graph: node removed on screen, but the document element could not be removed (' + id + ')');
@@ -3967,7 +1818,7 @@
                 setAddOpen(false);
                 if (!parsed) return null;
                 const doc = parsed.doc;
-                const container = scope ? safe(() => doc.getNodeGraph(scope), null) : doc;
+                const container = scope ? mxSafe(() => doc.getNodeGraph(scope), null) : doc;
                 if (!container) { setError('Cannot add a node: scope "' + scope + '" was not found.'); return null; }
                 let def = (entry.defs && entry.defs[0]) || null;
                 let pinNodedef = false;
@@ -3986,32 +1837,32 @@
                 const type = (def && def.type) || 'color3';
                 let name = entry.category + '1';
                 if (typeof container.createValidChildName === 'function') {
-                    name = safe(() => container.createValidChildName(name), name);
+                    name = mxSafe(() => container.createValidChildName(name), name);
                 } else {
                     let i = 1;
-                    while (safe(() => container.getChild(name), null)) name = entry.category + (++i);
+                    while (mxSafe(() => container.getChild(name), null)) name = entry.category + (++i);
                 }
-                const el = safe(() => container.addNode(entry.category, name, type), null);
+                const el = mxSafe(() => container.addNode(entry.category, name, type), null);
                 if (!el) { setError('Could not add a "' + entry.category + '" node.'); return null; }
                 if (pinNodedef && def) {
                     // A type hint was used to disambiguate — lock in that
                     // exact signature explicitly.
-                    safe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                    mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
                 } else if (def && def.ambiguous) {
                     // When several signatures share this output type, pin the
                     // exact one — otherwise MaterialX could resolve a sibling.
-                    safe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                    mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
                 }
                 // Descriptor → flow node, exactly the shape toFlow builds.
                 const ports = collectPorts(el);
-                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: elType(el) }];
+                if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: mxElType(el) }];
                 const id = 'n:' + name;
                 const withConn = ports.inputs.map((inp) => Object.assign({}, inp, { connected: false }));
                 // A fresh node starts with ALL inputs showing — every port is
                 // visible and connectable right away.
                 const mode = 'all';
                 const data = {
-                    id, kind: kindOfNode(el), name, category: entry.category, type: elType(el),
+                    id, kind: kindOfNode(el), name, category: entry.category, type: mxElType(el),
                     lib: ports.lib, group: ports.group,
                     allInputs: withConn,
                     inputs: visiblePortsFor(withConn, mode),
@@ -4038,8 +1889,8 @@
                 };
                 // Persist the drop position right away (same convention as
                 // onNodeDragStop), so a scope round-trip keeps it.
-                safe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
-                safe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
+                mxSafe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
+                mxSafe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
                 setFlow((prev) => ({
                     edges: prev.edges,
                     nodes: prev.nodes.concat([{ id, type: 'mtlx', position: pos, data }]),
@@ -4070,19 +1921,19 @@
                     // node's matching output.
                     const existingName = pending.nodeId.slice(2);
                     const existingEl = pending.nodeId.indexOf('g:') === 0
-                        ? safe(() => doc.getNodeGraph(existingName), null)
-                        : safe(() => created.container.getNode(existingName), null);
+                        ? mxSafe(() => doc.getNodeGraph(existingName), null)
+                        : mxSafe(() => created.container.getNode(existingName), null);
                     if (!existingEl) return;
                     point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
                     if (!point) return;
                     clearConnAttrs(point);
                     const outs = created.outputs || [];
                     const outMatch = outs.find((o) => o.type === pending.portType) || outs[0];
-                    safe(() => { point.setAttribute('nodename', created.name); return true; }, false);
+                    mxSafe(() => { point.setAttribute('nodename', created.name); return true; }, false);
                     if (outMatch && outMatch.name && outs.length > 1) {
-                        safe(() => { point.setAttribute('output', outMatch.name); return true; }, false);
+                        mxSafe(() => { point.setAttribute('output', outMatch.name); return true; }, false);
                     }
-                    safe(() => { point.removeAttribute('value'); return true; }, false);
+                    mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     targetFlowId = pending.nodeId;
                     targetInputName = pending.port;
                     srcId = created.id;
@@ -4101,9 +1952,9 @@
                         // A nodegraph interface input as source is a pin
                         // reference, not a node — same distinction onConnect
                         // makes.
-                        safe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
+                        mxSafe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
                     } else {
-                        safe(() => {
+                        mxSafe(() => {
                             point.setAttribute(pending.nodeId.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
                             return true;
                         }, false);
@@ -4112,10 +1963,10 @@
                         const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
                         const srcOuts = (srcNode && srcNode.data.outputs) || [];
                         if (pending.port && srcOuts.length > 1) {
-                            safe(() => { point.setAttribute('output', pending.port); return true; }, false);
+                            mxSafe(() => { point.setAttribute('output', pending.port); return true; }, false);
                         }
                     }
-                    safe(() => { point.removeAttribute('value'); return true; }, false);
+                    mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     targetFlowId = created.id;
                     targetInputName = inMatch.name;
                     srcId = pending.nodeId;
@@ -4163,22 +2014,22 @@
                 const base = (rawName && rawName.trim()) ? rawName.trim() : (kind === 'iface-input' ? 'input1' : 'output1');
                 let name = base;
                 if (typeof g.createValidChildName === 'function') {
-                    name = safe(() => g.createValidChildName(base), base);
+                    name = mxSafe(() => g.createValidChildName(base), base);
                 } else {
                     let i = 1;
-                    while (safe(() => g.getChild(name), null)) name = base + (++i);
+                    while (mxSafe(() => g.getChild(name), null)) name = base + (++i);
                 }
                 const el = kind === 'iface-input'
-                    ? safe(() => g.addInput(name, type), null)
-                    : safe(() => g.addOutput(name, type), null);
+                    ? mxSafe(() => g.addInput(name, type), null)
+                    : mxSafe(() => g.addOutput(name, type), null);
                 if (!el) { setError('Could not add the interface ' + (kind === 'iface-input' ? 'input' : 'output') + '.'); return; }
-                if (elType(el) !== type) {
-                    safe(() => {
+                if (mxElType(el) !== type) {
+                    mxSafe(() => {
                         if (typeof el.setType === 'function') el.setType(type);
                         else el.setAttribute('type', type);
                         return true;
                     }, false);
-                    if (elType(el) !== type) safe(() => { el.setAttribute('type', type); return true; }, false);
+                    if (mxElType(el) !== type) mxSafe(() => { el.setAttribute('type', type); return true; }, false);
                 }
 
                 const id = (kind === 'iface-input' ? 'i:' : 'o:') + name;
@@ -4212,8 +2063,8 @@
                     x: pos.x - NODE_W / 2,
                     y: pos.y - nodeHeight({ inputs: data.inputs, outputs: data.outputs }) / 2,
                 };
-                safe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
-                safe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
+                mxSafe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
+                mxSafe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
 
                 setDocRev((r) => r + 1);
                 markDirty();
@@ -4253,7 +2104,7 @@
                 const entries = [];
                 for (const id of ids) {
                     const name = id.slice(2);
-                    const el = safe(() => container.getNode(name), null);
+                    const el = mxSafe(() => container.getNode(name), null);
                     if (!el) continue;
                     const ports = collectPorts(el);
                     // Only what's actually authored: an edge (nodename/
@@ -4277,9 +2128,9 @@
                         });
                     const pos = flowPosById[id] || storedPos(el) || { x: 0, y: 0 };
                     entries.push({
-                        name, category: elCat(el), type: elType(el),
-                        nodedef: elAttr(el, 'nodedef') || '',
-                        version: elAttr(el, 'version') || '',
+                        name, category: mxElCat(el), type: mxElType(el),
+                        nodedef: mxElAttr(el, 'nodedef') || '',
+                        version: mxElAttr(el, 'version') || '',
                         pos, inputs,
                     });
                 }
@@ -4299,15 +2150,15 @@
                 for (const entry of clip.nodes) {
                     let newName = entry.name;
                     if (typeof container.createValidChildName === 'function') {
-                        newName = safe(() => container.createValidChildName(entry.name), entry.name);
+                        newName = mxSafe(() => container.createValidChildName(entry.name), entry.name);
                     } else {
                         let i = 1;
-                        while (safe(() => container.getChild(newName), null)) newName = entry.name + '_copy' + (i++);
+                        while (mxSafe(() => container.getChild(newName), null)) newName = entry.name + '_copy' + (i++);
                     }
-                    const el = safe(() => container.addNode(entry.category, newName, entry.type), null);
+                    const el = mxSafe(() => container.addNode(entry.category, newName, entry.type), null);
                     if (!el) continue;
-                    if (entry.nodedef) safe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
-                    if (entry.version) safe(() => { el.setAttribute('version', entry.version); return true; }, false);
+                    if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
+                    if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
                     nameMap[entry.name] = newName;
                     created.push({ el, entry, newName });
                 }
@@ -4322,16 +2173,16 @@
                         const target = ensureTypedInput(parsed.doc, el, inp.name, inp.type);
                         if (!target) continue;
                         if (inp.nodename && nameMap[inp.nodename]) {
-                            safe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
-                            if (inp.output) safe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            mxSafe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
+                            if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
                         } else if (inp.nodegraph && nameMap[inp.nodegraph]) {
-                            safe(() => { target.setAttribute('nodegraph', nameMap[inp.nodegraph]); return true; }, false);
-                            if (inp.output) safe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            mxSafe(() => { target.setAttribute('nodegraph', nameMap[inp.nodegraph]); return true; }, false);
+                            if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
                         } else if (inp.value !== '') {
-                            safe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
+                            mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                         }
                         if (inp.colorspace) {
-                            safe(() => {
+                            mxSafe(() => {
                                 if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
                                 else target.setAttribute('colorspace', inp.colorspace);
                                 return true;
@@ -4359,8 +2210,8 @@
                 for (const { el, entry } of created) {
                     const x = center.x + (entry.pos.x - cx);
                     const y = center.y + (entry.pos.y - cy);
-                    safe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
-                    safe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
+                    mxSafe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
+                    mxSafe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
                 }
                 setDocRev((r) => r + 1);
                 markDirty();
@@ -4406,8 +2257,8 @@
                 const nameSet = new Set(names);
                 try {
                     const doc = parsed.doc;
-                    const gName = safe(() => doc.createValidChildName('nodegraph1'), 'nodegraph1');
-                    const g = safe(() => doc.addNodeGraph(gName), null);
+                    const gName = mxSafe(() => doc.createValidChildName('nodegraph1'), 'nodegraph1');
+                    const g = mxSafe(() => doc.addNodeGraph(gName), null);
                     if (!g) { setError('Could not create a nodegraph.'); return; }
 
                     // Snapshot every selected node's full description BEFORE
@@ -4415,13 +2266,13 @@
                     // document state, and step 7 below removes these nodes.
                     const entries = [];
                     for (const name of names) {
-                        const el = safe(() => doc.getNode(name), null);
+                        const el = mxSafe(() => doc.getNode(name), null);
                         if (!el) continue;
                         const ports = collectPorts(el);
                         entries.push({
-                            name, category: elCat(el), type: elType(el),
-                            nodedef: elAttr(el, 'nodedef') || '',
-                            version: elAttr(el, 'version') || '',
+                            name, category: mxElCat(el), type: mxElType(el),
+                            nodedef: mxElAttr(el, 'nodedef') || '',
+                            version: mxElAttr(el, 'version') || '',
                             pos: storedPos(el) || { x: 0, y: 0 },
                             inputs: ports.inputs.filter((i) => i.authored !== false),
                         });
@@ -4432,12 +2283,12 @@
                     // name — a fresh container, so no collisions.
                     const inner = {};
                     for (const entry of entries) {
-                        const el = safe(() => g.addNode(entry.category, entry.name, entry.type), null);
+                        const el = mxSafe(() => g.addNode(entry.category, entry.name, entry.type), null);
                         if (!el) continue;
-                        if (entry.nodedef) safe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
-                        if (entry.version) safe(() => { el.setAttribute('version', entry.version); return true; }, false);
-                        safe(() => { el.setAttribute('xpos', String(entry.pos.x)); return true; }, false);
-                        safe(() => { el.setAttribute('ypos', String(entry.pos.y)); return true; }, false);
+                        if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
+                        if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
+                        mxSafe(() => { el.setAttribute('xpos', String(entry.pos.x)); return true; }, false);
+                        mxSafe(() => { el.setAttribute('ypos', String(entry.pos.y)); return true; }, false);
                         inner[entry.name] = el;
                     }
 
@@ -4452,40 +2303,40 @@
                             if (internalSrc) {
                                 const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                 if (!target) continue;
-                                safe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
-                                if (inp.output) safe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                mxSafe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
+                                if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
                                 continue;
                             }
                             const external = inp.nodename || inp.nodegraph || inp.interfacename;
                             if (external) {
                                 const pinBase = entry.name + '_' + inp.name;
-                                const pinName = safe(() => g.createValidChildName(pinBase), pinBase);
-                                const gin = safe(() => g.addInput(pinName, inp.type), null);
+                                const pinName = mxSafe(() => g.createValidChildName(pinBase), pinBase);
+                                const gin = mxSafe(() => g.addInput(pinName, inp.type), null);
                                 if (!gin) continue;
-                                if (elType(gin) !== inp.type) {
-                                    safe(() => {
+                                if (mxElType(gin) !== inp.type) {
+                                    mxSafe(() => {
                                         if (typeof gin.setType === 'function') gin.setType(inp.type);
                                         else gin.setAttribute('type', inp.type);
                                         return true;
                                     }, false);
-                                    if (elType(gin) !== inp.type) safe(() => { gin.setAttribute('type', inp.type); return true; }, false);
+                                    if (mxElType(gin) !== inp.type) mxSafe(() => { gin.setAttribute('type', inp.type); return true; }, false);
                                 }
-                                if (inp.nodename) safe(() => { gin.setAttribute('nodename', inp.nodename); return true; }, false);
-                                if (inp.nodegraph) safe(() => { gin.setAttribute('nodegraph', inp.nodegraph); return true; }, false);
-                                if (inp.output) safe(() => { gin.setAttribute('output', inp.output); return true; }, false);
+                                if (inp.nodename) mxSafe(() => { gin.setAttribute('nodename', inp.nodename); return true; }, false);
+                                if (inp.nodegraph) mxSafe(() => { gin.setAttribute('nodegraph', inp.nodegraph); return true; }, false);
+                                if (inp.output) mxSafe(() => { gin.setAttribute('output', inp.output); return true; }, false);
 
                                 const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                 if (!target) continue;
-                                safe(() => { target.removeAttribute('value'); return true; }, false);
-                                safe(() => { target.setAttribute('interfacename', pinName); return true; }, false);
+                                mxSafe(() => { target.removeAttribute('value'); return true; }, false);
+                                mxSafe(() => { target.setAttribute('interfacename', pinName); return true; }, false);
                                 continue;
                             }
                             if (inp.value !== '' && inp.value != null) {
                                 const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                 if (!target) continue;
-                                safe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
+                                mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                                 if (inp.colorspace) {
-                                    safe(() => {
+                                    mxSafe(() => {
                                         if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
                                         else target.setAttribute('colorspace', inp.colorspace);
                                         return true;
@@ -4511,19 +2362,19 @@
                         const outs = (srcNode && srcNode.data.outputs) || [];
                         const type = flowPortType(e.source, e.sourceHandle, true) || entries.find((en) => en.name === srcName).type;
                         const pinBase = srcName + '_out';
-                        const outPin = safe(() => g.createValidChildName(pinBase), pinBase);
-                        const gout = safe(() => g.addOutput(outPin, type), null);
+                        const outPin = mxSafe(() => g.createValidChildName(pinBase), pinBase);
+                        const gout = mxSafe(() => g.addOutput(outPin, type), null);
                         if (!gout) continue;
-                        if (elType(gout) !== type) {
-                            safe(() => {
+                        if (mxElType(gout) !== type) {
+                            mxSafe(() => {
                                 if (typeof gout.setType === 'function') gout.setType(type);
                                 else gout.setAttribute('type', type);
                                 return true;
                             }, false);
-                            if (elType(gout) !== type) safe(() => { gout.setAttribute('type', type); return true; }, false);
+                            if (mxElType(gout) !== type) mxSafe(() => { gout.setAttribute('type', type); return true; }, false);
                         }
-                        safe(() => { gout.setAttribute('nodename', srcName); return true; }, false);
-                        if (outName && outs.length > 1) safe(() => { gout.setAttribute('output', outName); return true; }, false);
+                        mxSafe(() => { gout.setAttribute('nodename', srcName); return true; }, false);
+                        if (outName && outs.length > 1) mxSafe(() => { gout.setAttribute('output', outName); return true; }, false);
                         outPins[key] = outPin;
                     }
 
@@ -4539,25 +2390,25 @@
                         const point = connectionPoint(e.target, e.targetHandle, true);
                         if (!point) continue;
                         clearConnAttrs(point);
-                        safe(() => { point.setAttribute('nodegraph', gName); return true; }, false);
-                        safe(() => { point.setAttribute('output', outPin); return true; }, false);
-                        safe(() => { point.removeAttribute('value'); return true; }, false);
+                        mxSafe(() => { point.setAttribute('nodegraph', gName); return true; }, false);
+                        mxSafe(() => { point.setAttribute('output', outPin); return true; }, false);
+                        mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     }
 
                     // 7: remove the original root nodes WITHOUT severing the
                     // references just rewired above — deleteNode() would
                     // sever them, so this does the raw removal itself.
                     for (const name of names) {
-                        safe(() => { doc.removeNode(name); return true; }, false)
-                            || safe(() => { doc.removeChild(name); return true; }, false);
+                        mxSafe(() => { doc.removeNode(name); return true; }, false)
+                            || mxSafe(() => { doc.removeChild(name); return true; }, false);
                     }
 
                     // 8: place the collapsed node at the selection centroid.
                     const xs = entries.map((en) => en.pos.x), ys = entries.map((en) => en.pos.y);
                     const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
                     const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
-                    safe(() => { g.setAttribute('xpos', String(cx)); return true; }, false);
-                    safe(() => { g.setAttribute('ypos', String(cy)); return true; }, false);
+                    mxSafe(() => { g.setAttribute('xpos', String(cx)); return true; }, false);
+                    mxSafe(() => { g.setAttribute('ypos', String(cy)); return true; }, false);
 
                     setDocRev((r) => r + 1);
                     markDirty();
@@ -4760,15 +2611,15 @@
                 for (const n of flow.nodes) {
                     const name = n.id.slice(2);
                     let el = null;
-                    if (n.id.indexOf('n:') === 0) el = safe(() => c.getNode(name), null) || safe(() => c.getChild(name), null);
-                    else if (n.id.indexOf('g:') === 0) el = safe(() => parsed.doc.getNodeGraph(name), null);
-                    else if (n.id.indexOf('i:') === 0) el = safe(() => c.getInput(name), null) || safe(() => c.getChild(name), null);
-                    else if (n.id.indexOf('o:') === 0) el = safe(() => c.getOutput(name), null) || safe(() => c.getChild(name), null);
+                    if (n.id.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
+                    else if (n.id.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                    else if (n.id.indexOf('i:') === 0) el = mxSafe(() => c.getInput(name), null) || mxSafe(() => c.getChild(name), null);
+                    else if (n.id.indexOf('o:') === 0) el = mxSafe(() => c.getOutput(name), null) || mxSafe(() => c.getChild(name), null);
                     if (!el) continue;
                     const x = Math.round((n.position.x / 240) * 10000) / 10000;
                     const y = Math.round((n.position.y / 240) * 10000) / 10000;
-                    safe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
-                    safe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                    mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
+                    mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
                     wrote = true;
                 }
                 if (wrote) markDirty();
@@ -4780,10 +2631,10 @@
                 if (!parsed) return null;
                 if (!scope) {
                     const r = findDocRenderable(parsed.doc);
-                    if (r) return 'n:' + elName(r);
-                    const mat = vecToArray(safe(() => parsed.doc.getNodes(), []))
-                        .find((n) => elType(n) === 'material');
-                    if (mat) return 'n:' + elName(mat);
+                    if (r) return 'n:' + mxElName(r);
+                    const mat = vecToArray(mxSafe(() => parsed.doc.getNodes(), []))
+                        .find((n) => mxElType(n) === 'material');
+                    if (mat) return 'n:' + mxElName(mat);
                 }
                 const first = flow.nodes.find((n) => n.id.indexOf('n:') === 0)
                     || flow.nodes.find((n) => n.id.indexOf('g:') === 0);
@@ -4852,7 +2703,7 @@
                 if (!cat) return null;
                 const seen = new Set();
                 const defs = [];
-                for (const def of vecToArray(safe(() => parsed.doc.getMatchingNodeDefs(cat), []))) {
+                for (const def of vecToArray(mxSafe(() => parsed.doc.getMatchingNodeDefs(cat), []))) {
                     const info = nodeDefInfo(def);
                     if (!info.name || seen.has(info.name)) continue;
                     seen.add(info.name);
@@ -4868,11 +2719,11 @@
             // that nodedef belongs to.
             const currentDefName = React.useMemo(() => {
                 if (!panelSigGroups) return '';
-                const c = scope ? safe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc;
-                const el = c && safe(() => c.getNode(displayNode.id.slice(2)), null);
+                const c = scope ? mxSafe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc;
+                const el = c && mxSafe(() => c.getNode(displayNode.id.slice(2)), null);
                 if (!el) return '';
                 const def = resolveVersionedNodeDef(el, parsed.doc);
-                return def ? elName(def) : '';
+                return def ? mxElName(def) : '';
             }, [panelSigGroups, parsed, scope, displayNode, docRev]);
             const currentSigGroup = React.useMemo(() => {
                 if (!panelSigGroups || !currentDefName) return null;
@@ -5261,7 +3112,7 @@
                                 render pipeline as the docs page. Square, and
                                 framed to fill. Re-renders on every committed
                                 parameter edit and on every target change. */}
-                            <NodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
+                            <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
                                 overlay={
                                     <button
                                         onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}

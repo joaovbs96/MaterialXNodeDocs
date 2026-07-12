@@ -178,6 +178,13 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/graph/model.jsx',
+            'js/graph/style.jsx',
+            'js/graph/node-component.jsx',
+            'js/graph/preview.jsx',
+            'js/graph/catalog.jsx',
+            'js/graph/dialogs.jsx',
+            'js/graph/panels.jsx',
         ],
         app: 'js/graph-app.jsx',
         globalName: 'NodeGraphApp',
