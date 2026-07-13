@@ -10,6 +10,18 @@
 // elType/elAttr are now the engine's mxSafe/mxElName/mxElCat/mxElType/
 // mxElAttr globals (js/mtlx-engine.js) instead of locally-defined copies.
 
+        // Perf instrumentation flag: off by default, opt in via
+        // `localStorage.setItem('mtlxPerfLog', '1')`. Read ONCE at module
+        // load (not per call) since it only gates console.log lines used to
+        // profile buildScope/layoutScope/flow-rebuild/render-count during
+        // development — never a source of behavior differences. Exported as
+        // a bare window global below; the other graph/*.jsx files (loaded
+        // after this one) read it the same way they read every other
+        // cross-file global.
+        const MTLX_PERF_LOG = (() => {
+            try { return !!localStorage.getItem('mtlxPerfLog'); } catch (e) { return false; }
+        })();
+
         // Loaded automatically on page open — an official example whose
         // nodegraph (NG_marble1) makes a much better first graph than a
         // single-node document.
@@ -210,9 +222,13 @@
             // filename feeding e.g. a float/vector displacement input has
             // no colorspace to speak of).
             const def0 = nodeDef();
+            // el.getOutputs() is a JS<->WASM embind crossing; call it once
+            // and reuse the result for both the emptiness check and the map
+            // (was two separate calls doing the same round trip).
+            const elOutputs = vecToArray(mxSafe(() => el.getOutputs(), []));
             const outTypes = new Set(
-                vecToArray(mxSafe(() => el.getOutputs(), [])).length
-                    ? vecToArray(mxSafe(() => el.getOutputs(), [])).map((o) => mxElType(o) || defPortType(mxElName(o), true))
+                elOutputs.length
+                    ? elOutputs.map((o) => mxElType(o) || defPortType(mxElName(o), true))
                     : (def0 ? vecToArray(mxSafe(() => def0.getActiveOutputs(), [])).map(mxElType) : [])
             );
             const isColorOutput = outTypes.has('color3') || outTypes.has('color4');
@@ -289,6 +305,10 @@
         // internal nodes, plus pseudo-nodes for the graph's interface inputs
         // and its outputs).
         const buildScope = (parsed, scope) => {
+            // Single return below (see it for the matching log line) —
+            // start the clock here rather than wrapping the whole body in a
+            // try/finally, which would be noisier for a one-return function.
+            const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
             const { doc, implGraphNames } = parsed;
             const descs = [];
             const byId = {};
@@ -409,11 +429,15 @@
                 }
             }
 
+            if (MTLX_PERF_LOG) {
+                console.log('[mtlx-perf] buildScope(' + (scope || '(root)') + '): '
+                    + descs.length + ' nodes, ' + (performance.now() - __perfStart).toFixed(1) + 'ms');
+            }
             return { descs, edges };
         };
 
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef, signatureInputTypes, CLOSURE_TYPES, isClosureModifier,
-    collectPorts, storedPos, buildScope,
+    collectPorts, storedPos, buildScope, MTLX_PERF_LOG,
 });

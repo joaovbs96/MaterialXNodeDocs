@@ -17,6 +17,11 @@
         const nodeHeight = (d) => 38 + (d.inputs.length + d.outputs.length) * 22 + 6;
 
         const layoutScope = (descs, edges) => {
+            // Two return points below (stored-position fast path vs. a real
+            // dagre pass) — each logs its own line when the flag is on, so
+            // a scope change that logs BOTH buildScope and two layoutScope
+            // lines back to back would flag a double-layout.
+            const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
             const stored = descs.length > 1 && descs.every((d) => d.pos);
             if (stored) {
                 // Editor coordinates are unit-ish; scale to pixels. Distinct
@@ -25,6 +30,10 @@
                 if (uniq.size > 1) {
                     const posOf = {};
                     for (const d of descs) posOf[d.id] = { x: d.pos.x * 240, y: d.pos.y * 240 };
+                    if (MTLX_PERF_LOG) {
+                        console.log('[mtlx-perf] layoutScope (stored positions): '
+                            + descs.length + ' nodes, ' + (performance.now() - __perfStart).toFixed(1) + 'ms');
+                    }
                     return posOf;
                 }
             }
@@ -38,6 +47,10 @@
             for (const d of descs) {
                 const n = g.node(d.id); // dagre positions are CENTERS
                 posOf[d.id] = { x: n.x - NODE_W / 2, y: n.y - nodeHeight(d) / 2 };
+            }
+            if (MTLX_PERF_LOG) {
+                console.log('[mtlx-perf] layoutScope (dagre): '
+                    + descs.length + ' nodes, ' + (performance.now() - __perfStart).toFixed(1) + 'ms');
             }
             return posOf;
         };

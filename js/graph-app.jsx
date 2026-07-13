@@ -41,6 +41,15 @@
             const [error, setError] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
+            // Optimistic overlay for scope transitions (entering/leaving a
+            // nodegraph): buildScope + toFlow in the flow-rebuild effect
+            // below run synchronously and can take a beat on a big graph,
+            // with zero feedback otherwise. Set by changeScope() (below,
+            // after scopeRef is declared) and cleared unconditionally at
+            // the end of the flow-rebuild effect. Kept separate from
+            // `busy` (document load/import) — the two overlays are never
+            // meant to be shown for the same reason.
+            const [scopeBusy, setScopeBusy] = React.useState(false);
             // The type-color legend (bottom left) can be collapsed to a chip.
             const [legendOpen, setLegendOpen] = React.useState(true);
             // Legend "+" toggle: show every known TYPE_COLORS entry, not just
@@ -160,6 +169,37 @@
             // on scope change" behavior. Consumed (and cleared) by that
             // effect on the next run.
             const pendingScopeSelectRef = React.useRef(null);
+            // Single entry point for every scope transition (dblclick-enter
+            // a nodegraph — both the native listener below AND React Flow's
+            // own onNodeDoubleClick, which fires for the SAME double-click;
+            // Backspace scope-exit; breadcrumb click; scope dropdown) so
+            // the "flash the overlay, then defer the actual setScope"
+            // dance isn't duplicated at every call site. A no-op (no
+            // overlay flash) when the requested scope is already current —
+            // covers re-clicking the current breadcrumb crumb or
+            // reselecting the current option in the scope dropdown. Any
+            // companion state a call site needs to set (e.g.
+            // pendingScopeSelectRef) is a cheap ref write and stays at the
+            // call site, done BEFORE calling this, so its ordering relative
+            // to the (deferred) setScope is unchanged from before this
+            // overlay existed.
+            const changeScope = (next) => {
+                if (next === scopeRef.current) return;
+                setScopeBusy(true);
+                (async () => {
+                    // A single requestAnimationFrame callback fires just
+                    // BEFORE the browser paints that frame, so scheduling
+                    // the heavy work after only one rAF can still run it in
+                    // the same frame the overlay was supposed to appear in
+                    // — the overlay would never actually hit the screen. A
+                    // second rAF lets the first frame (with scopeBusy=true
+                    // already committed and painted) land before the
+                    // rebuild-triggering setScope below runs.
+                    await new Promise((r) => requestAnimationFrame(r));
+                    await new Promise((r) => requestAnimationFrame(r));
+                    setScope(next);
+                })();
+            };
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
             // means an empty stack (no document loaded yet).
             const undoStateRef = React.useRef({ stack: [], index: -1, savedIndex: -1 });
@@ -358,7 +398,8 @@
             // event plumbing — so the header, the port rows and the body all
             // behave the same. Buttons/links inside the card keep their own
             // meaning. (React Flow's onNodeDoubleClick stays wired too; both
-            // paths call setScope with the same name, which is idempotent.)
+            // paths route through changeScope with the same name — the
+            // second call is a same-scope no-op once the first has fired.)
             React.useEffect(() => {
                 const host = panelRef.current;
                 if (!host) return;
@@ -369,7 +410,7 @@
                     const nodeEl = t.closest('.react-flow__node');
                     if (!nodeEl) return;
                     const id = nodeEl.getAttribute('data-id') || '';
-                    if (id.indexOf('g:') === 0) setScope(id.slice(2));
+                    if (id.indexOf('g:') === 0) changeScope(id.slice(2));
                 };
                 host.addEventListener('dblclick', onDbl);
                 return () => host.removeEventListener('dblclick', onDbl);
@@ -394,10 +435,13 @@
                     if (e.key === 'Backspace') {
                         // Never delete on Backspace; just step up one scope
                         // level. Always prevent default so it can't trigger
-                        // browser back-navigation.
+                        // browser back-navigation. The pendingScopeSelectRef
+                        // write is a cheap ref — it stays immediate; only
+                        // the actual scope change (and its rebuild) waits
+                        // behind the overlay, via changeScope.
                         if (scopeRef.current) {
                             pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                            setScope('');
+                            changeScope('');
                         }
                         e.preventDefault();
                         return;
@@ -665,9 +709,17 @@
             // — a scope change just brings the kept layout into view.
             const lastScopeRef = React.useRef({ parsed: null, scope: '' });
             React.useEffect(() => {
+                // [mtlx-perf] flow rebuild timing (off unless MTLX_PERF_LOG).
+                const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                 const cameFrom = lastScopeRef.current;
                 lastScopeRef.current = { parsed, scope };
-                if (!parsed) return;
+                if (!parsed) {
+                    // Nothing to build — but a changeScope() call could have
+                    // set scopeBusy while a document was mid-unload; clear
+                    // it unconditionally so the overlay can never get stuck.
+                    setScopeBusy(false);
+                    return;
+                }
                 const switchedScope = cameFrom.parsed === parsed
                     && cameFrom.scope !== scope;
                 // Consume the pending post-scope-exit selection (set by the
@@ -681,7 +733,7 @@
                     const { descs, edges } = buildScope(parsed, scope);
                     const built = toFlow(descs, edges, {
                         portMode: globalPortsRef.current,
-                        onOpenScope: setScope,
+                        onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
                     });
@@ -698,6 +750,17 @@
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });
                     setError(String(e && e.message || e));
+                } finally {
+                    // Unconditional on every exit path (success or error) so
+                    // the "Loading graph…" overlay set by changeScope() can
+                    // never get stuck on. A no-op re-render when it was
+                    // already false (e.g. a plain document load/import,
+                    // which never goes through changeScope).
+                    setScopeBusy(false);
+                    if (MTLX_PERF_LOG) {
+                        console.log('[mtlx-perf] flow rebuild: '
+                            + (performance.now() - __perfStart).toFixed(1) + 'ms (scope: ' + (scope || '(root)') + ')');
+                    }
                 }
             }, [parsed, scope]);
 
@@ -814,7 +877,11 @@
             };
 
             const onNodeDoubleClick = (evt, node) => {
-                if (node.data && node.data.kind === 'nodegraph') setScope(node.data.name);
+                // Fires for the same double-click the native host listener
+                // above already handles — routed through changeScope too
+                // (rather than setScope directly) so this path can't beat
+                // the overlay to the punch and rebuild synchronously.
+                if (node.data && node.data.kind === 'nodegraph') changeScope(node.data.name);
             };
 
             // Select a node — parameter panel + selection ring — and, for the
@@ -2874,6 +2941,19 @@
                         </div>
                     )}
 
+                    {/* Scope-transition overlay: entering/leaving a
+                        nodegraph (changeScope) rebuilds the flow
+                        synchronously and can take a beat on a big graph.
+                        Same wrapper/z-index approach as the `busy` overlay
+                        just above (kept separate — the two never fire for
+                        the same reason), reusing the shared LoadingOverlay
+                        component (js/shared/mtlx-ui.jsx) instead of
+                        hand-rolling the markup again. */}
+                    <LoadingOverlay show={scopeBusy} label={'Loading graph' + '\u2026'}
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        barWidthClass="w-56" />
+
                     {/* Empty state: nothing loaded, nothing loading */}
                     {emptyHint && (
                         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
@@ -2951,8 +3031,10 @@
                             <>
                                 <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
+                                        // Cheap ref write stays immediate; changeScope is a
+                                        // no-op (no overlay flash) when already at the root.
                                         if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                                        setScope('');
+                                        changeScope('');
                                     }}>
                                         {parsed.label}
                                     </button>
@@ -2963,7 +3045,7 @@
                                     className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
                                     title="Scope: the document root, or step inside a nodegraph"
                                     value={scope}
-                                    onChange={(e) => setScope(e.target.value)}
+                                    onChange={(e) => changeScope(e.target.value)}
                                 >
                                     <option value="">(document root)</option>
                                     {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}

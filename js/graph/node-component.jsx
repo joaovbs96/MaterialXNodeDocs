@@ -10,6 +10,14 @@
 
         const { Handle, Position } = window.ReactFlow;
 
+        // Perf instrumentation (MTLX_PERF_LOG, a bare window global from
+        // js/graph/model.jsx — see that file for the flag definition):
+        // count renders and flush a summary line at most once a second,
+        // piggybacked on render calls rather than a timer/interval (no
+        // extra timers to leak/clear across mounts).
+        let __mtlxRenderCount = 0;
+        let __mtlxRenderWindowStart = 0;
+
         // One node card: header (accent dot + name + category:type), then a
         // 22px row per port — inputs with a left target handle (showing the
         // literal value when unconnected), outputs with a right source
@@ -18,6 +26,18 @@
         // real nodes — they render with a dashed border, darker translucent
         // body and a diamond (not a dot) so they can't be mistaken for one.
         function MtlxGraphNode({ data, selected }) {
+            if (MTLX_PERF_LOG) {
+                const now = performance.now();
+                if (!__mtlxRenderWindowStart) __mtlxRenderWindowStart = now;
+                __mtlxRenderCount++;
+                const elapsed = now - __mtlxRenderWindowStart;
+                if (elapsed > 1000) {
+                    console.log('[mtlx-perf] MtlxGraphNode renders: ' + __mtlxRenderCount
+                        + ' in the last ' + elapsed.toFixed(0) + 'ms');
+                    __mtlxRenderCount = 0;
+                    __mtlxRenderWindowStart = now;
+                }
+            }
             const isIface = data.kind === 'input' || data.kind === 'output';
             const openScope = data.onOpen
                 ? (e) => { e.stopPropagation(); data.onOpen(); }
