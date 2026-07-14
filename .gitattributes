@@ -1,0 +1,34 @@
+# js/JsMaterialXGenShader.data is an Emscripten-packed virtual filesystem
+# archive: concatenated .mtlx text files with ZERO NUL bytes anywhere in the
+# 1.4MB payload. Git's automatic text/binary detection keys off NUL-byte
+# presence, so it misclassifies this file as text. On a Windows clone with
+# core.autocrlf=true, git therefore CRLF-converts every LF in the archive at
+# checkout. Each inserted CR shifts the packed virtual-filesystem's internal
+# byte offsets, corrupting the archive and breaking the MaterialX standard
+# library load at runtime (e.g. "XML parse error in
+# /libraries/bxdf/disney_principled.mtlx at character 7307", diagnosed on a
+# fresh clone). The .wasm files survive this heuristic only because they
+# happen to contain NUL bytes.
+#
+# Fix: force explicit binary handling for known binary asset types so git
+# never applies EOL conversion to them, regardless of content heuristics or
+# local autocrlf settings.
+#
+# Note: .mtlx is intentionally NOT marked binary here. Those files are read
+# as standalone text documents (not packed archives), where CRLF conversion
+# is harmless.
+
+*.data binary
+*.wasm binary
+*.glb binary
+*.hdr binary
+*.exr binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tif binary
+*.tiff binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
