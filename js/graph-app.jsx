@@ -842,7 +842,7 @@
             // successful in-browser export.
             React.useEffect(() => {
                 window.__mtlxGetGraphXml = async () => {
-                    const { xml, error } = await resolveDocXml();
+                    const { xml, error } = await resolveDocXmlRef.current();
                     if (xml == null) throw new Error(error || 'serialize failed');
                     return xml;
                 };
@@ -1400,6 +1400,15 @@
                     return { xml: null, error: String(e && e.message || e) };
                 }
             };
+
+            // Kept current every render (same trick as ingestRef /
+            // dirtyRevRef) so the []-dep VS Code bridge effect above can
+            // serialize THIS render's document — capturing resolveDocXml
+            // directly in that effect pins the FIRST render's copy, whose
+            // `parsed` is still null, so every extension save / graph->
+            // viewer sync would fail with 'no document'.
+            const resolveDocXmlRef = React.useRef(null);
+            resolveDocXmlRef.current = resolveDocXml;
 
             // Derives the default export base name (no extension) from the
             // parsed document's label — shared by the direct one-click
