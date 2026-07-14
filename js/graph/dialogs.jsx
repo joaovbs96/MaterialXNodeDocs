@@ -36,6 +36,12 @@
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
+            // True when hosted inside the VS Code extension's webview (set by
+            // its bootstrap before any site script runs). Drops the
+            // "Drag & drop files" row below — the editor is bound to a single
+            // opened .mtlx file, so page-wide drag-drop is disabled there.
+            const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            const keybinds = IN_VSCODE ? KEYBINDS.filter((k) => k.keys !== 'Drag & drop files') : KEYBINDS;
             useEscapeToClose(onClose, active);
             return (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
@@ -49,7 +55,7 @@
                         <div className="overflow-y-auto custom-scrollbar px-4 py-3">
                             <table className="w-full text-[11px] font-mono">
                                 <tbody>
-                                    {KEYBINDS.map((k) => (
+                                    {keybinds.map((k) => (
                                         <tr key={k.keys} className="align-top">
                                             <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
                                             <td className="py-1 text-gray-300">{k.desc}</td>
@@ -63,48 +69,43 @@
             );
         }
 
-        // In-tab docs viewer: opens index.html?embed=1#/<lib>/<group>/<name>
-        // in an iframe instead of a new tab. Stays MOUNTED while closed (just
-        // hidden) so the iframe keeps its state warm across re-opens; the src
-        // is only navigated imperatively when the requested URL changes.
-        function DocsDialog({ url, fullUrl, label, open, onClose, active = true }) {
-            const iframeRef = React.useRef(null);
-            const lastUrlRef = React.useRef(null);
-            const openRef = React.useRef(open);
-            openRef.current = open;
-            const [frameLoaded, setFrameLoaded] = React.useState(false);
-
-            // Tell the embed page whether it's visible so it can pause its WebGL
-            // render loop while hidden (display:none does not stop rAF).
-            const postVisibility = (visible) => {
-                const iframe = iframeRef.current;
-                if (!iframe || !iframe.contentWindow) return;
-                try { iframe.contentWindow.postMessage({ type: 'mtlx-embed-visible', visible: !!visible }, '*'); } catch (e) { /* best-effort */ }
-            };
-
-            useEscapeToClose(onClose, active && open);
-
-            React.useEffect(() => { postVisibility(open); }, [open]);
+        // In-tab docs viewer: renders the docs view's App component (the
+        // same one index.html mounts) INLINE, instead of embedding
+        // index.html?embed=1#/<lib>/<group>/<name> in an iframe. There is no
+        // iframe here anymore because nested iframe document navigations
+        // don't load inside a VS Code webview (webview-resource URLs aren't
+        // served to a document navigated to from within another webview
+        // document) — this dialog now works identically in the browser and
+        // inside the extension's webview. `window.App` (the docs view's
+        // component) is loaded on demand via window.mtlxLoadViewDeps('docs')
+        // (js/shell.jsx), memoized so repeat opens are instant after the
+        // first. `active={open}` is passed straight through to the App
+        // instance to pause its WebGL preview loop while the dialog is
+        // hidden — the direct prop this dialog's iframe predecessor could
+        // only approximate via a postMessage bridge across the frame
+        // boundary. A DIFFERENT node's hash remounts the App below (keyed
+        // on the hash) for a guaranteed fresh selection; re-opening the
+        // SAME node stays warm (the dialog itself stays mounted-but-hidden
+        // while closed, same as before).
+        function DocsDialog({ hash, fullUrl, label, open, onClose, active = true }) {
+            // True when hosted inside the VS Code extension's webview (set by
+            // its bootstrap before any site script runs). Hides the
+            // open-in-new-tab affordance below — in the webview it would
+            // hash-navigate the entire webview, not open a real browser tab.
+            const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            const [docsReady, setDocsReady] = React.useState(() => !!window.App);
+            const [loadError, setLoadError] = React.useState(null);
 
             React.useEffect(() => {
-                const iframe = iframeRef.current;
-                if (!iframe || !url) return;
-                if (!lastUrlRef.current) {
-                    iframe.src = url;
-                } else if (url !== lastUrlRef.current) {
-                    try {
-                        // Same-document (hash-only) navigation: the embed page
-                        // swaps content in place — no reload, no `load` event —
-                        // so the previous loaded state stays valid; don't reset.
-                        iframe.contentWindow.location.replace(url);
-                    } catch (err) {
-                        // Full reload fallback — this WILL fire `load`.
-                        setFrameLoaded(false);
-                        iframe.src = url;
-                    }
-                }
-                lastUrlRef.current = url;
-            }, [url]);
+                if (docsReady) return;
+                let mounted = true;
+                window.mtlxLoadViewDeps('docs')
+                    .then(() => { if (mounted) setDocsReady(true); })
+                    .catch((err) => { if (mounted) setLoadError(err); });
+                return () => { mounted = false; };
+            }, [docsReady]);
+
+            useEscapeToClose(onClose, active && open);
 
             return (
                 <div className={'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70' + (open ? '' : ' hidden')}
@@ -114,20 +115,26 @@
                         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
                             <span className="text-[13px] font-bold text-gray-100">{label}</span>
                             <div className="flex items-center gap-2">
+                                {!IN_VSCODE && (
                                 <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
                                     className="text-gray-400 hover:text-gray-200 leading-none text-sm px-1">{'↗'}</a>
+                                )}
                                 <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
                             </div>
                         </div>
-                        <div className="relative flex-1 min-h-0">
-                            <iframe ref={iframeRef} title="Node documentation"
-                                className="absolute inset-0 w-full h-full border-0 bg-gray-950"
-                                onLoad={() => { setFrameLoaded(true); postVisibility(openRef.current); }} />
-                            {!frameLoaded && (
+                        <div className="relative flex-1 min-h-0 overflow-y-auto">
+                            {loadError ? (
+                                <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
+                                    {'Failed to load documentation — close and reopen this dialog to retry.'}
+                                </div>
+                            ) : !docsReady ? (
                                 <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 animate-pulse">
                                     {'Loading documentation…'}
                                 </div>
-                            )}
+                            ) : (() => {
+                                const DocsApp = window.App;
+                                return <DocsApp key={hash} inline initialHash={hash} active={open} />;
+                            })()}
                         </div>
                     </div>
                 </div>

@@ -126,6 +126,12 @@
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
+            // True when hosted inside the VS Code extension's webview (set by
+            // its bootstrap before any site script runs). The editor is bound
+            // to a single opened .mtlx file, so browser-only / multi-document
+            // affordances (new/import/presets, drag-drop, send-to-viewer) are
+            // hidden. Always false in the plain browser.
+            const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
@@ -200,9 +206,10 @@
             const portPickerRef = React.useRef(null);
             // Keybinds reference popup ("?" button, top-right).
             const [helpOpen, setHelpOpen] = React.useState(false);
-            // In-tab docs viewer (parameter panel "?" button): { url, fullUrl, label }
+            // In-tab docs viewer (parameter panel "?" button): { hash, fullUrl, label }
             // of the node whose docs are shown, and a separate open flag so the
-            // dialog (and its iframe) can stay mounted-but-hidden between opens.
+            // dialog (and the inline docs App it mounts) can stay mounted-but-hidden
+            // between opens.
             const [docsDialog, setDocsDialog] = React.useState(null);
             const [docsDialogOpen, setDocsDialogOpen] = React.useState(false);
             // View-only XML dialog ("Document" button): the XML is computed
@@ -471,8 +478,23 @@
             // version badge right away).
             React.useEffect(() => { getMxEnv().catch(() => {}); }, []);
 
-            // A new document invalidates the remembered preview target.
-            React.useEffect(() => { setPreviewSel(null); setPinnedTarget(null); }, [parsed]);
+            // Set (both flags) right before setParsed in externalReload below,
+            // so the two "parsed changed" reset effects that follow (this one
+            // and the [parsed, scope] selectedId effect further down) each
+            // skip ONE run. An external edit under VS Code that reloads the
+            // SAME document deliberately keeps the current selection/pin —
+            // every other setParsed call site (New, import, presets, undo/
+            // redo restore) leaves these flags false, so nothing changes for
+            // them.
+            const softReloadSkipRef = React.useRef({ preview: false, selection: false });
+
+            // A new document invalidates the remembered preview target —
+            // unless this run is a soft external reload (see softReloadSkipRef
+            // above), which keeps the current preview/pin on purpose.
+            React.useEffect(() => {
+                if (softReloadSkipRef.current.preview) { softReloadSkipRef.current.preview = false; return; }
+                setPreviewSel(null); setPinnedTarget(null);
+            }, [parsed]);
 
             // Connect-time literal stash (item 4a): the moment a wire is
             // attached, the pre-existing literal on that input is destroyed
@@ -747,6 +769,127 @@
                 }
             };
 
+            // ---- VS Code external-edit soft reload ----------------------
+            // The host resends the FULL current document (bootstrap.js's
+            // 'both' mode) every time the open .mtlx changes OUTSIDE this
+            // webview (another editor, a script, a VCS checkout/pull, …).
+            // Routing that resend through ingest() above — which is what
+            // the very FIRST payload still does, see handleImport below —
+            // treats it like a brand-new document drop: ingest's replace
+            // branch synchronously does setParsed(null) + setFlow({nodes:
+            // [],edges:[]}) + an undo reset BEFORE the async parse in
+            // loadDocument finishes. Since graphKey (~:3990-ish, search
+            // "graphKey =") mixes in parsed.label, that null frame REMOUNTS
+            // <ReactFlowComp> — blank canvas, viewport reset — and unmounts
+            // GraphNodePreview (gated on `parsed`), tearing down its live GL
+            // view, for every single external save.
+            //
+            // externalReload avoids all of that by parsing FIRST and then
+            // swapping `setParsed` straight to the new object — same label,
+            // so graphKey doesn't change and ReactFlow never remounts —
+            // exactly the way restoreSnapshot (above) swaps in an undo/redo
+            // snapshot without a null intermediate frame.
+            const externalReload = async (map) => {
+                // Mirror ingest's REPLACE branch: a session already exists
+                // (externalReload is only ever reached once parsedRef.current
+                // is set — see the handleImport branch below), so the
+                // incoming map REPLACES fileMapRef wholesale rather than
+                // merging with the old one. The host resends every texture
+                // file the document currently needs, so one removed
+                // externally should disappear here too, same as a fresh
+                // ingest() replace would do.
+                const merged = Object.assign({}, map);
+                fileMapRef.current = merged;
+                setFileMap(merged);
+                const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
+                setMtlxPaths(mtlx);
+                if (!mtlx.length) return; // shouldn't happen — the payload always carries the root .mtlx
+                // Prefer the previously-established root document key (set
+                // by the very first ingest() call for this session) when
+                // it's still present — the payload's own xi:include targets
+                // can also be .mtlx-suffixed, so a plain "only one .mtlx"
+                // heuristic isn't reliable here the way it is for a fresh
+                // drop.
+                const pick = (chosenMtlx && mtlx.indexOf(chosenMtlx) !== -1) ? chosenMtlx : mtlx[0];
+                if (!merged[pick]) return;
+                setChosenMtlx(pick);
+
+                let p;
+                try {
+                    let xml = await merged[pick].text();
+                    if (/<xi:include\b/.test(xml)) {
+                        const dir = pick.indexOf('/') >= 0 ? pick.slice(0, pick.lastIndexOf('/')) : '';
+                        xml = await resolveIncludes(xml, merged, dir);
+                    }
+                    p = await parseMtlxDocument(xml);
+                } catch (e) {
+                    // The live session must survive a mid-edit broken file
+                    // (e.g. the user is mid-keystroke on an unbalanced tag
+                    // in their own editor) — keep the current graph up
+                    // instead of blanking it.
+                    setError('External edit could not be parsed — keeping the current graph (' + String(e && e.message || e) + ').');
+                    return;
+                }
+
+                // Skip-identical guard: raw file text can't be string-
+                // compared to canonical output (whitespace/attribute order
+                // differ), so normalize BOTH sides through the same
+                // canonical serializer the undo snapshots use — this
+                // catches formatting-only / touch saves that don't actually
+                // change the document, without doing a full swap for them.
+                let sameAsCurrent = false;
+                try {
+                    const newXml = serializeDocXml(p);
+                    let curXml = null;
+                    try { curXml = parsedRef.current ? serializeDocXml(parsedRef.current) : null; }
+                    catch (e) { curXml = null; } // transient preview taps — just proceed with the full swap below
+                    sameAsCurrent = curXml != null && curXml === newXml;
+                } catch (e) { /* serializing the new doc failed — fall through to the full swap */ }
+                if (sameAsCurrent) {
+                    markSaved(); // the file map above is already merged/updated
+                    return;
+                }
+
+                // Preserve label: graphKey (~search "graphKey =") is built
+                // from parsed.label + scope, so keeping the SAME label here
+                // is what keeps ReactFlow from remounting.
+                p.label = parsedRef.current ? parsedRef.current.label : pick;
+
+                // Preserve scope when it still resolves in the new document;
+                // reset to root otherwise — same check restoreSnapshot uses
+                // above. (The flow-rebuild effect below also degrades a
+                // stale scope gracefully on its own — see its try/catch —
+                // but resolving it here avoids landing the user inside a
+                // nodegraph that no longer exists.)
+                const nextScope = (scopeRef.current && p.nodegraphs && p.nodegraphs.indexOf(scopeRef.current) === -1)
+                    ? '' : scopeRef.current;
+
+                // One-shot skip for the [parsed] / [parsed, scope] reset
+                // effects (softReloadSkipRef, defined further up) — an
+                // external reload of the SAME document keeps the current
+                // selection/pin, unlike every other setParsed call site.
+                softReloadSkipRef.current.preview = true;
+                softReloadSkipRef.current.selection = true;
+
+                setParsed(p);
+                if (nextScope !== scopeRef.current) setScope(nextScope);
+                setDocRev((r) => r + 1);
+
+                // Fresh undo baseline, exactly like loadDocument's tail.
+                if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
+                try {
+                    undoStateRef.current = { stack: [{ xml: serializeDocXml(p), scope: nextScope, tag: null }], index: 0, savedIndex: 0 };
+                } catch (e) {
+                    undoStateRef.current = { stack: [], index: -1, savedIndex: -1 };
+                }
+                markSaved(); // a freshly reloaded document has no unsaved edits of its own
+            };
+            // Kept current every render (same trick as ingestRef) so the
+            // []-dep receive-document effect below always calls THIS
+            // render's externalReload, not a stale first-render closure.
+            const externalReloadRef = React.useRef(externalReload);
+            externalReloadRef.current = externalReload;
+
             // ---- Unsaved-changes protection for actions that REPLACE the
             // current document (Import, drag-drop of a new .mtlx, switching
             // documents). The actual tab/window close is separately guarded
@@ -782,7 +925,10 @@
             // ---- Page-wide drag & drop (identical to the viewer's) ----
             const ingestRef = React.useRef(ingest);
             ingestRef.current = ingest;
-            useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver });
+            // Disabled under VS Code: the editor is bound to a single opened
+            // .mtlx file, so dropping other documents onto the page doesn't
+            // apply.
+            useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver, disabled: IN_VSCODE });
 
             // ---- Receive a material handed off from another view (item 6's
             // counterpart to the "Send to Editor" buttons in viewer-app.jsx
@@ -801,7 +947,26 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    guardedIngestRef.current(map);
+                    // Under the VS Code extension, the open .mtlx FILE is the
+                    // source of truth: the host resends this exact payload on
+                    // every external edit (its live-reload), so gating THIS
+                    // path behind the unsaved-changes confirm would pop a
+                    // modal on every external save — unusable. Bypass ONLY
+                    // this external-document-import path; New/document-picker/
+                    // presets keep the confirm (window.__MTLX_VSCODE__ is set
+                    // only by the extension's bootstrap, so this branch is
+                    // dead — and thus inert — outside the webview). The very
+                    // FIRST payload for a session still goes through the
+                    // normal ingest() (there's no live graph yet to preserve);
+                    // every SUBSEQUENT external edit takes the soft reload
+                    // path instead (externalReload above) — no flicker, no
+                    // ReactFlow remount, no dropped GL preview view.
+                    if (window.__MTLX_VSCODE__) {
+                        if (parsedRef.current) externalReloadRef.current(map);
+                        else ingestRef.current(map);
+                    } else {
+                        guardedIngestRef.current(map);
+                    }
                 };
                 if (window.__mtlxPendingImport) {
                     const payload = window.__mtlxPendingImport;
@@ -816,6 +981,37 @@
                 };
                 window.addEventListener('mtlx-load-document', onLoadDoc);
                 return () => window.removeEventListener('mtlx-load-document', onLoadDoc);
+            }, []);
+
+            // ------------------------------------------------------------
+            // VS Code extension bridge (vscode_extension/media/bootstrap.js)
+            // — inert in the browser, just an unused global. Exposes the
+            // current graph's serialized XML (Ctrl+S in the extension's
+            // webview pulls this to write the open .mtlx file) and a "mark
+            // this session saved" hook, so the extension can sync the app's
+            // own unsaved-changes state once the host confirms the write
+            // landed, the same way doExportMtlx's markSaved() does after a
+            // successful in-browser export. Also exposes undo/redo: the
+            // extension's contributed Ctrl+Z/Ctrl+Y keybindings route here
+            // (vscode_extension/media/bootstrap.js) since the webview's
+            // native undo stack isn't wired to this app's document history.
+            // NOT gated behind IN_VSCODE — inert globals in the browser,
+            // same as __mtlxGetGraphXml/__mtlxMarkGraphSaved above.
+            React.useEffect(() => {
+                window.__mtlxGetGraphXml = async () => {
+                    const { xml, error } = await resolveDocXmlRef.current();
+                    if (xml == null) throw new Error(error || 'serialize failed');
+                    return xml;
+                };
+                window.__mtlxMarkGraphSaved = () => markSaved();
+                window.__mtlxGraphUndo = () => undoDocRef.current();
+                window.__mtlxGraphRedo = () => redoDocRef.current();
+                return () => {
+                    delete window.__mtlxGetGraphXml;
+                    delete window.__mtlxMarkGraphSaved;
+                    delete window.__mtlxGraphUndo;
+                    delete window.__mtlxGraphRedo;
+                };
             }, []);
 
             // Default document: fetched through the normal ingest() path so
@@ -852,6 +1048,11 @@
             // Port-mode changes (per node or global) update nodes IN PLACE —
             // positions are preserved; the Arrange button re-lays out.
             React.useEffect(() => {
+                // Soft external reload (see softReloadSkipRef, set right
+                // before setParsed in externalReload above): same document,
+                // deliberately keep the current selection instead of
+                // wiping it.
+                if (softReloadSkipRef.current.selection) { softReloadSkipRef.current.selection = false; return; }
                 if (!parsed) return;
                 const pending = pendingScopeSelectRef.current;
                 if (pending) {
@@ -1365,6 +1566,15 @@
                     return { xml: null, error: String(e && e.message || e) };
                 }
             };
+
+            // Kept current every render (same trick as ingestRef /
+            // dirtyRevRef) so the []-dep VS Code bridge effect above can
+            // serialize THIS render's document — capturing resolveDocXml
+            // directly in that effect pins the FIRST render's copy, whose
+            // `parsed` is still null, so every extension save / graph->
+            // viewer sync would fail with 'no document'.
+            const resolveDocXmlRef = React.useRef(null);
+            resolveDocXmlRef.current = resolveDocXml;
 
             // Derives the default export base name (no extension) from the
             // parsed document's label — shared by the direct one-click
@@ -4401,9 +4611,14 @@
                                 <div className="text-sm text-gray-300 font-medium">
                                     {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
                                 </div>
+                                {/* Mentions the Import button and page-wide drag-drop,
+                                    neither of which exist under VS Code (single opened
+                                    .mtlx file). */}
+                                {!IN_VSCODE && (
                                 <div className="text-xs text-gray-500 mt-1.5">
                                     Files can be dropped anywhere on the page, or use Import in the top left.
                                 </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -4421,6 +4636,10 @@
                         dropdown, when a document is loaded. */}
                     <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 max-w-[45%]">
                         <div className="flex items-center gap-1.5 flex-wrap">
+                            {/* New/Import/Presets are browser-only, multi-
+                                document affordances — the VS Code editor is
+                                bound to the single opened .mtlx file. */}
+                            {!IN_VSCODE && (
                             <button
                                 onClick={guardedNewDocument}
                                 title="New material (empty document)"
@@ -4429,6 +4648,8 @@
                                 <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
                                 <span>New Material</span>
                             </button>
+                            )}
+                            {!IN_VSCODE && (
                             <label
                                 title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
                                 className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors cursor-pointer"
@@ -4437,6 +4658,8 @@
                                 <span>Import</span>
                                 <input type="file" multiple className="hidden" onChange={onPickFiles} />
                             </label>
+                            )}
+                            {!IN_VSCODE && (
                             <button
                                 onClick={() => setPresetsOpen(true)}
                                 title="Load a curated official MaterialX example document"
@@ -4453,6 +4676,7 @@
                                 <MtlxIcon name="environment" className="w-3.5 h-3.5" />
                                 <span>Presets</span>
                             </button>
+                            )}
                             {parsed && (
                                 <button
                                     onClick={openExportDialog}
@@ -4657,10 +4881,10 @@
                     {/* In-tab docs viewer, opened from the parameter panel's
                         "?" button. Mounted whenever a node's docs have ever
                         been requested this session; docsDialogOpen just
-                        toggles visibility so the iframe stays warm. */}
+                        toggles visibility so the inline docs App stays warm. */}
                     {docsDialog && (
                         <DocsDialog
-                            url={docsDialog.url}
+                            hash={docsDialog.hash}
                             fullUrl={docsDialog.fullUrl}
                             label={docsDialog.label}
                             open={docsDialogOpen}
@@ -4698,6 +4922,10 @@
                                     </button>
                                 }
                                 trailingChildren={
+                                    // Graph and viewer are always in sync in the extension
+                                    // (one opened .mtlx file), so this cross-view handoff
+                                    // doesn't apply under VS Code.
+                                    !IN_VSCODE && (
                                     <button
                                         onClick={sendToViewer}
                                         title="Open in Material Viewer"
@@ -4705,6 +4933,7 @@
                                     >
                                         <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     </button>
+                                    )
                                 }
                             />
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
@@ -4756,9 +4985,10 @@
                                         && displayNode.data.category && (
                                         <button
                                             onClick={() => {
+                                                const full = nodeDocsUrl(displayNode.data);
                                                 setDocsDialog({
-                                                    url: nodeDocsUrl(displayNode.data, true),
-                                                    fullUrl: nodeDocsUrl(displayNode.data),
+                                                    hash: full.slice(full.indexOf('#')),
+                                                    fullUrl: full,
                                                     label: displayNode.data.category,
                                                 });
                                                 setDocsDialogOpen(true);

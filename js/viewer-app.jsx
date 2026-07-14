@@ -102,6 +102,13 @@
         // ---- App ------------------------------------------------------------
 
         function MaterialViewerApp({ active = true } = {}) {
+            // True when hosted inside the VS Code extension's webview (set by
+            // its bootstrap before any site script runs). The editor is bound
+            // to a single opened .mtlx file, so browser-only / multi-document
+            // affordances (drop zone, file/folder pickers, document picker,
+            // send-to-editor, page-wide drag-drop) are hidden. Always false
+            // in the plain browser.
+            const IN_VSCODE = !!window.__MTLX_VSCODE__;
             // Lets a future multi-view shell pause this view's background work
             // (WebGL render loop, global drag-drop) while another view is visible,
             // without unmounting. Standalone material-viewer.html never passes
@@ -243,10 +250,14 @@
             // child element crossed.
             const ingestRef = React.useRef(ingest);
             ingestRef.current = ingest;
+            // Disabled under VS Code: the editor is bound to a single opened
+            // .mtlx file, so dropping other documents onto the page doesn't
+            // apply.
             useWindowFileDrop({
                 activeRef,
                 onFiles: (map) => ingestRef.current(map),
                 onDragState: setDragOver,
+                disabled: IN_VSCODE,
             });
 
             // ---- Receive a material handed off from the node graph editor
@@ -262,15 +273,33 @@
             // no extra confirm dialog is needed here (unlike the graph
             // editor's guardedIngest, which guards against losing unsaved
             // graph edits — the viewer has no such concept).
+            // Shared by the mount-time pending-payload check below, the
+            // 'mtlx-view-document' listener, AND (IN_VSCODE only) the
+            // [active] effect further down that flushes a payload deferred
+            // while this view was hidden — defined once here so all three
+            // consume the exact same logic.
+            const handleImport = (payload) => {
+                if (!payload) return;
+                // Defer ingesting while this view is mounted-but-hidden
+                // (the VS Code shell keeps both the graph and viewer views
+                // mounted, showing only one) — ingesting here would still
+                // burn a full shadergen the user can't even see. Stash it;
+                // the [active] effect below flushes it once this view
+                // becomes visible. The bootstrap graph→viewer hashchange
+                // sync usually re-delivers a fresh payload anyway when the
+                // user switches views — this also covers it for when that
+                // sync can't reach here.
+                if (IN_VSCODE && !activeRef.current) {
+                    window.__mtlxPendingViewerImport = payload;
+                    return;
+                }
+                const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                const map = Object.assign({}, payload.files || {}, {
+                    [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
+                });
+                ingestRef.current(map);
+            };
             React.useEffect(() => {
-                const handleImport = (payload) => {
-                    if (!payload) return;
-                    const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
-                    const map = Object.assign({}, payload.files || {}, {
-                        [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
-                    });
-                    ingestRef.current(map);
-                };
                 if (window.__mtlxPendingViewerImport) {
                     const payload = window.__mtlxPendingViewerImport;
                     window.__mtlxPendingViewerImport = null;
@@ -285,6 +314,18 @@
                 window.addEventListener('mtlx-view-document', onViewDoc);
                 return () => window.removeEventListener('mtlx-view-document', onViewDoc);
             }, []);
+            // This view just became visible (VS Code keep-alive shell):
+            // flush any external-edit payload that handleImport deferred
+            // above while it was hidden — mirrors the mount-time pending-
+            // payload consumption in the effect above.
+            React.useEffect(() => {
+                if (!IN_VSCODE || !active) return;
+                if (window.__mtlxPendingViewerImport) {
+                    const payload = window.__mtlxPendingViewerImport;
+                    window.__mtlxPendingViewerImport = null;
+                    handleImport(payload);
+                }
+            }, [active]);
 
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
@@ -419,7 +460,11 @@
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             return (
-                <div className="space-y-4 sm:space-y-6">
+                // Under VS Code this becomes a percentage-height chain
+                // (h-full min-h-0 flex flex-col) instead of a stacked,
+                // page-scrolling column, so the render viewport below can
+                // fill all space below the header — full-bleed webview.
+                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'space-y-4 sm:space-y-6'}>
                     {/* Full-page drop indicator: sits below the sticky header
                         (h-14 = top-14) and lets events pass through to the
                         window-level drop handlers. */}
@@ -434,15 +479,26 @@
                     )}
 
                     {/* Page intro: the site title/nav/links live in the shared
-                        header (js/site-header.js). */}
+                        header (js/site-header.js). Describes page-wide drag-drop,
+                        which doesn't apply under VS Code (single opened .mtlx file). */}
+                    {!IN_VSCODE && (
                     <p className="text-gray-400 text-sm sm:text-base">
                         Drag &amp; drop a <code>.mtlx</code> document anywhere on this page — alone, with its
                         textures (loose files or a subfolder), or as a <code>.zip</code> — and render it
                         with the same engine as the node previews.
                     </p>
+                    )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-6">
+                    {/* Under VS Code the left column (drop zone, pickers, document/
+                        material selects, texture bind report) is hidden — the editor
+                        is bound to one opened .mtlx file — so the grid collapses to a
+                        single, full-width column for the viewport. */}
+                    {/* Height chain continues: flex-1 min-h-0 flex (not the
+                        browser's grid) so the single remaining column
+                        (viewport card) can grow to fill the app root. */}
+                    <div className={IN_VSCODE ? 'flex-1 min-h-0 flex' : 'grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-6'}>
                         {/* Left: drop zone + files + pickers */}
+                        {!IN_VSCODE && (
                         <div className="md:col-span-1 space-y-4">
                             <div
                                 className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
@@ -514,9 +570,15 @@
                                 </div>
                             )}
                         </div>
+                        )}
 
-                        {/* Right: viewport */}
-                        <div className="md:col-span-2 bg-gray-800 border border-gray-700 rounded-lg p-3 sm:p-4">
+                        {/* Right: viewport. Spans the full width under VS Code, since
+                            the left column above is hidden there. */}
+                        {/* VS Code: full-bleed card — flex-1 min-h-0 flex
+                            flex-col carries the height chain down to the
+                            viewport; border/rounded/padding dropped since
+                            there's no surrounding page chrome to frame. */}
+                        <div className={IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'md:col-span-2 bg-gray-800 border border-gray-700 rounded-lg p-3 sm:p-4'}>
                             {status && (
                                 <div className="text-sm text-gray-400 mb-3">{status}</div>
                             )}
@@ -525,7 +587,12 @@
                                     {error}
                                 </div>
                             )}
-                            <div ref={viewportRef} className="relative rounded-lg overflow-hidden bg-gray-900" style={{ minHeight: '18rem' }}>
+                            {/* VS Code: flex-1 min-h-0 so this box actually
+                                receives the card's remaining height instead
+                                of sizing off its (auto-height) canvas child;
+                                rounded-lg dropped for edge-to-edge fill; the
+                                18rem floor is a browser-only affordance. */}
+                            <div ref={viewportRef} className={`relative overflow-hidden bg-gray-900 ${IN_VSCODE ? 'flex-1 min-h-0' : 'rounded-lg'}`} style={IN_VSCODE ? undefined : { minHeight: '18rem' }}>
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
@@ -552,6 +619,10 @@
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
                                         trailingChildren={
+                                            // Graph and viewer are always in sync in the
+                                            // extension (one opened .mtlx file), so this
+                                            // cross-view handoff doesn't apply under VS Code.
+                                            !IN_VSCODE && (
                                             <button
                                                 onClick={sendToEditor}
                                                 title="Open this material in the node graph editor"
@@ -559,12 +630,16 @@
                                             >
                                                 <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                             </button>
+                                            )
                                         }
                                     >
                                         {/* Geometry lives here permanently; the material
                                             picker surfaces only in fullscreen, where the
-                                            sidebar is out of reach. */}
-                                        {isFullscreen && renderables.length > 1 && (
+                                            sidebar is out of reach. Also shown under VS Code
+                                            (not just fullscreen): the left-column material
+                                            picker is hidden there, so multi-material files
+                                            still need a way to switch materials. */}
+                                        {(isFullscreen || IN_VSCODE) && renderables.length > 1 && (
                                             <select
                                                 value={chosenMat}
                                                 onChange={(e) => setChosenMat(Number(e.target.value))}
@@ -581,15 +656,23 @@
                                 <canvas
                                     ref={canvasRef}
                                     className="w-full block cursor-grab active:cursor-grabbing"
-                                    style={{ height: isFullscreen ? '100%' : '28rem' }}
+                                    // VS Code: canvas always fills its
+                                    // (now flex-1) container, same as
+                                    // fullscreen does in the browser.
+                                    style={{ height: (isFullscreen || IN_VSCODE) ? '100%' : '28rem' }}
                                     tabIndex={-1}
                                 />
                             </div>
+                            {/* Mentions page-wide file drop (doesn't apply under VS
+                                Code) and would steal bottom height from the
+                                full-bleed viewport there. */}
+                            {!IN_VSCODE && (
                             <div className="text-xs text-gray-500 mt-2">
                                 Drag orbits, wheel/pinch zooms. Files can be dropped anywhere on the
                                 page. Textures are matched by relative path; unresolved images fall
                                 back to a UV checker.
                             </div>
+                            )}
                         </div>
                     </div>
                 </div>

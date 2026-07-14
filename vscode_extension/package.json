@@ -1,0 +1,102 @@
+{
+  "name": "materialx-playground",
+  "displayName": "MaterialX Playground",
+  "description": "View .mtlx files in the MaterialX Playground web app (Material Viewer / Node Graph Editor) from a checkout of this repo.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./src/extension.js",
+  "categories": [
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onCustomEditor:materialxPlayground.editor"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "materialxPlayground.editor",
+        "displayName": "MaterialX Playground",
+        "selector": [
+          {
+            "filenamePattern": "*.mtlx"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "materialxPlayground.open",
+        "title": "Send to MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.openDocs",
+        "title": "MaterialX: Open Node Documentation"
+      },
+      {
+        "command": "materialxPlayground.saveGraph",
+        "title": "MaterialX: Save Node Graph to File"
+      },
+      {
+        "command": "materialxPlayground.undoGraph",
+        "title": "MaterialX: Undo Node Graph Edit"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "title": "MaterialX: Redo Node Graph Edit"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "materialxPlayground.saveGraph",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.undoGraph",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "key": "ctrl+y",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "MaterialX Playground",
+      "properties": {
+        "materialx.defaultView": {
+          "type": "string",
+          "enum": [
+            "viewer",
+            "graph"
+          ],
+          "default": "viewer",
+          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible — use the header nav to switch to the other."
+        }
+      }
+    }
+  }
+}

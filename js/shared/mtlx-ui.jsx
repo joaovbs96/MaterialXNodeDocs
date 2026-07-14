@@ -115,13 +115,18 @@ const openInViewer = ({ xml, name, files }) => {
 // global before handing the resulting relPath -> File|Blob map to
 // onFiles. `activeRef.current === false` (a backgrounded view in the
 // multi-view shell) suppresses all handling. onDragState(bool) drives a
-// drag-over visual indicator.
-const useWindowFileDrop = ({ activeRef, onFiles, onDragState }) => {
+// drag-over visual indicator. `disabled` (default false) registers NO
+// window listeners at all — used by the VS Code extension callers, where
+// the editor is bound to one opened .mtlx file, so dropping other
+// documents is disabled there. Callers pass their own IN_VSCODE flag; this
+// hook doesn't read window.__MTLX_VSCODE__ itself.
+const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }) => {
     const onFilesRef = React.useRef(onFiles);
     onFilesRef.current = onFiles;
     const onDragStateRef = React.useRef(onDragState);
     onDragStateRef.current = onDragState;
     React.useEffect(() => {
+        if (disabled) return undefined;
         let depth = 0;
         const hasFiles = (e) => {
             const t = e.dataTransfer && e.dataTransfer.types;
