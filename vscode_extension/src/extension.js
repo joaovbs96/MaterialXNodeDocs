@@ -6,7 +6,7 @@
 'use strict';
 
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel } = require('./editorProvider');
 
 function activate(context) {
     const provider = new MaterialXEditorProvider(context);
@@ -54,29 +54,26 @@ function activate(context) {
         // webview's in-iframe keydown listener alone isn't a reliable
         // Ctrl+S responder against VS Code's own keybinding service).
         vscode.commands.registerCommand('materialxPlayground.saveGraph', () => saveActiveGraph()),
+        // Bound to the Ctrl+Z/Cmd+Z and Ctrl+Shift+Z/Cmd+Shift+Z/Ctrl+Y
+        // keybindings contributed in package.json (same `when` clause as
+        // saveGraph above) — these SHADOW VS Code's built-in text-document
+        // undo/redo while our editor is active, so Ctrl+Z routes to the
+        // graph's own in-page undo/redo instead of reverting the .mtlx
+        // file underneath the live graph session. See
+        // editorProvider.js's undoActiveGraph()/redoActiveGraph().
+        vscode.commands.registerCommand('materialxPlayground.undoGraph', () => undoActiveGraph()),
+        vscode.commands.registerCommand('materialxPlayground.redoGraph', () => redoActiveGraph()),
         vscode.commands.registerCommand('materialxPlayground.openDocs', async () => {
             try {
-                // No backing .mtlx document — a plain WebviewPanel using the
-                // same HTML builder, initial hash '#!docs', no document
-                // payload ever sent (the docs view browses the node
-                // library on its own, same as visiting index.html#!docs
-                // directly in a browser). renderStaticHtml sets
-                // webview.options (enableScripts + localResourceRoots)
-                // itself, same as resolveCustomTextEditor does, and wires
-                // the same shared 'mtlx-fetch'/'mtlx-error' handler
-                // (editorProvider.js wireCommonWebviewMessages) — the
-                // docs view loads the MaterialX WASM payloads too, so it
-                // needs the fetch bridge just like the viewer/graph
-                // views. That's why the whole panel is passed here, not
-                // just panel.webview: the handler's Disposable is tied to
-                // panel.onDidDispose.
-                const panel = vscode.window.createWebviewPanel(
-                    'materialxPlayground.docs',
-                    'MaterialX: Node Documentation',
-                    vscode.ViewColumn.Active,
-                    { retainContextWhenHidden: true }
-                );
-                await MaterialXEditorProvider.renderStaticHtml(context, panel, '#!docs');
+                // Shares the docs-panel singleton with the graph editor's
+                // "?" button (editorProvider.js's openDocsPanel, which the
+                // editor webview's message handler also calls) — no
+                // document payload ever sent (the docs view browses the
+                // node library on its own, same as visiting
+                // index.html#!docs directly in a browser), and
+                // reveals/re-navigates the existing panel instead of
+                // spawning a new one if it's already open.
+                await openDocsPanel(context, '#!docs', vscode.ViewColumn.Active);
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err)));
             }

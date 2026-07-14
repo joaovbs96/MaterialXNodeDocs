@@ -174,6 +174,18 @@ function toMessageFilesB64(files) {
 // to a newer one) can't clobber the real current entry.
 let activePanelInfo = null; // { panel, document } | null
 
+// Shared by saveActiveGraph/undoActiveGraph/redoActiveGraph: posts the
+// given message to the active panel's webview (see the comment on
+// activePanelInfo above for what "active" tracks and why), or shows an
+// info message if no MaterialX Playground editor is currently active.
+function postToActivePanel(message) {
+    if (!activePanelInfo) {
+        vscode.window.showInformationMessage('No active MaterialX Playground editor.');
+        return;
+    }
+    activePanelInfo.panel.webview.postMessage(message);
+}
+
 // Command handler for materialxPlayground.saveGraph (registered in
 // extension.js, bound to the Ctrl+S/Cmd+S keybinding above). Asks the
 // active panel's webview to run its own save path (media/bootstrap.js's
@@ -182,11 +194,60 @@ let activePanelInfo = null; // { panel, document } | null
 // comes back as the existing 'mtlx-save' message, handled exactly as it
 // always was in resolveCustomTextEditor below.
 function saveActiveGraph() {
-    if (!activePanelInfo) {
-        vscode.window.showInformationMessage('No active MaterialX Playground editor.');
+    postToActivePanel({ type: 'mtlx-request-save' });
+}
+
+// Command handlers for materialxPlayground.undoGraph/redoGraph
+// (registered in extension.js, bound to the Ctrl+Z/Cmd+Z and
+// Ctrl+Shift+Z/Cmd+Shift+Z/Ctrl+Y keybindings). These commands must
+// exist at all because, while the custom editor is active, these
+// contributed keybindings OUTRANK VS Code's built-in text-document
+// undo/redo, which would otherwise silently revert the .mtlx file
+// underneath the live graph session (our 'mtlx-save' WorkspaceEdits push
+// onto that same text-document undo stack). Routing the chord here
+// instead sends it to the graph's own in-page undo/redo — see
+// media/bootstrap.js's 'mtlx-request-undo'/'mtlx-request-redo' handling.
+function undoActiveGraph() {
+    postToActivePanel({ type: 'mtlx-request-undo' });
+}
+
+function redoActiveGraph() {
+    postToActivePanel({ type: 'mtlx-request-redo' });
+}
+
+// ---------------------------------------------------------------------
+// Docs panel singleton: backs the materialxPlayground.openDocs command
+// (extension.js) — the graph editor's "?" button no longer routes here,
+// it renders the docs view inline inside the editor webview itself (see
+// js/graph/dialogs.jsx's DocsDialog). Repeated invocations of the command
+// want "a docs panel showing this hash" rather than "a brand-new docs
+// panel every time", so one docs panel is reused, revealed and
+// re-navigated (via the existing mode: 'docs' 'mtlx-open' message, see
+// bootstrap.js) on every subsequent call.
+let docsPanelInfo = null; // { panel } | null
+
+async function openDocsPanel(context, hash, viewColumn) {
+    if (docsPanelInfo) {
+        const { panel } = docsPanelInfo;
+        panel.reveal(undefined, true); // preserveFocus, keep its current column
+        panel.webview.postMessage({ type: 'mtlx-open', mode: 'docs', hash: hash });
         return;
     }
-    activePanelInfo.panel.webview.postMessage({ type: 'mtlx-request-save' });
+    const panel = vscode.window.createWebviewPanel(
+        'materialxPlayground.docs',
+        'MaterialX: Node Documentation',
+        viewColumn,
+        { retainContextWhenHidden: true }
+    );
+    await MaterialXEditorProvider.renderStaticHtml(context, panel, hash);
+    docsPanelInfo = { panel };
+    panel.onDidDispose(() => {
+        // Only clear if THIS panel is still the recorded one — mirrors
+        // the activePanelInfo dispose guard above.
+        if (docsPanelInfo && docsPanelInfo.panel === panel) {
+            docsPanelInfo = null;
+        }
+    });
 }
 
 class MaterialXEditorProvider {
@@ -256,16 +317,20 @@ class MaterialXEditorProvider {
                 }
             };
 
-            // Echo-suppression marker for the 'mtlx-save' handler below:
-            // set to the exact text just written by applyEdit, immediately
-            // before that call; consumed (and cleared) by the changeSub
-            // listener's matching onDidChangeTextDocument fire so the
-            // live-reload resend it would otherwise schedule is skipped —
-            // see the comment on changeSub for why that resend must not
-            // happen. null whenever no webview-originated save is
-            // in-flight, so it can never accidentally suppress a real
-            // external edit that happens to arrive with nothing pending.
-            let lastWebviewSaveText = null;
+            // Echo-suppression flag for the 'mtlx-save' handler below:
+            // while true, EVERY change event on this document is our own
+            // doing — the mtlx-save handler's applyEdit plus whatever
+            // edits VS Code's save participants (files.insertFinalNewline,
+            // files.trimTrailingWhitespace, format-on-save, third-party
+            // formatters) apply inside document.save() — so changeSub must
+            // not schedule a resend for any of them. The previous
+            // mechanism here (an exact-text marker) was single-shot and
+            // only matched the applyEdit event, letting save-participant
+            // edits leak through and trigger the destructive resend: the
+            // re-ingest wiped the graph's undo history right after every
+            // save. false whenever no webview-originated save is
+            // in-flight, so it can never suppress a real external edit.
+            let webviewSaveInFlight = false;
 
             // The webview sends {type:'ready'} once its own boot (site
             // shell + WASM env warmup kickoff) has reached the point
@@ -298,24 +363,30 @@ class MaterialXEditorProvider {
                         edit.replace(document.uri, fullRange, xml);
                         // Set BEFORE applyEdit: applyEdit synchronously
                         // fires onDidChangeTextDocument (changeSub below),
-                        // so the marker has to already be in place by the
+                        // so the flag has to already be in place by the
                         // time that listener runs, or the echo-suppression
                         // check there would miss it.
-                        lastWebviewSaveText = xml;
+                        webviewSaveInFlight = true;
                         const applied = await vscode.workspace.applyEdit(edit);
                         if (!applied) {
-                            lastWebviewSaveText = null;
                             throw new Error('edit was not applied (document may have changed concurrently)');
                         }
                         await document.save();
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: true });
                     } catch (err) {
-                        lastWebviewSaveText = null;
                         const message = err && err.message ? err.message : String(err);
                         vscode.window.showErrorMessage(
                             'MaterialX Playground: failed to save "' + path.basename(document.fileName) + '" — ' + message
                         );
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: false, error: message });
+                    } finally {
+                        // Always cleared once the save settles, success or
+                        // failure. Safe to clear here: save participants'
+                        // change events all fire before document.save()
+                        // resolves, so by the time this finally runs, every
+                        // change event this save could produce has already
+                        // been (correctly) suppressed by changeSub below.
+                        webviewSaveInFlight = false;
                     }
                 }
             });
@@ -327,17 +398,18 @@ class MaterialXEditorProvider {
             const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
                 if (e.document.uri.toString() !== uriKey) return;
                 // Echo suppression: this fires for the 'mtlx-save' handler's
-                // own applyEdit above too, since that's a change to THIS
-                // document like any other. Resending in that case would
-                // re-ingest the graph's own just-written serialization back
-                // into the webview on the next debounce tick, destroying its
-                // undo history/selection over data it JUST saved — so when
-                // the new text matches what mtlx-save wrote, consume the
-                // marker and skip scheduling a resend for this change only.
-                if (lastWebviewSaveText !== null && e.document.getText() === lastWebviewSaveText) {
-                    lastWebviewSaveText = null;
-                    return;
-                }
+                // own applyEdit above too — and for every edit VS Code's
+                // save participants apply inside its document.save() —
+                // since those are changes to THIS document like any other.
+                // Resending in those cases would re-ingest the graph's own
+                // just-written serialization back into the webview on the
+                // next debounce tick, destroying its undo history/selection
+                // over data it JUST saved — so while a webview-originated
+                // save is in flight, skip scheduling a resend entirely (see
+                // the comment on webviewSaveInFlight above for why a flag
+                // covering the whole save, not an exact-text marker, is
+                // what's needed here).
+                if (webviewSaveInFlight) return;
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(sendUpdate, RELOAD_DEBOUNCE_MS);
             });
@@ -384,4 +456,4 @@ class MaterialXEditorProvider {
     }
 }
 
-module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages, saveActiveGraph };
+module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel };

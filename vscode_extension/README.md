@@ -9,6 +9,10 @@ and switching to it always shows the Graph editor's current state — see
 back**: press **Ctrl+S** (Cmd+S on macOS) while it's the visible view to
 save the current graph to the open `.mtlx` file — see "Node Graph Editor:
 saving" under Usage below for what that does and doesn't do.
+**Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y** (Cmd+Z / Cmd+Shift+Z on macOS) map to
+the Node Graph Editor's own undo/redo while the editor is focused, instead
+of VS Code's text-document undo/redo — see "Node Graph Editor: undo/redo"
+under Usage below.
 
 This extension is plain CommonJS JavaScript, no build step, no npm
 dependencies — it runs directly out of a checkout of this repo.
@@ -60,6 +64,23 @@ dependencies — it runs directly out of a checkout of this repo.
   making (or accepting) an external change to the same file, or they'll
   be lost without warning.
 
+### Node Graph Editor: undo/redo
+
+- **Ctrl+Z** (undo) and **Ctrl+Shift+Z** / **Ctrl+Y** (redo) — Cmd+Z /
+  Cmd+Shift+Z on macOS — while the Node Graph Editor is the visible view
+  are wired as real VS Code keybindings, same as Ctrl+S, scoped to the
+  MaterialX Playground editor being active. They intentionally **shadow VS
+  Code's own text-document undo/redo**: without this, those chords would
+  hit the open `.mtlx` document's text-undo stack instead (Ctrl+S's own
+  `WorkspaceEdit` writes push onto that same stack), silently reverting
+  the file's text underneath the live graph session and letting live
+  reload clobber whatever the graph editor had in memory. Instead they're
+  routed to the graph editor's own in-page undo/redo, so the file on disk
+  is untouched until you next press Ctrl+S. A focused text field (e.g. a
+  parameter's label input) handles the chord itself first, as usual — its
+  native undo, not the graph's. Outside the Node Graph Editor (Viewer,
+  docs view, or no MaterialX Playground editor active) this is a no-op.
+
 ### Viewer/Graph sync
 
 - Both views load the same document, but only one is mounted/visible at a
@@ -103,6 +124,13 @@ replacing the default text editor). To make it the default, add to your
 
 ## v1 limitations
 
+- **The webview hides browser-only / multi-document UI** that doesn't make
+  sense when the editor is bound to a single already-opened `.mtlx` file:
+  the Home nav, New/Import/Presets, drag & drop, the Viewer's file sidebar
+  (the Viewer fills the tab instead, and its material picker moves to the
+  viewport overlay), the Send-to-Viewer/Send-to-Editor buttons (both views
+  are always in sync already — see "Viewer/Graph sync" below), and the
+  docs view's Copy-link and open-in-new-tab actions.
 - **Write-back is Node Graph Editor-only, and only on Ctrl+S.** The
   webview holds an in-memory copy of the document (plus any resolved
   includes/textures); nothing is saved back to the `.mtlx` file until you
@@ -112,10 +140,12 @@ replacing the default text editor). To make it the default, add to your
   rest of the time — and, unlike a normal unsaved-changes prompt, an
   external edit **silently replaces** unsaved graph-editor changes rather
   than asking first.
-- The graph editor's **node-documentation dialog** (the little popup that
-  embeds `index.html?embed=1#/...` in an iframe) may render blank —
-  it depends on the same-origin webview-resource iframe path working
-  end-to-end, which hasn't been exercised under VS Code's webview host.
+- The graph editor's **node-documentation dialog** (the "?" button on the
+  parameter panel) renders the docs view INLINE inside the same webview —
+  no iframe, no separate panel — identical to the website. The
+  `MaterialX: Open Node Documentation` command-palette panel described
+  above still exists separately, for browsing the node library without a
+  file open.
 - **`localStorage`-backed preferences** (e.g. remembered UI toggles) may
   not persist across VS Code sessions/reloads — webview storage semantics
   differ from a normal browser tab.

@@ -15,11 +15,29 @@
 // js/docs/sidebar.jsx — App owns all their state/derived data and passes
 // it down as props (see the {jsonData && (...)} block below).
 
-        function App({ active = true } = {}) {
+        function App({ active = true, inline = false, initialHash } = {}) {
             // Embed mode: focused single-node view, iframed by the graph
             // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
             // set synchronously in <head> before first paint.
             const EMBED = !!window.__MTLX_EMBED;
+            // inline: this instance is mounted directly inside the graph
+            // editor's docs dialog (part 2), not routed/iframed. It wants the
+            // exact same stripped-down, single-column, no-sidebar rendering
+            // that embed mode already implements — but EMBED is a parse-time
+            // module const, so it can't express "this instance happens to be
+            // embedded in the same page". chromeless covers both cases.
+            const chromeless = inline || EMBED;
+            // True when hosted inside the VS Code extension's webview (set by
+            // its bootstrap before any site script runs). Distinct from
+            // chromeless: this gates affordances that are meaningless in the
+            // webview specifically (e.g. copying a permalink URL), not the
+            // embed/inline single-node layout.
+            const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            // Kept current every render so the mtlx-open-node listener below
+            // (registered once per jsonData load) can gate on the LATEST
+            // active value without re-subscribing.
+            const activeRef = React.useRef(active);
+            activeRef.current = active;
             // The hash the page LANDED on — read once, before the async spec-DB
             // load can race with the user switching shell views (which rewrites
             // location.hash to a '#!' route and would lose a docs deep link).
@@ -62,10 +80,18 @@
                 // clickable only when they resolve to a known node.
                 window.__mtlxNodeIndex = index;
                 const onOpen = (e) => {
+                    // Only the ACTIVE instance reacts: a kept-alive docs view
+                    // and an inline dialog instance (part 2) can both be
+                    // mounted at once, and only one should respond to a
+                    // single click.
+                    if (!activeRef.current) return;
                     const hit = index[e.detail.key];
                     if (hit) {
                         setSelectedNode(hit);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                        // Inline: the dialog owns its own scroll container,
+                        // not the page — and there's no ref to the detail
+                        // pane to scroll instead, so just skip scrolling.
+                        if (!inline) window.scrollTo({ top: 0, behavior: 'smooth' });
                     } else if (e.detail.url) {
                         window.open(e.detail.url, '_blank', 'noopener');
                     } else {
@@ -108,8 +134,16 @@
                 // If the CURRENT hash is a shell route ('#!...'), the user switched
                 // views while the spec DB was loading — fall back to the hash the
                 // page landed on so the deep-linked node is still selected.
-                const rawHash = window.location.hash;
-                const hashForSel = /^#!/.test(rawHash) ? initialHashRef.current : rawHash;
+                // inline: there's no page hash to read at all — the dialog
+                // passes the initial selection via the initialHash prop
+                // instead (read once here, same as the hash snapshot below).
+                let hashForSel;
+                if (inline) {
+                    hashForSel = initialHash || '';
+                } else {
+                    const rawHash = window.location.hash;
+                    hashForSel = /^#!/.test(rawHash) ? initialHashRef.current : rawHash;
+                }
                 const fromHash = hashToSel(parsedData, hashForSel);
                 if (fromHash) {
                     setExpandedLibs({ [fromHash.lib]: true });
@@ -162,6 +196,10 @@
             // view becomes active again, this re-runs and restores the node
             // permalink.
             React.useEffect(() => {
+                // An inline instance (mounted inside the graph editor's docs
+                // dialog) must NEVER touch the parent page's URL/history —
+                // that hash belongs to the graph view's own routing.
+                if (inline) return;
                 if (!selectedNode || !active) return;
                 const h = selToHash(selectedNode);
                 if (window.location.hash !== h) {
@@ -173,7 +211,9 @@
                 }
             }, [selectedNode, active]);
             React.useEffect(() => {
-                if (!jsonData) return undefined;
+                // The parent page's hash belongs to the graph view when
+                // inline — an inline instance must not react to it.
+                if (inline || !jsonData) return undefined;
                 const onNav = () => {
                     const sel = hashToSel(jsonData, window.location.hash);
                     if (sel) {
@@ -331,7 +371,7 @@
             // machines stay preview-free. localStorage is best-effort
             // (private mode etc. throws) — default is ON.
             const [showPreviews, setShowPreviews] = React.useState(() => {
-                if (EMBED) return true;
+                if (chromeless) return true;
                 try { return localStorage.getItem('mtlx_show_previews') !== '0'; } catch (e) { return true; }
             });
             const togglePreviews = () => setShowPreviews((v) => {
@@ -544,7 +584,7 @@
 
             return (
                 <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
-                    {!EMBED && (
+                    {!chromeless && (
                     /* Page intro: the site title/nav/links live in the shared
                        header (js/site-header.js); only page-specific bits stay. */
                     <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -578,7 +618,7 @@
                         </div>
                     )}
 
-                    {!EMBED && jsonData && stats && (
+                    {!chromeless && jsonData && stats && (
                         <div className="flex items-center gap-3 flex-wrap text-sm">
                             <span className="bg-gray-800 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg">
                                 <span className="font-semibold text-white">{stats.total}</span> nodes total
@@ -624,7 +664,7 @@
                         portal directly under <body>, see its own comment).
                         App keeps the showHelp state and useEscapeToClose
                         call above; DocsHelpDialog just gets open/onClose. */}
-                    {!EMBED && <DocsHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />}
+                    {!chromeless && <DocsHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />}
 
                     {jsonData && (
                         /* md+: the grid absorbs all height left between the
@@ -632,14 +672,14 @@
                            internally. The 20rem floor keeps the panels usable
                            on very short desktop windows by letting the page
                            scroll again instead of squishing them further. */
-                        <div className={EMBED
+                        <div className={chromeless
                             ? 'grid grid-cols-1 gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'
                             : 'grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'}>
 
                             {/* Left Sidebar: Hierarchical Tree Menu — js/docs/sidebar.jsx's
                                 DocsSidebar. App owns all the state/derived data below
                                 and passes it down as props. */}
-                            {!EMBED && (
+                            {!chromeless && (
                                 <DocsSidebar
                                     treeData={treeData}
                                     docFilter={docFilter}
@@ -659,7 +699,7 @@
                             )}
 
                             {/* Right Content Area: Node Details */}
-                            <div className={EMBED
+                            <div className={chromeless
                                 ? 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
                                 : 'md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'}>
                                 {selectedNode ? (
@@ -695,6 +735,11 @@
                                                         Official spec {'\u2197'}
                                                     </a>
                                                 )}
+                                                {/* Under VS Code the webview's origin makes a copied
+                                                    URL meaningless, so hide the button entirely. Gated
+                                                    on IN_VSCODE, not chromeless/inline — this is about
+                                                    the webview host, not the embed/inline layout. */}
+                                                {!IN_VSCODE && (
                                                 <button
                                                     onClick={copyPermalink}
                                                     title="Copy a direct link to this node"
@@ -716,6 +761,7 @@
                                                         </React.Fragment>
                                                     )}
                                                 </button>
+                                                )}
                                             </div>
                                         </div>
 
@@ -730,6 +776,7 @@
                                             enabled={showPreviews}
                                             onEnable={togglePreviews}
                                             active={active}
+                                            embed={chromeless}
                                         />
 
                                         {/* Implementation-target matrix: which shading
@@ -861,7 +908,7 @@
                         </div>
                     )}
 
-                    {!EMBED && (
+                    {!chromeless && (
                     /* Disclaimer: previews are experimental; the spec MD files
                        in the MaterialX repository are the source of truth. */
                     <div className="bg-amber-950/40 border border-amber-700/60 text-amber-300/90 text-sm rounded-lg px-4 py-3">

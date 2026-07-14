@@ -40,6 +40,14 @@
       {
         "command": "materialxPlayground.saveGraph",
         "title": "MaterialX: Save Node Graph to File"
+      },
+      {
+        "command": "materialxPlayground.undoGraph",
+        "title": "MaterialX: Undo Node Graph Edit"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "title": "MaterialX: Redo Node Graph Edit"
       }
     ],
     "keybindings": [
@@ -47,6 +55,23 @@
         "command": "materialxPlayground.saveGraph",
         "key": "ctrl+s",
         "mac": "cmd+s",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.undoGraph",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+      },
+      {
+        "command": "materialxPlayground.redoGraph",
+        "key": "ctrl+y",
         "when": "activeCustomEditorId == 'materialxPlayground.editor'"
       }
     ],

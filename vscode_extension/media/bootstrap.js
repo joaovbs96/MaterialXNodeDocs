@@ -337,6 +337,45 @@
             return;
         }
 
+        // 'mtlx-request-undo' / 'mtlx-request-redo': the extension host
+        // asking this webview to run the graph's own in-page undo/redo,
+        // posted by editorProvider.js's undoActiveGraph()/redoActiveGraph()
+        // in response to the materialxPlayground.undoGraph/redoGraph
+        // commands (the contributed Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y
+        // keybindings). Same primary-path rationale as Ctrl+S above — the
+        // workbench keybinding service, not this page, is the reliable
+        // responder for a chord VS Code also wants — but these keybindings
+        // additionally SHADOW VS Code's own text-document undo/redo while
+        // our editor is active: without them, Ctrl+Z would revert the
+        // .mtlx file's TEXT (our own 'mtlx-save' WorkspaceEdits push onto
+        // that same stack) and the live-reload debounce would clobber
+        // whatever the graph editor currently has in memory. Fire-and-
+        // forget: no reply is posted back (unlike save, nothing here needs
+        // to settle a pending promise).
+        if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') {
+            // No-op unless the Graph view is the visible/mounted one —
+            // same guard requestGraphSave() uses.
+            if (location.hash.indexOf('#!graph') !== 0) return;
+            var isUndo = msg.type === 'mtlx-request-undo';
+            var hook = isUndo ? window.__mtlxGraphUndo : window.__mtlxGraphRedo;
+            // No-op unless the corresponding hook exists — js/graph-app.jsx
+            // only defines these while the graph view is mounted (same
+            // lifecycle as window.__mtlxGetGraphXml).
+            if (typeof hook !== 'function') return;
+            // No-op when focus is in an editable element: a text field's
+            // native undo already handled the chord in-page (e.g. a label
+            // being typed into), so this contributed keybinding firing on
+            // top of it must not ALSO undo a graph edit.
+            var active = document.activeElement;
+            var isEditable = active && (
+                active.isContentEditable
+                || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '')
+            );
+            if (isEditable) return;
+            hook();
+            return;
+        }
+
         if (msg.type !== 'mtlx-open') return;
 
         var mode = msg.mode;
@@ -406,7 +445,10 @@
         } else if (mode === 'docs') {
             // No document payload contract for the docs view (it has no
             // per-file state to import) — just make sure the hash agrees.
-            location.hash = '#!docs';
+            // A reused docs panel (the materialxPlayground.openDocs command's
+            // singleton) is re-navigated this way; msg.hash is always
+            // '#!docs' in practice today (the command only ever sends that).
+            location.hash = msg.hash || '#!docs';
         }
     }, false);
 

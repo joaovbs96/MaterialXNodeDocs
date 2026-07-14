@@ -23,6 +23,11 @@
 // loaded as ?embed=1 inside the graph editor's docs dialog iframe.
 const EMBED = !!window.__MTLX_EMBED;
 
+// IN_VSCODE is set by the extension's bootstrap script before any site
+// script runs, when this page is hosted inside the VS Code webview. Used
+// only to tighten the viewer view's layout into a full-bleed viewport.
+const IN_VSCODE = !!window.__MTLX_VSCODE__;
+
 // ------------------------------------------------------------------
 // Script/CSS loading utilities (module scope, cached by URL so repeated
 // activations of a view are no-ops after the first).
@@ -196,6 +201,33 @@ const VIEW_DEPS = {
 };
 
 // ------------------------------------------------------------------
+// Per-view dependency loader — fetches a view's CSS/scripts/babelScripts
+// then its app bundle, in VIEW_DEPS order (see loop below; logic moved
+// verbatim out of the view-mount effect, not rewritten). Memoized per
+// view in a module-level map so concurrent callers share one in-flight
+// load — the mount effect below AND, in part 2, the graph editor's
+// inline docs dialog (via window.mtlxLoadViewDeps) can both request the
+// same view without double-loading it. On failure the memo entry is
+// deleted so a later retry (e.g. re-opening the view) can re-attempt it.
+const __viewDepsPromises = new Map();
+async function loadViewDeps(viewName) {
+    if (__viewDepsPromises.has(viewName)) return __viewDepsPromises.get(viewName);
+    const dep = VIEW_DEPS[viewName];
+    const p = (async () => {
+        for (const href of dep.css) await loadCss(href);
+        for (const src of dep.scripts) await loadScript(src);
+        for (const src of dep.babelScripts) await loadJsxApp(src);
+        await loadJsxApp(dep.app);
+        if (!window[dep.globalName]) {
+            throw new Error('View "' + viewName + '" loaded but window.' + dep.globalName + ' is missing — a script in its manifest likely failed to parse (see console).');
+        }
+    })();
+    __viewDepsPromises.set(viewName, p);
+    p.catch(() => { __viewDepsPromises.delete(viewName); });
+    return p;
+}
+
+// ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
 function Shell() {
@@ -246,16 +278,9 @@ function Shell() {
         Object.keys(viewState).forEach((view) => {
             const st = viewState[view];
             if (st.mounted && st.status === 'loading') {
-                const dep = VIEW_DEPS[view];
                 (async () => {
                     try {
-                        for (const href of dep.css) await loadCss(href);
-                        for (const src of dep.scripts) await loadScript(src);
-                        for (const src of dep.babelScripts) await loadJsxApp(src);
-                        await loadJsxApp(dep.app);
-                        if (!window[dep.globalName]) {
-                            throw new Error('View "' + view + '" loaded but window.' + dep.globalName + ' is missing — a script in its manifest likely failed to parse (see console).');
-                        }
+                        await loadViewDeps(view);
                         setViewState((prev) => ({ ...prev, [view]: { mounted: true, status: 'ready' } }));
                     } catch (err) {
                         console.error('Failed to load view', view, err);
@@ -300,6 +325,13 @@ function Shell() {
         //        natural whole-page scroll even though <body> here (unlike
         //        the original material-viewer.html) is height-capped via
         //        `md:h-screen` (needed for the graph view, see below).
+        //        Under VS Code, though, MaterialViewerApp's own root switches
+        //        to a percentage-height chain (h-full min-h-0 flex flex-col,
+        //        see viewer-app.jsx) so the render viewport can fill all
+        //        space below the header — that reverses the choice above,
+        //        deliberately, for the webview only: the padding goes and
+        //        min-h-0 is REQUIRED so this flex item shrinks to #root's
+        //        definite height instead of overflowing it.
         //   - graph  (node-graph.html #root itself): no wrapper classes.
         //     -> NodeGraphApp's own root div is `absolute inset-0`, which
         //        positions against the nearest `position: relative`
@@ -313,7 +345,10 @@ function Shell() {
         const wrapClass = {
             home: 'p-2 sm:p-6 flex-1',
             docs: EMBED ? 'p-2 flex-1 md:min-h-0' : 'p-2 sm:p-6 flex-1 md:min-h-0',
-            viewer: 'p-2 sm:p-6 flex-1',
+            // VS Code: full-bleed viewport, no page padding; min-h-0 lets
+            // this flex item shrink to #root's height instead of growing
+            // past it (see the comment block above).
+            viewer: IN_VSCODE ? 'flex-1 min-h-0' : 'p-2 sm:p-6 flex-1',
             graph: '',
         }[view] + (isActive ? '' : ' hidden');
 
@@ -344,7 +379,10 @@ function Shell() {
             } else if (view === 'viewer') {
                 // Reconstructs material-viewer.html's #root (`max-w-[1600px]
                 // mx-auto`, no height class — it just grows with content).
-                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+                // Under VS Code: no max-width cap and a height pass-through
+                // (w-full h-full min-h-0) so MaterialViewerApp's own
+                // percentage-height chain resolves against a definite size.
+                content = <div className={IN_VSCODE ? 'w-full h-full min-h-0' : 'max-w-[1600px] mx-auto'}>{rendered}</div>;
             } else {
                 // graph: no extra container — NodeGraphApp fills #root
                 // directly via its own `absolute inset-0`.
@@ -376,3 +414,10 @@ function Shell() {
 }
 
 window.Shell = Shell;
+// Consumed by the graph editor's inline docs dialog (part 2) to preload a
+// view's deps before mounting its component directly (instead of routing
+// through this shell). Shares the module-level memo map with the mount
+// effect above, so calling it here is idempotent with the shell's own
+// view mounting — whichever caller asks first does the loading, the
+// other just awaits the same promise.
+window.mtlxLoadViewDeps = loadViewDeps;

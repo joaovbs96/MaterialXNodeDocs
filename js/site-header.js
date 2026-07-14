@@ -91,7 +91,13 @@
     var tabOn = ' border-blue-500 text-blue-300';
     var tabOff = ' border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600';
 
-    var tabs = NAV.map(function (item) {
+    // Inside the VS Code webview there's no landing page to navigate to —
+    // the editor is bound to a single opened .mtlx file — so drop the Home
+    // tab from both the desktop and mobile nav copies below. No-op (same
+    // NAV array) in the plain browser.
+    var navItems = window.__MTLX_VSCODE__ ? NAV.filter(function (t) { return t.id !== 'home'; }) : NAV;
+
+    var tabs = navItems.map(function (item) {
         var active = item.id === activeId;
         var href = IS_SHELL ? item.shellHref : item.href;
         return '<a href="' + href + '"' +
@@ -109,7 +115,7 @@
     var mobileTabOn = ' border-blue-500 text-blue-300 bg-gray-800/60';
     var mobileTabOff = ' border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/40';
 
-    var mobileTabs = NAV.map(function (item) {
+    var mobileTabs = navItems.map(function (item) {
         var active = item.id === activeId;
         var href = IS_SHELL ? item.shellHref : item.href;
         return '<a href="' + href + '"' +
@@ -125,12 +131,17 @@
 
                 // Brand: logo mark + site title (links home). Inside the
                 // shell "home" means the docs view, not a page navigation.
-                '<a href="' + (IS_SHELL ? '#!home' : 'index.html') + '" class="flex items-center gap-2 shrink-0 group" title="' + SITE_TITLE + '">' +
+                // Under VS Code there's no home to link to (single-document
+                // editor), so render the identical visual as a <span>
+                // instead of an <a> — same classes, no navigation affordance.
+                '<' + (window.__MTLX_VSCODE__ ? 'span' : 'a') +
+                    (window.__MTLX_VSCODE__ ? '' : ' href="' + (IS_SHELL ? '#!home' : 'index.html') + '"') +
+                    ' class="flex items-center gap-2 shrink-0 group" title="' + SITE_TITLE + '">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="icon icon-tabler icons-tabler-filled icon-tabler-inner-shadow-bottom-right w-6 h-6 text-blue-400 group-hover:text-blue-300 transition-colors">' +
                         LOGO_PATHS +
                     '</svg>' +
                     '<span class="font-bold text-blue-400 group-hover:text-blue-300 transition-colors whitespace-nowrap">' + SITE_TITLE + '</span>' +
-                '</a>' +
+                '</' + (window.__MTLX_VSCODE__ ? 'span' : 'a') + '>' +
 
                 // Page tabs (desktop only \u2014 the long labels don't fit
                 // alongside the right-side links on narrow screens; the
@@ -296,10 +307,15 @@
         }
         el.innerHTML = footerHtml;
     };
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', mountFooter);
-    } else {
-        mountFooter();
+    // Skipped entirely under VS Code: this global shrink-0 strip would steal
+    // bottom height from the full-bleed webview views (the extension already
+    // drops other site chrome there, like the Home tab above).
+    if (!window.__MTLX_VSCODE__) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', mountFooter);
+        } else {
+            mountFooter();
+        }
     }
 
     // Published for the React apps (page <title>s, doc-ui links, ...).
