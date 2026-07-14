@@ -24,6 +24,85 @@
     // branch on it — e.g. to hide a browser-only affordance.
     window.__MTLX_VSCODE__ = true;
 
+    // ------------------------------------------------------------------
+    // fetch() bridge for the MaterialX Emscripten payloads.
+    //
+    // WHY: the Emscripten glue (js/JsMaterialXGenShader.js et al.) loads
+    // its packed virtual filesystem and wasm binary via plain relative
+    // fetch('./js/JsMaterialXGenShader.data' / '.wasm'). Under <base
+    // href="${baseUri}"> those resolve to webview-resource URLs — and the
+    // webview resource pipeline ALTERS these large binaries in transit:
+    // the packed-FS slice offsets shift, so a standard-library file
+    // unpacked from the .data payload fails to parse at its own EOF
+    // ("XML parse error in /libraries/bxdf/disney_principled.mtlx at
+    // character 7307" — that packed file's last byte), the stdlib ends up
+    // null, and every downstream consumer breaks ("getNodeDefs is not
+    // bound", no shader generation). Serving the bytes from the EXTENSION
+    // HOST over postMessage (vscode.workspace.fs.readFile on the real
+    // file, structured-cloned across the boundary as a Uint8Array)
+    // bypasses that pipeline entirely. The explicit Content-Type on the
+    // synthesized Response keeps WebAssembly.instantiateStreaming() on
+    // its fast path for the .wasm case (it requires 'application/wasm').
+    //
+    // Everything that doesn't match the payload pattern — including
+    // Request-object inputs — passes through to the native fetch
+    // untouched, and any host-side failure falls back to the native
+    // fetch too, so this is never worse than the status quo. Host side:
+    // wireCommonWebviewMessages() in vscode_extension/src/
+    // editorProvider.js (which whitelists the path before reading).
+    // 'mtlx-fetch-result' replies are settled by the window 'message'
+    // listener further down. Ids are a private incrementing counter —
+    // they cannot collide with the 'mtlx-open' flow, which has no id.
+    var MTLX_PAYLOAD_RE = /(?:^|\/)js\/(JsMaterialX[\w.\-]*\.(?:data|wasm))$/;
+    var pendingFetches = {}; // id -> { resolve, fallback, path }
+    var nextFetchId = 1;
+    // Not in a VS Code webview (vscodeApi unavailable): skip wrapping
+    // entirely — plain browser fetch works fine there.
+    if (vscodeApi && typeof window.fetch === 'function') {
+        var nativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            var url = typeof input === 'string' ? input : (input && input.url) || '';
+            // Match on the URL's path only — strip any query/hash first.
+            var match = MTLX_PAYLOAD_RE.exec(url.split(/[?#]/)[0]);
+            if (!match) return nativeFetch(input, init);
+            var relPath = 'js/' + match[1];
+            return new Promise(function (resolve) {
+                var id = nextFetchId++;
+                pendingFetches[id] = {
+                    resolve: resolve,
+                    // On any host-side failure: fall back to the native
+                    // fetch rather than failing the caller outright.
+                    fallback: function () { resolve(nativeFetch(input, init)); },
+                    path: relPath,
+                };
+                vscodeApi.postMessage({ type: 'mtlx-fetch', id: id, path: relPath });
+            });
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Error forwarding: surface uncaught errors / unhandled rejections in
+    // the extension host's "MaterialX Playground" OutputChannel (see
+    // wireCommonWebviewMessages() in src/editorProvider.js) — the webview
+    // devtools console is awkward to reach, and this gives users a place
+    // to copy diagnostics from. Each message is truncated and the total
+    // is capped so a render-loop error can't flood the channel.
+    var errorPostCount = 0;
+    var MAX_ERROR_POSTS = 50;
+    var MAX_ERROR_CHARS = 500;
+    function postError(text) {
+        if (!vscodeApi || errorPostCount >= MAX_ERROR_POSTS) return;
+        errorPostCount++;
+        vscodeApi.postMessage({ type: 'mtlx-error', text: String(text).slice(0, MAX_ERROR_CHARS) });
+    }
+    window.addEventListener('error', function (event) {
+        var where = event && event.filename ? ' (' + event.filename + ':' + event.lineno + ')' : '';
+        postError(((event && event.message) || 'Unknown error') + where);
+    });
+    window.addEventListener('unhandledrejection', function (event) {
+        postError('Unhandled rejection: ' + String(event && event.reason));
+    });
+
     // Route the webview straight to the requested view (viewer/graph/docs)
     // BEFORE the site's own boot (js/shell.jsx reads location.hash for
     // its routing). document.currentScript is only valid synchronously
@@ -43,14 +122,28 @@
     // site's own top nav) would, without help, be resolved against that
     // base and try to *navigate* the webview's frame to a new
     // webview-resource document instead of just updating location.hash
-    // the way it does in a normal browser tab. Handle the two cases the
-    // site actually produces:
+    // the way it does in a normal browser tab. Handle the cases the site
+    // actually produces:
     //   - href starting with '#'   -> same-page hash navigation; do it
     //                                  ourselves via location.hash so the
     //                                  site's hash-based router sees it,
     //                                  and preventDefault so the webview
     //                                  doesn't also try to load
     //                                  "<baseUri>#!graph" as a document.
+    //   - 'index.html#...' hrefs   -> same treatment. Cause: js/
+    //                                  site-header.js:28 computes IS_SHELL
+    //                                  from location.pathname, which under
+    //                                  the webview's document URL can be
+    //                                  false, so the header emits
+    //                                  'index.html#!...'-style links.
+    //                                  Letting those navigate would load
+    //                                  the RAW site page inside the
+    //                                  webview — without this bootstrap,
+    //                                  without the fetch bridge — so any
+    //                                  href whose pre-'#' part is empty or
+    //                                  ends in 'index.html' (i.e. would
+    //                                  target the SAME document) becomes a
+    //                                  hash update instead.
     //   - http(s) links (external) -> leave alone; VS Code's webview host
     //                                  intercepts these itself and opens
     //                                  them in the user's real browser.
@@ -59,9 +152,16 @@
         if (!anchor) return;
         var href = anchor.getAttribute('href');
         if (!href) return;
-        if (href.charAt(0) === '#') {
+        var hashIdx = href.indexOf('#');
+        if (hashIdx === -1) return;
+        var beforeHash = href.slice(0, hashIdx);
+        // A scheme (https:, mailto:, ...) means a true external link —
+        // never intercept those, even if the path happens to end in
+        // 'index.html'.
+        if (/^[a-z][a-z0-9+.\-]*:/i.test(beforeHash)) return;
+        if (beforeHash === '' || /index\.html$/i.test(beforeHash)) {
             event.preventDefault();
-            location.hash = href;
+            location.hash = href.slice(hashIdx);
         }
         // http(s):// (and any other scheme) links: no-op here, VS Code
         // handles those.
@@ -84,7 +184,31 @@
     // message shapes at this level.
     window.addEventListener('message', function (event) {
         var msg = event.data;
-        if (!msg || msg.type !== 'mtlx-open') return;
+        if (!msg) return;
+
+        // 'mtlx-fetch-result': the extension host answering an
+        // 'mtlx-fetch' posted by the fetch() bridge above. Settle and
+        // forget the pending entry; unknown/duplicate ids are ignored.
+        if (msg.type === 'mtlx-fetch-result') {
+            var pending = pendingFetches[msg.id];
+            if (!pending) return;
+            delete pendingFetches[msg.id];
+            if (msg.ok && msg.bytes) {
+                pending.resolve(new Response(msg.bytes, {
+                    status: 200,
+                    headers: {
+                        'Content-Type': /\.wasm$/.test(pending.path)
+                            ? 'application/wasm'
+                            : 'application/octet-stream',
+                    },
+                }));
+            } else {
+                pending.fallback();
+            }
+            return;
+        }
+
+        if (msg.type !== 'mtlx-open') return;
 
         var mode = msg.mode;
         var name = msg.name;

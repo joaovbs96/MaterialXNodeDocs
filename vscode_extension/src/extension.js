@@ -67,19 +67,26 @@ function activate(context) {
         vscode.commands.registerCommand('materialxPlayground.openDocs', async () => {
             try {
                 // No backing .mtlx document — a plain WebviewPanel using the
-                // same HTML builder, initial hash '#!docs', no message
+                // same HTML builder, initial hash '#!docs', no document
                 // payload ever sent (the docs view browses the node
                 // library on its own, same as visiting index.html#!docs
                 // directly in a browser). renderStaticHtml sets
                 // webview.options (enableScripts + localResourceRoots)
-                // itself, same as resolveCustomTextEditor does.
+                // itself, same as resolveCustomTextEditor does, and wires
+                // the same shared 'mtlx-fetch'/'mtlx-error' handler
+                // (editorProvider.js wireCommonWebviewMessages) — the
+                // docs view loads the MaterialX WASM payloads too, so it
+                // needs the fetch bridge just like the viewer/graph
+                // views. That's why the whole panel is passed here, not
+                // just panel.webview: the handler's Disposable is tied to
+                // panel.onDidDispose.
                 const panel = vscode.window.createWebviewPanel(
                     'materialxPlayground.docs',
                     'MaterialX: Node Documentation',
                     vscode.ViewColumn.Active,
                     { retainContextWhenHidden: true }
                 );
-                await MaterialXEditorProvider.renderStaticHtml(context, panel.webview, '#!docs');
+                await MaterialXEditorProvider.renderStaticHtml(context, panel, '#!docs');
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err)));
             }

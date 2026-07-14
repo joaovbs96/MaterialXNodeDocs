@@ -22,7 +22,9 @@ const RELOAD_DEBOUNCE_MS = 400;
 // custom editor, backed by a document) and renderStaticHtml (the
 // document-less "MaterialX: Open Node Documentation" command in
 // extension.js) — both need byte-identical chrome, just a different
-// initial hash and, for the static case, no message wiring.
+// initial hash and, for the static case, no document-payload wiring.
+// Returns the repo-root Uri so callers can hand it to
+// wireCommonWebviewMessages() without re-deriving it.
 async function buildHtml(context, webview, initialHash) {
     // v1 runs the extension straight out of a checkout of this repo (see
     // README.md "Development" — F5 "Run Extension"), so the site lives
@@ -50,6 +52,76 @@ async function buildHtml(context, webview, initialHash) {
     html = html.split('${initialHash}').join(initialHash);
 
     webview.html = html;
+    return repoRootUri;
+}
+
+// ---------------------------------------------------------------------
+// Shared webview message wiring — used by BOTH webview creation sites
+// (resolveCustomTextEditor's custom-editor panel and extension.js's
+// document-less docs panel), so the fetch bridge and error forwarding
+// behave identically everywhere the site runs.
+
+// Whitelist for 'mtlx-fetch' paths: exactly the MaterialX Emscripten
+// payloads under js/ (JsMaterialX*.data / *.wasm, including versioned
+// names like JsMaterialXGenShader-1.39.5.data). The webview must NOT be
+// able to read arbitrary disk paths through this bridge — no slashes
+// beyond the fixed 'js/' prefix, no '..' escapes (the character class
+// admits dots but the single fixed prefix means the path can never leave
+// js/), nothing that isn't a MaterialX payload.
+const FETCH_WHITELIST_RE = /^js\/JsMaterialX[\w.\-]*\.(data|wasm)$/;
+
+// One OutputChannel for the whole extension, created lazily on the first
+// forwarded webview error — most sessions never need it, and channels
+// stick around in the Output panel's dropdown once created.
+let sharedOutputChannel = null;
+function getSharedOutputChannel() {
+    if (!sharedOutputChannel) {
+        sharedOutputChannel = vscode.window.createOutputChannel('MaterialX Playground');
+    }
+    return sharedOutputChannel;
+}
+
+// Handles the two message types every MaterialX webview can send,
+// regardless of which command created it:
+//   - 'mtlx-fetch'  { id, path }: media/bootstrap.js's fetch() bridge
+//     asking for a MaterialX Emscripten payload's raw bytes. The webview
+//     resource pipeline corrupts these large binaries in transit (packed
+//     virtual-FS slice offsets shift; the stdlib XML then parse-fails at
+//     a packed file's EOF), so bootstrap.js intercepts the glue code's
+//     fetch() and we serve the on-disk bytes from the extension host
+//     instead. Reply: { type: 'mtlx-fetch-result', id, ok, bytes|error }
+//     — a Uint8Array is structured-clone-safe across the boundary.
+//   - 'mtlx-error'  { text }: an uncaught error / unhandled rejection
+//     inside the webview, forwarded to the shared OutputChannel for
+//     diagnostics.
+// `outputChannel` is optional — omitted, the lazily-created shared
+// channel is used. Returns the Disposable for the listener; callers
+// dispose it with their panel.
+function wireCommonWebviewMessages(webview, repoRootUri, outputChannel) {
+    return webview.onDidReceiveMessage(async (msg) => {
+        if (!msg) return;
+        if (msg.type === 'mtlx-fetch') {
+            const id = msg.id;
+            const relPath = msg.path;
+            try {
+                if (typeof relPath !== 'string' || !FETCH_WHITELIST_RE.test(relPath)) {
+                    webview.postMessage({ type: 'mtlx-fetch-result', id, ok: false, error: 'path not allowed: ' + String(relPath) });
+                    return;
+                }
+                const fileUri = vscode.Uri.joinPath(repoRootUri, ...relPath.split('/'));
+                const bytes = await vscode.workspace.fs.readFile(fileUri);
+                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: true, bytes });
+            } catch (err) {
+                // bootstrap.js falls back to its native fetch on
+                // { ok: false }, so a read failure here is never worse
+                // than not having the bridge at all.
+                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: false, error: err && err.message ? err.message : String(err) });
+            }
+        } else if (msg.type === 'mtlx-error') {
+            const channel = outputChannel || getSharedOutputChannel();
+            channel.appendLine('[' + new Date().toISOString() + '] ' + String(msg.text || ''));
+        }
+    });
 }
 
 // Turn a Node Buffer/Uint8Array-keyed files map (docScanner's return
@@ -85,7 +157,11 @@ class MaterialXEditorProvider {
                 || vscode.workspace.getConfiguration('materialx').get('defaultView', 'viewer');
             const initialHash = mode === 'graph' ? '#!graph' : '#!viewer';
 
-            await buildHtml(this.context, webviewPanel.webview, initialHash);
+            const repoRootUri = await buildHtml(this.context, webviewPanel.webview, initialHash);
+
+            // Fetch bridge + error forwarding, shared with the docs
+            // panel (see wireCommonWebviewMessages above).
+            const commonSub = wireCommonWebviewMessages(webviewPanel.webview, repoRootUri);
 
             // Fixed for the lifetime of this panel: switching
             // materialx.defaultView after the fact shouldn't yank an
@@ -141,6 +217,7 @@ class MaterialXEditorProvider {
             });
 
             webviewPanel.onDidDispose(() => {
+                commonSub.dispose();
                 messageSub.dispose();
                 changeSub.dispose();
                 if (debounceTimer) clearTimeout(debounceTimer);
@@ -155,10 +232,16 @@ class MaterialXEditorProvider {
     // Document-less variant for extension.js's materialxPlayground.openDocs
     // command: same HTML/chrome, no document payload ever sent (the docs
     // view browses the node library entirely on its own, same as visiting
-    // index.html#!docs directly).
-    static async renderStaticHtml(context, webview, initialHash) {
+    // index.html#!docs directly). Takes the whole panel (not just its
+    // webview) so it can wire the shared fetch-bridge/error-forwarding
+    // handler and dispose it with the panel — the docs view needs the
+    // WASM payloads (its spec parser runs shader-lib code) exactly as
+    // much as the viewer/graph views do.
+    static async renderStaticHtml(context, panel, initialHash) {
         try {
-            await buildHtml(context, webview, initialHash);
+            const repoRootUri = await buildHtml(context, panel.webview, initialHash);
+            const commonSub = wireCommonWebviewMessages(panel.webview, repoRootUri);
+            panel.onDidDispose(() => commonSub.dispose());
         } catch (err) {
             vscode.window.showErrorMessage(
                 'MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err))
@@ -167,4 +250,4 @@ class MaterialXEditorProvider {
     }
 }
 
-module.exports = { MaterialXEditorProvider };
+module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages };

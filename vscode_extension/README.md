@@ -105,3 +105,25 @@ replacing the default text editor). To make it the default, add to your
   "Send to Viewer"/"Send to Editor" buttons use
   (`js/shared/mtlx-ui.jsx`), so the webview is, as far as the site's own
   code can tell, just another caller of that same hand-off.
+
+### How the extension serves the MaterialX WASM payloads
+
+The site's Emscripten glue loads its packed standard-library filesystem
+and wasm binary (`js/JsMaterialX*.data` / `*.wasm`, ~1.5 MB / ~2 MB) via
+plain `fetch()`. VS Code's webview resource pipeline alters those large
+binaries in transit — the packed-FS slice offsets shift and the MaterialX
+standard libraries fail to parse, which breaks the docs view and all
+shader generation. So `media/bootstrap.js` intercepts exactly those
+fetches and asks the extension host for the bytes instead
+(`'mtlx-fetch'` -> `wireCommonWebviewMessages` in
+`src/editorProvider.js`, which whitelists the path and reads the file
+with `vscode.workspace.fs.readFile`), bypassing the pipeline. Any bridge
+failure falls back to the webview's native `fetch`, so it is never worse
+than not having the bridge.
+
+### Diagnostics
+
+Uncaught errors and unhandled promise rejections inside the webview are
+forwarded to the **MaterialX Playground** output channel (View -> Output,
+then pick it from the dropdown) — check there first when a view renders
+blank or a shader never compiles.
