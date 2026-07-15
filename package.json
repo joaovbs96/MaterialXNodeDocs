@@ -1,16 +1,36 @@
 {
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
-  "description": "View .mtlx files in the MaterialX Playground web app (Material Viewer / Node Graph Editor) from a checkout of this repo.",
+  "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
   "version": "0.1.0",
   "publisher": "local",
   "private": true,
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "main": "./src/extension.js",
+  "main": "vscode_extension/src/extension.js",
+  "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXNodeDocs" },
   "categories": [
     "Visualization"
+  ],
+  "keywords": [
+    "materialx",
+    "usd",
+    "usdmtlx",
+    "pixar",
+    "openusd",
+    "vfx",
+    "3d",
+    "graphics",
+    "node graph",
+    "shader",
+    "shader graph",
+    "material",
+    "material graph",
+    "materialx playground",
+    "materialx viewer",
+    "materialx editor"
   ],
   "activationEvents": [
     "onCustomEditor:materialxPlayground.editor"
@@ -31,23 +51,23 @@
     "commands": [
       {
         "command": "materialxPlayground.open",
-        "title": "Send to MaterialX Playground"
+        "title": "MaterialX Playground: Open MaterialX Document"
       },
       {
         "command": "materialxPlayground.openDocs",
-        "title": "MaterialX: Open Node Documentation"
+        "title": "MaterialX Playground: Open Node Library Documentation"
       },
       {
         "command": "materialxPlayground.saveGraph",
-        "title": "MaterialX: Save Node Graph to File"
+        "title": "MaterialX Playground: Save Node Graph to File"
       },
       {
         "command": "materialxPlayground.undoGraph",
-        "title": "MaterialX: Undo Node Graph Edit"
+        "title": "MaterialX Playground: Undo Node Graph Edit"
       },
       {
         "command": "materialxPlayground.redoGraph",
-        "title": "MaterialX: Redo Node Graph Edit"
+        "title": "MaterialX Playground: Redo Node Graph Edit"
       }
     ],
     "keybindings": [
@@ -77,6 +97,13 @@
     ],
     "menus": {
       "explorer/context": [
+        {
+          "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        }
+      ],
+      "editor/title/context": [
         {
           "command": "materialxPlayground.open",
           "when": "resourceExtname == .mtlx",

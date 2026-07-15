@@ -424,32 +424,37 @@
                 let alive = true;
                 setRows(null);
                 getMxEnv().then(({ stdlib }) => {
-                    if (!alive) return;
-                    const byName = {};
-                    const order = [];
-                    const record = (el, kindLabel) => {
-                        const nm = el.getName();
-                        const key = kindLabel + ':' + nm;
-                        let ty = '';
-                        try { const t = el.getType && el.getType(); ty = (t && t.getName) ? t.getName() : String(t || ''); } catch (e) { ty = ''; }
-                        let val = '';
-                        try { val = (el.getValueString && el.getValueString()) || ''; } catch (e) { val = ''; }
-                        let en = '';
-                        try { en = (el.getAttribute && el.getAttribute('enum')) || ''; } catch (e) { en = ''; }
-                        if (!byName[key]) {
-                            byName[key] = { name: nm, kind: kindLabel, types: [], value: val, enums: en };
-                            order.push(key);
-                        }
-                        if (ty && byName[key].types.indexOf(ty) === -1) byName[key].types.push(ty);
-                    };
-                    try {
-                        for (const def of vecToArray(stdlib.getMatchingNodeDefs(nodeName))) {
-                            for (const inp of vecToArray(def.getInputs ? def.getInputs() : null)) record(inp, 'input');
-                            for (const out of vecToArray(def.getOutputs ? def.getOutputs() : null)) record(out, 'output');
-                        }
-                    } catch (e) { /* nodedef read is best-effort */ }
-                    if (alive) setRows(order.map((k) => byName[k]));
-                }).catch(() => { if (alive) setRows([]); });
+                    if (!alive) return undefined;
+                    // Serialized against the shared wasm heap (see
+                    // mxExclusive in js/mtlx-engine.js).
+                    return window.mxExclusive(() => {
+                        const byName = {};
+                        const order = [];
+                        const record = (el, kindLabel) => {
+                            const nm = el.getName();
+                            const key = kindLabel + ':' + nm;
+                            let ty = '';
+                            try { const t = el.getType && el.getType(); ty = (t && t.getName) ? t.getName() : String(t || ''); } catch (e) { ty = ''; }
+                            let val = '';
+                            try { val = (el.getValueString && el.getValueString()) || ''; } catch (e) { val = ''; }
+                            let en = '';
+                            try { en = (el.getAttribute && el.getAttribute('enum')) || ''; } catch (e) { en = ''; }
+                            if (!byName[key]) {
+                                byName[key] = { name: nm, kind: kindLabel, types: [], value: val, enums: en };
+                                order.push(key);
+                            }
+                            if (ty && byName[key].types.indexOf(ty) === -1) byName[key].types.push(ty);
+                        };
+                        try {
+                            for (const def of vecToArray(stdlib.getMatchingNodeDefs(nodeName))) {
+                                for (const inp of vecToArray(def.getInputs ? def.getInputs() : null)) record(inp, 'input');
+                                for (const out of vecToArray(def.getOutputs ? def.getOutputs() : null)) record(out, 'output');
+                            }
+                        } catch (e) { /* nodedef read is best-effort */ }
+                        return order.map((k) => byName[k]);
+                    });
+                }).then((rows) => { if (alive && rows !== undefined) setRows(rows); })
+                    .catch(() => { if (alive) setRows([]); });
                 return () => { alive = false; };
             }, [nodeName]);
             if (rows === null) {

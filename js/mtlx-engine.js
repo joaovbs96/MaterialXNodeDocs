@@ -124,6 +124,23 @@ const getMxEnv = () => {
     return mxEnvPromise;
 };
 
+// All work that touches the shared wasm module (document building,
+// nodedef queries, shader generation) must be serialized: the heap can
+// GROW during any of these calls (ALLOW_MEMORY_GROWTH), which detaches
+// the typed-array views/pointers a CONCURRENT in-flight call is holding —
+// surfacing as irregular "memory access out of bounds" / corrupted-read
+// errors ("Node has no outputs defined"). One promise chain = one wasm
+// operation at a time. Rejections don't break the chain.
+let mxQueueTail = Promise.resolve();
+function mxExclusive(fn) {
+    const run = () => Promise.resolve().then(fn);
+    const p = mxQueueTail.then(run, run);
+    // The tail must never carry a rejection forward (it would look like
+    // every later caller failed) — settle it to undefined either way.
+    mxQueueTail = p.then(() => undefined, () => undefined);
+    return p;
+}
+
 // Logs the generated GLSL + discovered uniforms to the console — the
 // fastest way to diagnose a black/!runnable shader. Off by default, opt in
 // via `localStorage.setItem('mtlxDebugShaders', '1')`. Read ONCE at module
@@ -706,12 +723,39 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     return { bound, missing };
 };
 
+// Extract a plain JS array from either a real JS array or a
+// MaterialX/embind vector-like value ({size(),get(i)} or a typed-array
+// producing {data()}). Shared by mxValueToThreeUniform (below) and
+// plainizeMxUniformData (below) — the latter is the one that matters for
+// heap safety: it runs INSIDE generatePreviewSourcesUnlocked, still under
+// the mxExclusive lock (see mxExclusive, js/mtlx-engine.js), and its
+// Array.from/push calls copy the data out of any heap-backed view into a
+// plain, detached JS array before the lock releases. mxValueToThreeUniform
+// itself may also be called with values that already went through that
+// conversion (plain arrays) — Array.isArray short-circuits those safely,
+// so it stays tolerant of both shapes.
+const mxDataToPlainArray = (d) => {
+    if (Array.isArray(d)) return d;
+    if (d && typeof d.data === 'function') { try { return Array.from(d.data()); } catch (e) { /* not iterable */ } }
+    if (d && typeof d.size === 'function') { const o = []; for (let i = 0; i < d.size(); i++) o.push(d.get(i)); return o; }
+    return null;
+};
+
 // Enumerate a ShaderStage's uniform variables via MaterialX shader
 // introspection — the official viewer's approach (§7.1). Returns
 // [{ name, type, data }] where data is the raw getData() payload of
 // the recorded default (null when the uniform has no default, e.g.
 // the per-frame transform matrices). Every access is defensive:
 // exact embind shapes vary across MaterialX JS builds.
+//
+// CAUTION: `data` here may be a LIVE heap-backed view (val.getData() below)
+// for vector/matrix/color types — it is NOT safe to hold across an await or
+// past the mxExclusive lock releasing (a later heap grow detaches it). Every
+// caller of collectMxUniforms MUST immediately run its output through
+// plainizeMxUniformData (below) before returning across the lock boundary.
+// Currently the only caller is generatePreviewSourcesUnlocked, which does
+// exactly that — do not add a new caller outside the lock without the same
+// treatment.
 const collectMxUniforms = (stage) => {
     const out = [];
     const blocks = []; // { key, blk }
@@ -763,17 +807,32 @@ const collectMxUniforms = (stage) => {
     return out;
 };
 
+// Types whose collectMxUniforms `data` is (or may be) a live embind
+// vector/heap-backed view rather than a plain JS primitive — the ones
+// that need mxDataToPlainArray to detach them. Scalars (float/integer/
+// boolean) and filename/string values already arrive as plain JS from
+// embind, so they pass through untouched.
+const VECTOR_MX_TYPES = new Set(['vector2', 'vector3', 'vector4', 'color3', 'color4', 'matrix33', 'matrix44']);
+
+// Convert ONE collectMxUniforms() entry's `data` field to plain JS —
+// MUST run before the mxExclusive lock that's active during
+// generatePreviewSourcesUnlocked releases (see mxExclusive,
+// js/mtlx-engine.js, and the CAUTION note on collectMxUniforms above).
+// Returns a new entry object; never mutates the input.
+const plainizeMxUniformData = (u) => {
+    if (u.data == null || !VECTOR_MX_TYPES.has(u.type)) return u;
+    return Object.assign({}, u, { data: mxDataToPlainArray(u.data) });
+};
+
 // Convert a MaterialX default value (by MaterialX type name) into a
 // three.js uniform. Returns null for types that can't be a plain
 // default (filename/sampler/string) — env samplers are bound
-// separately and the rest are safely skipped.
+// separately and the rest are safely skipped. `data` is expected to
+// already be plain JS (see plainizeMxUniformData) by the time this is
+// called from applyIntrospectedUniformDefaults, but mxDataToPlainArray
+// tolerates a live wasm vector too, for robustness.
 const mxValueToThreeUniform = (type, data) => {
-    const arr = (d) => {
-        if (Array.isArray(d)) return d;
-        if (d && typeof d.data === 'function') { try { return Array.from(d.data()); } catch (e) { /* not iterable */ } }
-        if (d && typeof d.size === 'function') { const o = []; for (let i = 0; i < d.size(); i++) o.push(d.get(i)); return o; }
-        return null;
-    };
+    const arr = mxDataToPlainArray;
     switch (type) {
         case 'float': { const n = Number(data); return { value: isNaN(n) ? 0 : n }; }
         case 'integer': { const n = Number(data); return { value: isNaN(n) ? 0 : (n | 0) }; }
@@ -812,7 +871,37 @@ const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)
 // generated on a canvas, so image nodes preview out of the box instead
 // of sampling an unbound (black) sampler. One instance is reused for
 // every filename uniform and restored by "Reset to default".
+//
+// getDefaultTexture() MUST stay synchronous — every consumer (sampler
+// defaults, docs reset, dropped-texture fallbacks) calls it expecting a
+// bindable THREE texture back immediately. So the canvas checker is
+// still drawn and returned on the spot. But it's a crude placeholder;
+// on that same first call we kick off a one-time async load of the
+// real repo asset (see the image path below) and, once it
+// arrives, UPGRADE the SAME texture object in place — swap .image and
+// set needsUpdate — rather than replacing `defaultTexture` with a new
+// THREE.Texture. Every consumer already holds a reference to (or a
+// `{ value: getDefaultTexture() }` uniform pointing at) this singleton,
+// so we can't hand out a different object later; mutating .image is
+// what makes already-bound previews pick up the real image on their
+// very next render without any consumer-side change-detection.
 let defaultTexture = null;
+// Fires exactly once, from the first getDefaultTexture() call, and
+// mutates `defaultTexture` (never reassigns it) when the real asset
+// arrives — see the design note above.
+const startDefaultTextureUpgrade = () => {
+    const img = new Image();
+    img.onload = () => {
+        defaultTexture.image = img;
+        defaultTexture.needsUpdate = true;
+    };
+    img.onerror = () => {
+        console.warn('default texture upgrade failed: could not load the UV checker image asset; keeping canvas checker.');
+    };
+    // Document-relative: resolves against the page's <base href> in
+    // both the plain website and the VS Code webview.
+    img.src = './images/CustomUVChecker_byValle_2K.png';
+};
 const getDefaultTexture = () => {
     if (defaultTexture) return defaultTexture;
     const c = document.createElement('canvas');
@@ -833,6 +922,7 @@ const getDefaultTexture = () => {
     t.flipY = false; // MaterialX image convention; keep loads consistent
     t.needsUpdate = true;
     defaultTexture = t;
+    startDefaultTextureUpgrade();
     return t;
 };
 // Configure a user-loaded texture the same way as the default.
@@ -1131,6 +1221,24 @@ const ENV_MAP_URL = './san_giuseppe_bridge.hdr';
 // { radiance, irradiance, mips } or null if no file is present, in
 // which case the caller uses the synthesized makeEnvTexture sky.
 let envPromise = null;
+// Session-wide user-imported environment override (Environment dialog's
+// "Import..."): when set, every NEWLY-CREATED render view uses this
+// instead of the default getEnvironment() result. null = no override.
+// getEnvironment() itself is untouched — it's still the Reset target and
+// the fallback for views created before any import.
+let envOverride = null;
+// Registry of live render-view handles (createMtlxRenderView's return
+// value), so environment imports/resets (setEnvOverride below) can
+// broadcast to EVERY live view, not just whichever one happens to be
+// visible. Without this, a hidden keep-alive view (e.g. a preview kept
+// alive across a tab switch) keeps whatever environment it was built
+// with — env is baked in at view creation (see `envOverride ||
+// getEnvironment()` in createMtlxRenderView below) — and surfaces later
+// as "the first imported map reappears" when the user switches back to
+// it. Entries are added right before createMtlxRenderView returns its
+// handle and removed by the handle's own dispose() (see its wiring
+// below), so this never outlives the view it tracks.
+const LIVE_VIEWS = new Set();
 // ---- Environment preparation: OFFICIAL VIEWER PARITY ----
 // The official viewer (main.js) does, per texture:
 //   prepareEnvTexture: DataTexture(RGBA), RepeatWrapping (S), max
@@ -1262,6 +1370,168 @@ const downsampleIrradiance = (tex) => {
         return null;
     }
 };
+// True SH (spherical-harmonic, l<=2, 9-coefficient) cosine-convolution
+// irradiance for imported (dropped) environments — used by
+// loadEnvironmentFromFile in place of downsampleIrradiance above,
+// because an imported file never ships a matching prefiltered
+// <name>_irradiance.hdr: downsampleIrradiance's plain box blur (~5.6deg
+// for a 64x32 target) is not a cosine convolution, so
+// mx_environment_irradiance's diffuse term reads as a recognizable,
+// slightly-softened copy of the environment ("map painted on the
+// mesh"). Ramamoorthi & Hanrahan 2001, "An Efficient Representation
+// for Irradiance Environment Maps". Builds the SAME bare 64x32
+// RGBA/HalfFloat DataTexture shape downsampleIrradiance returns above
+// (mapping/wrap/filters/encoding are added later by prepareEnv() at
+// the call site, same as the box-blur path) — only the pixel contents
+// differ.
+//
+// Direction convention (used identically by BOTH the projection pass
+// below and the evaluation pass — see Pass 2 comment for why any
+// consistent convention works): equirect (u,v) -> (theta,phi) with
+// y-up and v=0 at the top (theta=0 = +Y), matching MaterialX's
+// mx_latlong_map_lookup orientation (see makeBackgroundTexture above):
+//   theta = PI * (v+0.5) / H     (0 at top/+Y, PI at bottom/-Y)
+//   phi   = 2*PI * (u+0.5) / W
+//   d = (sx, sy, sz) = (sin(theta)*cos(phi), cos(theta), sin(theta)*sin(phi))
+// The SH basis below is the textbook z-up formula with "z" (the polar
+// axis) relabeled to sy (our up axis) and "x","y" (the equatorial
+// axes) relabeled to sx,sz — a pure axis rename, still an orthonormal
+// basis, so it's correct as long as the SAME labeling is used for both
+// projecting the source radiance AND evaluating the result (exact
+// horizontal phase/handedness doesn't matter for the convolution's
+// correctness, only that both passes agree).
+const shIrradianceFromEquirect = (tex) => {
+    try {
+        const srcImg = tex.image;
+        const srcStride = srcImg.data.length / (srcImg.width * srcImg.height); // 3 or 4
+        const srcIsHalf = srcImg.data.constructor === Uint16Array;
+        const readPx = (idx) => [
+            srcIsHalf ? halfToFloat(srcImg.data[idx]) : srcImg.data[idx],
+            srcIsHalf ? halfToFloat(srcImg.data[idx + 1]) : srcImg.data[idx + 1],
+            srcIsHalf ? halfToFloat(srcImg.data[idx + 2]) : srcImg.data[idx + 2],
+        ];
+        // Pass 0 (pre-downsample, same box-average approach as
+        // downsampleIrradiance above, just to a float buffer instead of
+        // a half-float DataTexture): caps the Pass 1 projection loop
+        // below at <=128x64 (<=8k) texels regardless of source size.
+        let W = srcImg.width, H = srcImg.height, get;
+        if (W > 128 || H > 64) {
+            const dW = Math.min(W, 128), dH = Math.min(H, 64);
+            const bx = Math.max(1, Math.floor(W / dW));
+            const by = Math.max(1, Math.floor(H / dH));
+            const buf = new Float32Array(dW * dH * 3);
+            for (let y = 0; y < dH; y++) {
+                for (let x = 0; x < dW; x++) {
+                    let r = 0, g = 0, b = 0, cnt = 0;
+                    for (let oy = 0; oy < by; oy++) {
+                        for (let ox = 0; ox < bx; ox++) {
+                            const spx = x * bx + ox, spy = y * by + oy;
+                            if (spx >= W || spy >= H) continue;
+                            const px = readPx((spy * W + spx) * srcStride);
+                            r += px[0]; g += px[1]; b += px[2]; cnt++;
+                        }
+                    }
+                    const o = (y * dW + x) * 3;
+                    buf[o] = r / cnt; buf[o + 1] = g / cnt; buf[o + 2] = b / cnt;
+                }
+            }
+            W = dW; H = dH;
+            get = (x, y) => { const o = (y * W + x) * 3; return [buf[o], buf[o + 1], buf[o + 2]]; };
+        } else {
+            get = (x, y) => readPx((y * W + x) * srcStride);
+        }
+        // Pass 1: project the (possibly pre-downsampled) radiance onto
+        // the 9 SH basis functions, weighted by each texel's
+        // differential solid angle dOmega = (2*PI/W)*(PI/H)*sin(theta)
+        // (equirect texels shrink toward the poles).
+        const c = new Float64Array(9 * 3); // [coef*3 + channel], RGB per coefficient
+        for (let y = 0; y < H; y++) {
+            const theta = Math.PI * (y + 0.5) / H;
+            const sinT = Math.sin(theta), cosT = Math.cos(theta);
+            const dOmega = (2 * Math.PI / W) * (Math.PI / H) * sinT;
+            for (let x = 0; x < W; x++) {
+                const phi = 2 * Math.PI * (x + 0.5) / W;
+                const sx = sinT * Math.cos(phi), sy = cosT, sz = sinT * Math.sin(phi);
+                const [r, g, b] = get(x, y);
+                const Y = [
+                    0.282095,                              // Y00
+                    0.488603 * sz,                          // Y1-1
+                    0.488603 * sy,                          // Y10  (sy = up axis)
+                    0.488603 * sx,                          // Y11
+                    1.092548 * sx * sz,                     // Y2-2
+                    1.092548 * sz * sy,                     // Y2-1
+                    1.092548 * sx * sy,                     // Y21
+                    0.315392 * (3 * sy * sy - 1),           // Y20
+                    0.546274 * (sx * sx - sz * sz),         // Y22
+                ];
+                for (let i = 0; i < 9; i++) {
+                    const yw = Y[i] * dOmega;
+                    c[i * 3] += r * yw;
+                    c[i * 3 + 1] += g * yw;
+                    c[i * 3 + 2] += b * yw;
+                }
+            }
+        }
+        // Pass 2: evaluate the cosine-convolved irradiance at each
+        // OUTPUT texel's direction (SAME mapping as Pass 1, just over
+        // the fixed 64x32 output grid). Al are the standard
+        // Ramamoorthi-Hanrahan cosine-lobe coefficients per SH band
+        // (A0=PI, A1=2*PI/3, A2=PI/4); the sum is then scaled by 1/PI
+        // to convert accumulated irradiance back to "equivalent incoming
+        // radiance" units, matching mx_environment_irradiance's expected
+        // input (the same convention downsampleIrradiance's plain
+        // average uses: a uniform env of radiance L must map to L, not
+        // PI*L). Sanity check for a uniform environment (L constant):
+        //   c00 = L * Y00 * (integral of dOmega = 4*PI) = L*0.282095*4*PI
+        //   E(N) = A0 * c00 * Y00 = PI * (L*0.282095*4*PI) * 0.282095
+        //        = PI * L * 4*PI*0.282095^2  ~=  PI * L * 4*PI*(1/(4*PI)) = PI*L
+        //   E(N) / PI = L  ->  matches the input radiance, as required.
+        // Negative results (ringing from the truncated l<=2 series) are
+        // clamped to 0.
+        const OW = 64, OH = 32;
+        const A0 = Math.PI, A1 = (2 * Math.PI) / 3, A2 = Math.PI / 4;
+        const A = [A0, A1, A1, A1, A2, A2, A2, A2, A2];
+        const out = new Uint16Array(OW * OH * 4);
+        for (let y = 0; y < OH; y++) {
+            const theta = Math.PI * (y + 0.5) / OH;
+            const sinT = Math.sin(theta), cosT = Math.cos(theta);
+            for (let x = 0; x < OW; x++) {
+                const phi = 2 * Math.PI * (x + 0.5) / OW;
+                const sx = sinT * Math.cos(phi), sy = cosT, sz = sinT * Math.sin(phi);
+                const Y = [
+                    0.282095,
+                    0.488603 * sz,
+                    0.488603 * sy,
+                    0.488603 * sx,
+                    1.092548 * sx * sz,
+                    1.092548 * sz * sy,
+                    1.092548 * sx * sy,
+                    0.315392 * (3 * sy * sy - 1),
+                    0.546274 * (sx * sx - sz * sz),
+                ];
+                let r = 0, g = 0, b = 0;
+                for (let i = 0; i < 9; i++) {
+                    const aw = A[i] * Y[i];
+                    r += aw * c[i * 3];
+                    g += aw * c[i * 3 + 1];
+                    b += aw * c[i * 3 + 2];
+                }
+                r = Math.max(0, r / Math.PI);
+                g = Math.max(0, g / Math.PI);
+                b = Math.max(0, b / Math.PI);
+                const o = (y * OW + x) * 4;
+                out[o] = floatToHalf(r);
+                out[o + 1] = floatToHalf(g);
+                out[o + 2] = floatToHalf(b);
+                out[o + 3] = 0x3C00; // half 1.0 — alpha unused by the IBL sampler
+            }
+        }
+        return new THREE.DataTexture(out, OW, OH, THREE.RGBAFormat, THREE.HalfFloatType);
+    } catch (e) {
+        console.warn('SH irradiance projection failed:', e);
+        return null;
+    }
+};
 const IRRADIANCE_MAP_URL = './san_giuseppe_bridge_irradiance.hdr';
 const loadHDR = (url) => new Promise((resolve) => {
     if (!THREE.RGBELoader) return resolve(null);
@@ -1298,6 +1568,86 @@ const getEnvironment = () => {
     }
     return envPromise;
 };
+
+// Load a user-dropped equirectangular environment file (Import... in the
+// Environment dialog) and build it into the SAME shape getEnvironment()
+// returns, by reusing its helpers. Always takes the downsample-irradiance
+// path (there's only one dropped file, never a matching prefiltered
+// irradiance file) — same as getEnvironment()'s no-irradiance-file
+// branch. Throws a friendly Error for unsupported extensions or missing
+// loaders/parse failures; callers (the dialog) catch and show it inline.
+const loadEnvironmentFromFile = async (file) => {
+    const name = ((file && file.name) || '').toLowerCase();
+    let raw = null;
+    if (name.endsWith('.hdr')) {
+        if (typeof THREE.RGBELoader === 'undefined') {
+            throw new Error('RGBELoader unavailable (script blocked/offline) — cannot load .hdr environments.');
+        }
+        const buf = await file.arrayBuffer();
+        // HalfFloatType mirrors getEnvironment()'s loadHDR path (the
+        // official-viewer-parity radiance/irradiance loader above), not
+        // loadHdrTexture's FloatType (that one is for per-material
+        // sampler textures, a different use case).
+        const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
+        if (d && d.data) raw = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+    } else if (name.endsWith('.exr')) {
+        if (typeof THREE.EXRLoader === 'undefined') {
+            throw new Error('EXRLoader unavailable (script blocked/offline) — cannot load .exr environments.');
+        }
+        const buf = await file.arrayBuffer();
+        // HalfFloatType (not FloatType, unlike loadExrTexture's material-
+        // sampler use above): RGBA16F is core-filterable/mip-able on
+        // WebGL2, while RGBA32F needs optional extensions — and
+        // prepareEnv() below forces a mip chain for the IBL/background
+        // textures this feeds. Matches the .hdr branch just above,
+        // which already loads HalfFloat.
+        const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
+        if (d && d.data) raw = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+    } else {
+        throw new Error('Unsupported environment file "' + (file && file.name) + '" — expected .hdr or .exr.');
+    }
+    if (!raw || !raw.image || !raw.image.data) {
+        throw new Error('Failed to parse the environment image "' + (file && file.name) + '".');
+    }
+    const radiance = prepareEnv(raw);
+    // A dropped file never ships a matching prefiltered irradiance map,
+    // so (unlike getEnvironment()'s irrRaw-or-downsample choice above)
+    // this always needs a convolution from the radiance itself. Use the
+    // real SH cosine convolution (see shIrradianceFromEquirect above),
+    // not downsampleIrradiance's box blur — a box blur isn't
+    // cosine-weighted, so the diffuse term would show a recognizable,
+    // only-slightly-softened copy of the environment.
+    const irrSrc = shIrradianceFromEquirect(raw);
+    const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
+    const img = radiance.image;
+    const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
+    const background = makeBackgroundTexture(radiance);
+    return { radiance, irradiance, mips, background, prefilteredIrr: false };
+};
+
+// Set/clear the session-wide environment override (see envOverride
+// above). setEnvOverride(null) clears it (Reset) — subsequent new views
+// fall back to getEnvironment() again. Also broadcasts to every
+// currently-live view (LIVE_VIEWS, see above) so an import/reset is
+// visible on hidden keep-alive views too, not just whichever view
+// created it.
+const setEnvOverride = (env) => {
+    envOverride = env || null;
+    if (envOverride) {
+        // Import: apply the new environment to every live view right away.
+        LIVE_VIEWS.forEach((v) => { try { v.setEnvironment(envOverride); } catch (e) { /* view has no lighting/env — no-op */ } });
+    } else {
+        // Reset: fall back to the default environment, but re-check
+        // envOverride once it resolves — a newer import that landed while
+        // this was in flight must win over the stale reset.
+        getEnvironment().then((def) => {
+            if (!envOverride) {
+                LIVE_VIEWS.forEach((v) => { try { v.setEnvironment(def); } catch (e) { /* view has no lighting/env — no-op */ } });
+            }
+        });
+    }
+};
+const getEnvOverride = () => envOverride;
 
 // Standard MaterialX color spaces accepted on filename inputs.
 // Changing one is a CODEGEN decision (the CMS inserts the transform
@@ -1490,15 +1840,26 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
 // compiled sources without paying for a full view rebuild (measured
 // gen.generate: 20-40ms, vs. WebGLRenderer init + GL compile for a
 // full rebuild). Args: { mx, gen, genContext, renderable, label,
-// isMounted }. Returns { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE }
-// (stage names included so callers — createMtlxRenderView's
-// introspection loop, tryRefreshRenderView's — don't re-derive them),
-// or null when isMounted() went false before generation started
-// (nothing GL-side exists yet at that point, so there's nothing to
-// clean up here; the caller decides whether it needs disposePartial).
-// Throws Error with a decoded MaterialX message on generation failure.
+// isMounted }. Returns { vs, fs, introspected } or null when
+// isMounted() went false before generation started (nothing GL-side
+// exists yet at that point, so there's nothing to clean up here; the
+// caller decides whether it needs disposePartial). Throws Error with a
+// decoded MaterialX message on generation failure.
+//
+// `introspected` folds in what used to be a separate post-lock step in
+// each caller (getStage + collectMxUniforms): both the wasm reads AND
+// the heap-view→plain-JS conversion (plainizeMxUniformData) now happen
+// HERE, while still inside the mxExclusive lock (see generatePreviewSources
+// below) — so every entry's `data` is fully detached, ordinary JS by the
+// time this function returns and the lock releases. mxShader itself is
+// never returned: neither caller needs it once introspection is done
+// here, and holding onto it past the lock would invite exactly the kind
+// of post-unlock wasm access this refactor removes. (mxShader IS a raw
+// pointer that survives heap growth on its own — see the mxExclusive
+// comment at the top of this file — but there's no remaining reason for
+// a caller to touch it, so it's kept out of the returned shape.)
 // ------------------------------------------------------------------
-const generatePreviewSources = ({ mx, gen, genContext, renderable, label, isMounted = () => true }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true }) => {
     // OFFICIAL PARITY: per-material generation options. Transparency
     // detection switches the generated blending path (glass etc.);
     // COMPLETE interface exposes every input as a uniform for the
@@ -1557,8 +1918,32 @@ const generatePreviewSources = ({ mx, gen, genContext, renderable, label, isMoun
     if (!/srgb/i.test(fs)) fs = encodeDisplay(fs);
     else if (DEBUG_SHADERS) console.log('generator emitted sRGB encode (hwSrgbEncodeOutput) — no injection');
 
-    return { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE };
+    // --- Uniform introspection (folded in from the callers — see the
+    // block comment above). Still fully inside the mxExclusive lock:
+    // getStage/collectMxUniforms are wasm reads, and plainizeMxUniformData
+    // converts every vector/matrix/color `data` field to a plain, detached
+    // JS array BEFORE this function returns (i.e. before the lock can
+    // release) — nothing in the returned `introspected` array holds a
+    // live embind/heap reference.
+    let introspected = [];
+    for (const stageName of [VERTEX_STAGE, PIXEL_STAGE]) {
+        let st = null;
+        try { st = mxShader.getStage(stageName); } catch (e) { /* stage absent */ }
+        if (st) introspected = introspected.concat(collectMxUniforms(st));
+    }
+    introspected = introspected.map(plainizeMxUniformData);
+
+    return { vs, fs, introspected };
 };
+
+// Public entry point: serializes generatePreviewSourcesUnlocked against
+// the shared wasm heap (see mxExclusive above). Every caller — internal
+// (tryRefreshRenderView, createMtlxRenderView below) and external — must
+// go through THIS wrapper, never generatePreviewSourcesUnlocked
+// directly, so a shader-gen call never overlaps another in-flight wasm
+// operation. Neither internal caller runs inside an existing
+// mxExclusive callback, so this cannot nest/deadlock.
+const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
 
 // ------------------------------------------------------------------
 // applyIntrospectedUniformDefaults — upload MaterialX's introspected
@@ -1653,26 +2038,60 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
 // since a real rebuild (renderer + GL compile) dwarfs it anyway.
 // Returns { refreshed: true } when `view.uniforms`/`view.introspected`
 // were updated in place.
+// NOTE: async (awaits the mxExclusive-locked generatePreviewSources —
+// see mxExclusive above). Callers must `await` this now; it no longer
+// returns its result synchronously.
 // ------------------------------------------------------------------
-const tryRefreshRenderView = ({ view, mx, gen, genContext, renderable, label, isMounted = () => true }) => {
+const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, label, isMounted = () => true }) => {
     const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
     let srcs;
     try {
-        srcs = generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
     } catch (e) {
         return { refreshed: false };
     }
     if (!srcs) return { refreshed: false };
     if (srcs.vs !== view.vs || srcs.fs !== view.fs) return { refreshed: false };
 
-    let introspected = [];
-    for (const stageName of [srcs.VERTEX_STAGE, srcs.PIXEL_STAGE]) {
-        let st = null;
-        try { st = srcs.mxShader.getStage(stageName); } catch (e) { /* stage absent */ }
-        if (st) introspected = introspected.concat(collectMxUniforms(st));
+    // A `filename`-type input's VALUE (the referenced texture path) can
+    // change without the generated GLSL text changing at all — the path
+    // isn't baked into shader source, so the srcs.vs/fs check above can't
+    // see it. But applyIntrospectedUniformDefaults below is called with
+    // overwrite:true and deliberately SKIPS filename-type uniforms (see
+    // its own `if (u.type === 'filename') continue;`) — the caller is
+    // expected to rebind the actual texture afterward via
+    // bindDroppedTextures. Empirically, rebinding a texture onto an
+    // in-place-reused compiled view/material this way does NOT make it
+    // visible (the checker default stays on screen); only a full rebuild
+    // (createMtlxRenderView) has been proven to make a newly-assigned
+    // texture actually render. So: if any filename uniform's referenced
+    // value differs between the OLD (currently-bound) introspection and
+    // the freshly-regenerated one, treat that as equivalent to a real
+    // shader-source change and force the full-rebuild path. Do NOT
+    // "simplify" this away without re-verifying that underlying
+    // WebGL/three.js behavior — it's the whole reason this check exists.
+    const oldFilenames = new Map();
+    for (const u of view.introspected || []) {
+        if (u.type === 'filename') oldFilenames.set(u.name, u.data != null ? u.data : null);
     }
-    view.introspected = introspected;
-    applyIntrospectedUniformDefaults(view.uniforms, introspected, { overwrite: true });
+    const newFilenames = new Map();
+    for (const u of srcs.introspected || []) {
+        if (u.type === 'filename') newFilenames.set(u.name, u.data != null ? u.data : null);
+    }
+    const filenameNames = new Set([...oldFilenames.keys(), ...newFilenames.keys()]);
+    for (const name of filenameNames) {
+        const oldVal = oldFilenames.has(name) ? oldFilenames.get(name) : null;
+        const newVal = newFilenames.has(name) ? newFilenames.get(name) : null;
+        if (oldVal !== newVal) return { refreshed: false };
+    }
+
+    // Introspection (getStage/collectMxUniforms + the heap-view→plain-JS
+    // conversion) now happens INSIDE generatePreviewSourcesUnlocked, still
+    // under the mxExclusive lock — srcs.introspected is already plain JS
+    // by the time it gets here, post-lock. No wasm reads left in this
+    // function.
+    view.introspected = srcs.introspected;
+    applyIntrospectedUniformDefaults(view.uniforms, srcs.introspected, { overwrite: true });
     if (window.MTLX_PERF_LOG) {
         console.log('[mtlx-perf] preview fast-refresh (source unchanged): '
             + (performance.now() - __t).toFixed(1) + 'ms (target: ' + label + ')');
@@ -1716,6 +2135,7 @@ const createMtlxRenderView = async ({
     // visible scene background (setEnvBackground) — the IBL uniforms
     // are bound regardless.
     let envBgTexture = null;
+    let envRadSamplerName = null, envIrrSamplerName = null, envRotationRad = 0;
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
@@ -1738,7 +2158,7 @@ const createMtlxRenderView = async ({
                 // generatePreviewSources for the full breakdown; extracted
                 // so tryRefreshRenderView can reuse it for a source diff
                 // without pulling in the rest of this function.
-                const __srcs = generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+                const __srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
                 // Bail before the ~expensive shader-generation call if this
                 // build has already been superseded (caller's effect
                 // cleanup flipped `mounted` while we were awaiting above) —
@@ -1746,7 +2166,11 @@ const createMtlxRenderView = async ({
                 // below), so disposePartial() is a safe, idempotent no-op
                 // here beyond flagging `stopped`.
                 if (!__srcs) { disposePartial(); return null; }
-                const { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE } = __srcs;
+                // introspected: already plain JS, converted inside the
+                // mxExclusive-locked generatePreviewSourcesUnlocked before
+                // the lock released — see that function's comment. No
+                // getStage/collectMxUniforms left in this function.
+                const { vs, fs, introspected } = __srcs;
 
                 // Pre-warm the driver's shader compile on the persistent
                 // hidden GL context BEFORE the display renderer is created
@@ -1855,18 +2279,16 @@ const createMtlxRenderView = async ({
                 // 1.0) was 0, multiplying every unlit preview to black,
                 // and every PBR weight/color default was 0 too, blacking
                 // out lit nodes. Mirrors the official viewer (§7.1).
-                let introspected = [];
-                for (const stageName of [VERTEX_STAGE, PIXEL_STAGE]) {
-                    let st = null;
-                    try { st = mxShader.getStage(stageName); } catch (e) { /* stage absent */ }
-                    if (st) introspected = introspected.concat(collectMxUniforms(st));
-                }
+                // `introspected` (destructured from __srcs above) was
+                // already collected + plainized inside the mxExclusive lock
+                // by generatePreviewSourcesUnlocked — nothing left to read
+                // from mxShader/wasm here, just apply the plain defaults.
                 applyIntrospectedUniformDefaults(uniforms, introspected);
                 if (DEBUG_SHADERS) {
                     console.log('introspected uniforms:',
                         introspected.map((u) => `${u.type} ${u.name}${u.data != null ? ' (default uploaded)' : ''}`));
                     if (!introspected.length) {
-                        console.warn('Shader introspection found NO uniform blocks — defaults not uploaded; expect black. (Binding API mismatch — report the mxShader/stage method names.)');
+                        console.warn('Shader introspection found NO uniform blocks — defaults not uploaded; expect black. (Binding API mismatch — report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');
                     }
                 }
 
@@ -1877,8 +2299,18 @@ const createMtlxRenderView = async ({
                 const declaredNames = new Set(declared.map((u) => u.name));
                 const has = (n) => declaredNames.has(n);
                 // Find a declared sampler whose name matches a pattern.
+                // ALWAYS anchored to /env/i: canonical names are
+                // u_envRadiance/u_envIrradiance, and the radiance/
+                // irradiance term below is kept loose only to tolerate
+                // version drift in that suffix. Without the /env/i
+                // anchor, a MATERIAL image sampler whose name happens to
+                // contain "specular"/"diffuse" (or "radiance"/etc.) could
+                // match too — previously latent (only bound at creation),
+                // it became a live bug once the imported-HDR broadcast
+                // (see setEnvironment / LIVE_VIEWS below) started writing
+                // straight into whatever uniform name this returned.
                 const findSampler = (re) =>
-                    declared.find((u) => /sampler/i.test(u.type) && re.test(u.name));
+                    declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name));
 
                 if (DEBUG_SHADERS) {
                     console.group(`MaterialX preview: ${label}`);
@@ -1895,7 +2327,7 @@ const createMtlxRenderView = async ({
                 // but matched loosely so version drift doesn't leave them
                 // unbound → black).
                 if (needsLighting) {
-                    const env = await getEnvironment();
+                    const env = envOverride || await getEnvironment();
                     if (!isMounted()) { disposePartial(); return null; }
                     let radiance, irradiance, mips, bgTex;
                     if (env) {
@@ -1914,6 +2346,11 @@ const createMtlxRenderView = async ({
                     const irrSampler = findSampler(/irradiance|diffuse/i);
                     if (radSampler) uniforms[radSampler.name] = { value: radiance };
                     if (irrSampler) uniforms[irrSampler.name] = { value: irradiance };
+                    // Captured so the view-handle's setEnvironment()/
+                    // setEnvRotation()/setEnvExposure() methods below can
+                    // live-swap/mutate the right uniforms after creation.
+                    envRadSamplerName = radSampler && radSampler.name;
+                    envIrrSamplerName = irrSampler && irrSampler.name;
                     // The (optional) visible background is a SEPARATE,
                     // flipY=true copy of the radiance — reusing the IBL
                     // texture directly renders the environment mirrored
@@ -2039,7 +2476,7 @@ const createMtlxRenderView = async ({
                     console.log('[mtlx-perf] createMtlxRenderView total: '
                         + (performance.now() - __totalPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
                 }
-        return {
+        const handle = {
             uniforms, introspected, vs, fs, controls, renderer,
             // Live auto-orbit toggle (no regen needed).
             setAutoRotate: (on) => {
@@ -2055,6 +2492,50 @@ const createMtlxRenderView = async ({
             // UI hide the toggle for unlit previews instead of
             // offering a button that can't do anything.
             hasEnvBackground: () => !!envBgTexture,
+            // Live rotation offset (radians) for the IBL environment.
+            // Preserves official-viewer parity (base +90 Y, see
+            // u_envMatrix above) and adds the user's offset on top.
+            // Uniform mutation takes effect next frame on this
+            // RawShaderMaterial (no material/shader rebuild needed).
+            setEnvRotation: (rad) => {
+                if (uniforms.u_envMatrix) {
+                    uniforms.u_envMatrix.value = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
+                }
+                envRotationRad = rad;
+                // Best-effort: also rotate the visible backdrop via the
+                // background texture's offset (wrapS is RepeatWrapping —
+                // see makeBackgroundTexture). r128's equirect background
+                // path may or may not actually sample through
+                // texture.offset; if it doesn't, the lighting rotates but
+                // the backdrop stays fixed (there's no
+                // scene.backgroundRotation before three r163) — harmless
+                // either way, and this keeps working for free if it does.
+                if (envBgTexture) {
+                    envBgTexture.offset.x = -rad / (2 * Math.PI);
+                }
+            },
+            // IBL-only exposure multiplier — direct lights are
+            // unaffected, but IBL is the dominant light source in these
+            // previews so this reads as a full exposure control.
+            setEnvExposure: (x) => {
+                if (uniforms.u_envLightIntensity) uniforms.u_envLightIntensity.value = x;
+            },
+            // Live-swap the environment (radiance/irradiance/mips/
+            // background) without a shader rebuild — used by the
+            // Environment dialog's Import.../Reset. Re-applies the
+            // current rotation offset to the new background texture, and
+            // only touches scene.background if it's currently shown (a
+            // hidden background — scene.background falsy — stays hidden).
+            // No-op (safely) on views with no lighting/env samplers.
+            setEnvironment: (env) => {
+                if (!env) return;
+                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
+                if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
+                if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
+                envBgTexture = env.background;
+                if (envBgTexture) envBgTexture.offset.x = -envRotationRad / (2 * Math.PI);
+                if (scene.background) scene.background = envBgTexture;
+            },
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so
             // render synchronously right before reading it back.
@@ -2063,8 +2544,18 @@ const createMtlxRenderView = async ({
                 renderer.render(scene, camera);
                 return renderer.domElement.toDataURL('image/png');
             },
-            dispose: disposePartial,
+            // Wrapped (not disposePartial directly) so every disposal path
+            // — callers all go through this handle's dispose() (grepped:
+            // viewer-app.jsx, graph/preview.jsx, node-preview.jsx) — also
+            // deregisters the handle from LIVE_VIEWS, so setEnvOverride's
+            // broadcast never touches a torn-down view.
+            dispose: () => {
+                LIVE_VIEWS.delete(handle);
+                disposePartial();
+            },
         };
+        LIVE_VIEWS.add(handle);
+        return handle;
     } catch (err) {
         disposePartial();
         throw err;
@@ -2196,7 +2687,7 @@ const MtlxIcon = (props) => {
 })();
 
 Object.assign(window, {
-    getMxEnv, DEBUG_SHADERS,
+    getMxEnv, DEBUG_SHADERS, mxExclusive,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
@@ -2209,6 +2700,7 @@ Object.assign(window, {
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
+    loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
     createMtlxRenderView, tryRefreshRenderView,
     fullscreenElement, toggleFullscreen, watchFullscreen,
     MtlxIcon, MTLX_ICON_PATHS,

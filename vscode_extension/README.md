@@ -156,12 +156,9 @@ replacing the default text editor). To make it the default, add to your
   instance, own WebGL context) — memory and GPU context usage multiply
   per open tab. `retainContextWhenHidden` is enabled so backgrounded tabs
   don't lose their state, at the cost of keeping that memory around.
-- This extension runs the site straight from the repo checkout
-  (`vscode_extension/src/editorProvider.js`'s `repoRootUri` points one
-  directory up, at `../`). Packaging this as a `.vsix` for distribution
-  would need the site's files copied INTO the extension first — an
-  installed extension cannot reach outside its own install directory at
-  runtime.
+- The repo root is the extension's `package.json`/install root, so a
+  packaged `.vsix` (`vsce package`) bundles the site's files alongside
+  `vscode_extension/` automatically — no separate copy step needed.
 
 ## How it works (brief)
 

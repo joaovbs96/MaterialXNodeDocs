@@ -36,6 +36,14 @@ const MAX_BYTES = 64 * 1024 * 1024; // total payload cap across all included doc
 // — same tolerant regex as js/mtlx-engine.js resolveIncludes/loadPreset.
 const XI_INCLUDE_RE = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;
 
+// Mirrors js/mtlx-engine.js's normPath: authored fileprefix/filename values
+// can use Windows-style backslashes, which vscode.Uri.joinPath does NOT
+// treat as path separators (it treats the whole ref as one literal POSIX
+// segment) — normalize before ever building a Uri from a ref/href.
+function normSep(p) {
+    return p.replace(/\\/g, '/');
+}
+
 // Skip refs that would escape the document tree via a URI scheme or an
 // OS-absolute path (POSIX/UNC or Windows drive-absolute) — a port of
 // loadPreset's isSchemeOrRootedRef, generalized from "outside the
@@ -140,7 +148,7 @@ async function scan(documentUri, xmlText) {
         XI_INCLUDE_RE.lastIndex = 0;
         let m;
         while ((m = XI_INCLUDE_RE.exec(xml)) !== null) {
-            const href = m[1] || m[2];
+            const href = normSep(m[1] || m[2]);
             if (isUnsafeRef(href)) {
                 warnings.push('Skipped unsafe xi:include href: ' + href);
                 continue;
@@ -176,7 +184,8 @@ async function scan(documentUri, xmlText) {
         // (fileprefix + authored value), exactly like loadPreset's
         // `map[ref] = blob` — no directory prefix, since the fileprefix
         // already encodes whatever traversal the author intended.
-        for (const ref of extractFilenameRefs(xml)) {
+        for (const rawRef of extractFilenameRefs(xml)) {
+            const ref = normSep(rawRef);
             if (isUnsafeRef(ref) || seenTextureRefs.has(ref)) continue;
             seenTextureRefs.add(ref);
             textureFetches.push({ dirUri: item.dirUri, ref });

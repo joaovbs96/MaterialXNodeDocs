@@ -43,49 +43,57 @@
             if (!implIndexPromise) {
                 implIndexPromise = (async () => {
                     const { stdlib } = await getMxEnv();
-                    const impls = vecToArray(mxSafe(() => stdlib.getImplementations(), []));
-                    const index = {};
-                    impls.forEach((impl) => {
-                        const nodedefName = mxSafe(() => impl.getAttribute('nodedef'), null);
-                        if (!nodedefName) return;
-                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
-                        const ngAttr = mxSafe(() => impl.getAttribute('nodegraph'), '');
-                        if (ngAttr) {
-                            index[nodedefName].graph = true;
-                            return;
-                        }
-                        const target = mxSafe(() => impl.getAttribute('target'), null);
-                        if (target) index[nodedefName].targets.add(target);
-                    });
-                    // MaterialX also lets a <nodegraph> serve directly as a
-                    // function implementation when it carries a `nodedef`
-                    // attribute itself, with no separate <implementation>
-                    // element pointing at it — this is the dominant pattern
-                    // in the standard library (274+ occurrences vs. only 2
-                    // uses of the indirect <implementation nodegraph="...">
-                    // link handled above). Mirrors graph-app.jsx's
-                    // getNodeGraphs()/implGraphNames two-shape handling.
-                    const nodegraphs = vecToArray(mxSafe(() => stdlib.getNodeGraphs(), []));
-                    nodegraphs.forEach((g) => {
-                        const nodedefName = mxSafe(() => g.getAttribute('nodedef'), null);
-                        if (!nodedefName) return;
-                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
-                        index[nodedefName].graph = true;
-                    });
-                    // Resolve target inheritance: a nodedef with no explicit
-                    // implementation for an inheriting target (e.g. genmsl)
-                    // still renders via the parent target's (genglsl's)
-                    // implementation if that one exists. Record such targets
-                    // separately in `inherited` so the UI can distinguish
-                    // "explicit override" from "works via inheritance".
-                    Object.values(index).forEach((entry) => {
-                        Object.entries(TARGET_INHERITANCE).forEach(([child, parent]) => {
-                            if (entry.targets.has(parent) && !entry.targets.has(child)) {
-                                entry.inherited.add(child);
+                    // Serialized against the shared wasm heap (see
+                    // mxExclusive in js/mtlx-engine.js). Callers of
+                    // getImplIndex() must await it OUTSIDE of their own
+                    // mxExclusive callback (see the ImplTargetMatrix effect
+                    // below) — calling mxExclusive from inside an
+                    // already-running mxExclusive callback deadlocks.
+                    return window.mxExclusive(() => {
+                        const impls = vecToArray(mxSafe(() => stdlib.getImplementations(), []));
+                        const index = {};
+                        impls.forEach((impl) => {
+                            const nodedefName = mxSafe(() => impl.getAttribute('nodedef'), null);
+                            if (!nodedefName) return;
+                            if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
+                            const ngAttr = mxSafe(() => impl.getAttribute('nodegraph'), '');
+                            if (ngAttr) {
+                                index[nodedefName].graph = true;
+                                return;
                             }
+                            const target = mxSafe(() => impl.getAttribute('target'), null);
+                            if (target) index[nodedefName].targets.add(target);
                         });
+                        // MaterialX also lets a <nodegraph> serve directly as a
+                        // function implementation when it carries a `nodedef`
+                        // attribute itself, with no separate <implementation>
+                        // element pointing at it — this is the dominant pattern
+                        // in the standard library (274+ occurrences vs. only 2
+                        // uses of the indirect <implementation nodegraph="...">
+                        // link handled above). Mirrors graph-app.jsx's
+                        // getNodeGraphs()/implGraphNames two-shape handling.
+                        const nodegraphs = vecToArray(mxSafe(() => stdlib.getNodeGraphs(), []));
+                        nodegraphs.forEach((g) => {
+                            const nodedefName = mxSafe(() => g.getAttribute('nodedef'), null);
+                            if (!nodedefName) return;
+                            if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
+                            index[nodedefName].graph = true;
+                        });
+                        // Resolve target inheritance: a nodedef with no explicit
+                        // implementation for an inheriting target (e.g. genmsl)
+                        // still renders via the parent target's (genglsl's)
+                        // implementation if that one exists. Record such targets
+                        // separately in `inherited` so the UI can distinguish
+                        // "explicit override" from "works via inheritance".
+                        Object.values(index).forEach((entry) => {
+                            Object.entries(TARGET_INHERITANCE).forEach(([child, parent]) => {
+                                if (entry.targets.has(parent) && !entry.targets.has(child)) {
+                                    entry.inherited.add(child);
+                                }
+                            });
+                        });
+                        return index;
                     });
-                    return index;
                 })();
             }
             return implIndexPromise;
@@ -107,34 +115,47 @@
                 (async () => {
                     try {
                         const { stdlib } = await getMxEnv();
+                        // getImplIndex() serializes its own wasm work
+                        // internally (see js/docs/impl-matrix.jsx ~:45) —
+                        // await it OUT HERE, not inside the mxExclusive
+                        // callback below, or the two locks would nest and
+                        // deadlock (mxExclusive must never be called from
+                        // code already running inside mxExclusive).
                         const index = await getImplIndex();
-                        const defs = vecToArray(mxSafe(() => stdlib.getMatchingNodeDefs(nodeName), []));
-                        if (!defs.length) { if (alive) setState({ status: 'empty', rows: [], allTargets: [] }); return; }
+                        // Serialized against the shared wasm heap (see
+                        // mxExclusive in js/mtlx-engine.js).
+                        const built = await window.mxExclusive(() => {
+                            const defs = vecToArray(mxSafe(() => stdlib.getMatchingNodeDefs(nodeName), []));
+                            if (!defs.length) return { empty: true };
 
-                        // One entry per TYPE SIGNATURE (nodeDefSigKey, same key
-                        // groupDefVersions uses) — version-duplicate nodedefs
-                        // (e.g. standard_surface 1.0.1/1.0.0) collapse together
-                        // and their implementations are unioned.
-                        const bySig = {};
-                        const order = [];
-                        defs.forEach((def) => {
-                            let key = null;
-                            try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
-                            const defName = mxSafe(() => def.getName(), null);
-                            if (!key) key = defName || String(order.length);
-                            let outType = '';
-                            try { outType = def.getType(); } catch (e) { /* none */ }
-                            if (!bySig[key]) {
-                                bySig[key] = { key, type: outType, targets: new Set(), inherited: new Set(), graph: false };
-                                order.push(key);
-                            }
-                            const info = defName && index[defName];
-                            if (info) {
-                                if (info.graph) bySig[key].graph = true;
-                                info.targets.forEach((t) => bySig[key].targets.add(t));
-                                info.inherited.forEach((t) => bySig[key].inherited.add(t));
-                            }
+                            // One entry per TYPE SIGNATURE (nodeDefSigKey, same key
+                            // groupDefVersions uses) — version-duplicate nodedefs
+                            // (e.g. standard_surface 1.0.1/1.0.0) collapse together
+                            // and their implementations are unioned.
+                            const bySig = {};
+                            const order = [];
+                            defs.forEach((def) => {
+                                let key = null;
+                                try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
+                                const defName = mxSafe(() => def.getName(), null);
+                                if (!key) key = defName || String(order.length);
+                                let outType = '';
+                                try { outType = def.getType(); } catch (e) { /* none */ }
+                                if (!bySig[key]) {
+                                    bySig[key] = { key, type: outType, targets: new Set(), inherited: new Set(), graph: false };
+                                    order.push(key);
+                                }
+                                const info = defName && index[defName];
+                                if (info) {
+                                    if (info.graph) bySig[key].graph = true;
+                                    info.targets.forEach((t) => bySig[key].targets.add(t));
+                                    info.inherited.forEach((t) => bySig[key].inherited.add(t));
+                                }
+                            });
+                            return { bySig, order };
                         });
+                        if (built.empty) { if (alive) setState({ status: 'empty', rows: [], allTargets: [] }); return; }
+                        const { bySig, order } = built;
 
                         const sigRows = order.map((key) => bySig[key]);
                         const sameImpl = (a, b) => a.graph === b.graph

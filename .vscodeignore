@@ -1,0 +1,5 @@
+.git/**
+.claude/**
+.vscode/**
+.gitignore
+spec_parser.py

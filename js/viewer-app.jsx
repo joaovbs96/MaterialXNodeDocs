@@ -146,6 +146,11 @@
             const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
             // Environment map shown as the visible background (IBL is always on).
             const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
+            // Bumped every time a new view is assigned into viewRef.current
+            // below (view creation effect) — ViewportControls' Environment
+            // dialog watches this to re-apply rotation/exposure/session
+            // override onto the fresh view after a rebuild.
+            const [viewEpoch, setViewEpoch] = React.useState(0);
             // Fullscreen: the CONTAINER div goes fullscreen (not the canvas),
             // so the overlaid viewport controls stay visible. The engine's
             // ResizeObserver resizes the render buffer automatically.
@@ -437,6 +442,7 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.dispose(); return; }
                         viewRef.current = view;
+                        setViewEpoch((n) => n + 1);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
                         setStatus(null);
@@ -615,6 +621,8 @@
                                         onToggleRotating={toggleRotating}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
+                                        viewRef={viewRef}
+                                        viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}

@@ -201,11 +201,145 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass 
 // renders extra elements just before the fullscreen button (viewer-app
 // uses this for its "send to editor" button, which node-preview doesn't
 // have).
+// Anchored popover for the "Environment" button (replaces the old plain
+// show/hide toggle). Portaled to document.body — same containing-block
+// rationale as ColorSwatch above (this app's panels use backdrop-blur,
+// which breaks plain `position: fixed` descendants). Fully controlled:
+// all state (open/rotation/exposure/error) lives in the owner
+// (ViewportControls) so it survives this component unmounting/
+// remounting and so the owner's viewEpoch-keyed effect (which re-applies
+// rotation/exposure/override to a freshly (re)built view) can read the
+// same values.
+const ENV_DIALOG_W = 224, ENV_DIALOG_H = 240; // approx footprint, used for edge clamping/flip below
+
+const EnvDialog = ({
+    anchorRef, open, onClose,
+    envBg, onToggleEnvBg,
+    rotation, onRotationChange,
+    exposure, onExposureChange,
+    onImportFile, onReset,
+    importError,
+}) => {
+    const popRef = React.useRef(null);
+    const [pos, setPos] = React.useState(null);
+    const fileInputRef = React.useRef(null);
+
+    // Right-align to the anchor and clamp both axes to the viewport — the
+    // env button sits at the panel's right edge, and in the graph preview
+    // (docked bottom-right of the screen) an unclamped left/top-only
+    // position would push this 224px-wide dialog past both the right and
+    // bottom edges. Vertical flip is modeled on ColorSwatch.openPopover
+    // above.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const rect = anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
+        if (rect) {
+            const left = Math.max(8, Math.min(rect.right - ENV_DIALOG_W, window.innerWidth - ENV_DIALOG_W - 8));
+            const flip = rect.bottom + ENV_DIALOG_H > window.innerHeight;
+            setPos(flip
+                ? { left, bottom: window.innerHeight - rect.top + 4 }
+                : { left, top: rect.bottom + 4 });
+        }
+        return undefined;
+    }, [open]);
+
+    useEscapeToClose(onClose, open);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (popRef.current && popRef.current.contains(e.target)) return;
+            if (anchorRef.current && anchorRef.current.contains(e.target)) return;
+            onClose();
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
+    if (!open) return null;
+
+    return ReactDOM.createPortal(
+        <div
+            ref={popRef}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
+            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
+        >
+            <div className="flex items-center justify-between">
+                <span>Background</span>
+                <button
+                    onClick={onToggleEnvBg}
+                    title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
+                    className={`h-5 px-2 rounded border transition-colors ${
+                        envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                    }`}
+                >
+                    {envBg ? 'On' : 'Off'}
+                </button>
+            </div>
+            <div>
+                <div className="flex items-center justify-between mb-0.5">
+                    <span>Rotation</span>
+                    <span className="font-mono text-gray-400">{Math.round(rotation)}°</span>
+                </div>
+                <input
+                    type="range" min="0" max="360" step="1"
+                    value={rotation}
+                    onChange={(e) => onRotationChange(Number(e.target.value))}
+                    className="w-full accent-blue-500"
+                />
+            </div>
+            <div>
+                <div className="flex items-center justify-between mb-0.5">
+                    <span>Exposure</span>
+                    <span className="font-mono text-gray-400">{exposure.toFixed(2)}</span>
+                </div>
+                <input
+                    type="range" min="0" max="4" step="0.05"
+                    value={exposure}
+                    onChange={(e) => onExposureChange(Number(e.target.value))}
+                    className="w-full accent-blue-500"
+                />
+            </div>
+            <div className="flex items-center gap-1.5 pt-1 border-t border-gray-700">
+                <button
+                    onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                    className="flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                >
+                    Import…
+                </button>
+                <button
+                    onClick={onReset}
+                    className="flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                >
+                    Reset
+                </button>
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".hdr,.exr"
+                    className="hidden"
+                    onChange={(e) => {
+                        const f = e.target.files && e.target.files[0];
+                        e.target.value = '';
+                        if (f) onImportFile(f);
+                    }}
+                />
+            </div>
+            {importError && (
+                <div className="text-red-400">{importError}</div>
+            )}
+        </div>,
+        document.body
+    );
+};
+
 const ViewportControls = ({
     geomList = ['shaderball', 'sphere', 'cube'],
     geom, onGeomChange,
     rotating, onToggleRotating,
     envBg, onToggleEnvBg, envAvail = true,
+    viewRef, viewEpoch,
     onScreenshot,
     isFullscreen, onToggleFullscreen,
     children,
@@ -217,7 +351,69 @@ const ViewportControls = ({
             ? 'bg-blue-600/80 border-blue-500 text-white'
             : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
     }`,
-}) => (
+}) => {
+    const envBtnRef = React.useRef(null);
+    const [envOpen, setEnvOpen] = React.useState(false);
+    const [envRotation, setEnvRotation] = React.useState(0);   // degrees, 0-360
+    const [envExposure, setEnvExposure] = React.useState(1.0);
+    const [envImportError, setEnvImportError] = React.useState(null);
+
+    // Re-apply rotation/exposure onto whatever view is now in
+    // viewRef.current every time the host reports a (re)build via
+    // viewEpoch — including the initial mount (a freshly-created view
+    // already starts at engine defaults, so applying 0deg/1.0x here is a
+    // harmless no-op in the common case). Skipped entirely if the host
+    // doesn't pass viewRef (old callers keep the plain toggle-only button
+    // below).
+    // NOTE: no session-override re-apply here anymore — a freshly-created
+    // view already bakes in the current envOverride at creation time
+    // (`envOverride || await getEnvironment()` in createMtlxRenderView),
+    // and any LATER import/reset reaches this view via the engine's
+    // LIVE_VIEWS broadcast (setEnvOverride), so re-applying it here on
+    // every viewEpoch change was redundant.
+    React.useEffect(() => {
+        if (!viewRef || !viewRef.current) return;
+        const view = viewRef.current;
+        if (view.setEnvRotation) view.setEnvRotation(envRotation * Math.PI / 180);
+        if (view.setEnvExposure) view.setEnvExposure(envExposure);
+        // envRotation/envExposure deliberately excluded: this effect's
+        // job is re-applying state to a NEW view (keyed on viewEpoch),
+        // not reacting to slider drags — those call the view methods
+        // directly in their own onChange handlers below for immediate
+        // feedback without waiting for a re-render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewEpoch]);
+
+    const handleImportFile = async (file) => {
+        setEnvImportError(null);
+        try {
+            const env = await window.loadEnvironmentFromFile(file);
+            // setEnvOverride broadcasts to every live view (including this
+            // one) via the engine's LIVE_VIEWS registry — no need to also
+            // call viewRef.current.setEnvironment here.
+            window.setEnvOverride(env);
+        } catch (e) {
+            setEnvImportError(String((e && e.message) || e));
+        }
+    };
+
+    const handleReset = () => {
+        // setEnvOverride(null) broadcasts the default environment to every
+        // live view via LIVE_VIEWS — no explicit setEnvironment re-apply
+        // needed here.
+        window.setEnvOverride(null);
+        setEnvImportError(null);
+        setEnvRotation(0);
+        setEnvExposure(1.0);
+        if (viewRef && viewRef.current) {
+            if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
+            if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
+        }
+        // Background show/hide toggle deliberately left as-is (Reset only
+        // touches rotation/exposure/override, per spec).
+    };
+
+    return (
     <div className={containerClassName}>
         {children}
         <select
@@ -236,13 +432,42 @@ const ViewportControls = ({
             <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
         </button>
         {envAvail && (
-            <button
-                onClick={onToggleEnvBg}
-                title={envBg ? 'Hide the environment map background' : 'Show the environment map as background (lighting is unaffected)'}
-                className={buttonClassName(envBg)}
-            >
-                <MtlxIcon name="environment" className="w-3.5 h-3.5" />
-            </button>
+            <React.Fragment>
+                <button
+                    ref={envBtnRef}
+                    onClick={() => (viewRef ? setEnvOpen((o) => !o) : onToggleEnvBg())}
+                    title="Environment…"
+                    className={buttonClassName(envBg || envOpen)}
+                >
+                    <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                </button>
+                {viewRef && (
+                    <EnvDialog
+                        anchorRef={envBtnRef}
+                        open={envOpen}
+                        onClose={() => setEnvOpen(false)}
+                        envBg={envBg}
+                        onToggleEnvBg={onToggleEnvBg}
+                        rotation={envRotation}
+                        onRotationChange={(deg) => {
+                            setEnvRotation(deg);
+                            if (viewRef.current && viewRef.current.setEnvRotation) {
+                                viewRef.current.setEnvRotation(deg * Math.PI / 180);
+                            }
+                        }}
+                        exposure={envExposure}
+                        onExposureChange={(v) => {
+                            setEnvExposure(v);
+                            if (viewRef.current && viewRef.current.setEnvExposure) {
+                                viewRef.current.setEnvExposure(v);
+                            }
+                        }}
+                        onImportFile={handleImportFile}
+                        onReset={handleReset}
+                        importError={envImportError}
+                    />
+                )}
+            </React.Fragment>
         )}
         <button
             onClick={onScreenshot}
@@ -260,7 +485,8 @@ const ViewportControls = ({
             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
         </button>
     </div>
-);
+    );
+};
 
 // Custom color picker swatch — replaces the two native `<input
 // type="color">` uses in the app (js/graph/panels.jsx's color3/color4 row,
@@ -284,6 +510,11 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
     // rgb alone) doesn't cause the hue to jump around underneath the user.
     const [hsv, setHsv] = React.useState({ h: 0, s: 0, v: 0 });
     const [hexDraft, setHexDraft] = React.useState('');
+    // Draft strings for the 0-255 R/G/B number row, mirroring hexDraft's
+    // pattern: free-typed text while focused, re-seeded from the committed
+    // `rgb` (see openPopover/commitHex/commit255 below) rather than kept
+    // continuously in sync, so a half-typed value isn't clobbered mid-edit.
+    const [rgb255Draft, setRgb255Draft] = React.useState(['0', '0', '0']);
     const btnRef = React.useRef(null);
     const popRef = React.useRef(null);
     const svRef = React.useRef(null);
@@ -319,11 +550,12 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
         return [rp + m, gp + m, bp + m];
     };
 
-    const POP_W = 176, POP_H = 210; // approx footprint, used only for the flip-above check
+    const POP_W = 208, POP_H = 210; // approx footprint, used only for the flip-above check
 
     const openPopover = () => {
         setHsv(rgbToHsv(rgb));
         setHexDraft(rgbToHex(rgb));
+        setRgb255Draft(rgb.map((c) => String(Math.round(c * 255))));
         const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
         if (rect) {
             const flip = rect.bottom + POP_H > window.innerHeight;
@@ -351,9 +583,42 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
 
+    // Re-seed hexDraft/rgb255Draft from the `rgb` prop while the popover
+    // is open, so an external edit to the same color (e.g. the 0-1
+    // spinners this swatch sits next to) shows up here too. Guarded by
+    // focus: if the hex input or any of the three 255 inputs currently
+    // has focus, skip re-seeding entirely rather than clobber a
+    // half-typed value — all four inputs live inside popRef, so checking
+    // document.activeElement against it covers all four without needing
+    // per-input refs. hsv is deliberately NEVER touched here: re-seeding
+    // it from `rgb` would reintroduce the hue-jump-at-s=0/v=0 bug that
+    // openPopover (seeding hsv only once, at open time) exists to avoid.
+    // `rgb` may be a brand-new array each render with the same values, so
+    // the dependency is a joined string, not the array itself — otherwise
+    // this effect would re-run (and needlessly reset drafts) every render.
+    const rgbKey = rgb.join(',');
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const active = document.activeElement;
+        if (popRef.current && active && popRef.current.contains(active) && active.tagName === 'INPUT') return undefined;
+        setHexDraft(rgbToHex(rgb));
+        setRgb255Draft(rgb.map((c) => String(Math.round(c * 255))));
+        return undefined;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, rgbKey]);
+
     const setFromHsv = (nextHsv) => {
         setHsv(nextHsv);
-        onChange(hsvToRgb(nextHsv));
+        const nv = hsvToRgb(nextHsv);
+        // Live-sync the text fields while the user drags the sat/value
+        // square or hue strip, so hex/255 don't go stale mid-drag.
+        // Deriving hex/255 FROM hsv here is safe in either direction —
+        // it's only going the OTHER way (seeding hsv from rgb outside of
+        // openPopover) that's forbidden, since that's what causes the
+        // hue-jump-at-s=0/v=0 bug this component works around elsewhere.
+        setHexDraft(rgbToHex(nv));
+        setRgb255Draft(nv.map((c) => String(Math.round(c * 255))));
+        onChange(nv);
     };
 
     const dragSv = (e) => {
@@ -379,6 +644,26 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
         if (!/^#[0-9a-fA-F]{6}$/.test(h)) { setHexDraft(rgbToHex(rgb)); return; }
         const nv = hexToRgb(h);
         setHsv(rgbToHsv(nv));
+        setRgb255Draft(nv.map((c) => String(Math.round(c * 255))));
+        onChange(nv);
+    };
+
+    // Commits one channel of the 0-255 row (i = 0/1/2 = R/G/B). Bytes map
+    // 1:1 onto the linear 0-1 values (same convention as rgbToHex/hexToRgb
+    // — no sRGB transfer), so this is a plain /255 divide.
+    const commit255 = (i, s) => {
+        const n = parseInt(s, 10);
+        if (isNaN(n)) {
+            // Not a number — revert just this channel's draft.
+            setRgb255Draft((d) => { const nd = d.slice(); nd[i] = String(Math.round(rgb[i] * 255)); return nd; });
+            return;
+        }
+        const clamped = Math.max(0, Math.min(255, n));
+        const nv = rgb.slice();
+        nv[i] = clamped / 255;
+        setHsv(rgbToHsv(nv));
+        setHexDraft(rgbToHex(nv));
+        setRgb255Draft(nv.map((c) => String(Math.round(c * 255))));
         onChange(nv);
     };
 
@@ -448,6 +733,52 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                     className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] font-mono text-gray-200"
                 />
             </div>
+            {/* 0-255 byte row — same linear-RGB convention as the hex row
+                above (rgbToHex/hexToRgb: a plain byte<->float mapping, no
+                sRGB transfer), just decimal per-channel instead of packed
+                hex. flex-1/min-w-0 on each input keeps the row inside the
+                popover's fixed POP_W without hardcoding pixel widths. */}
+            <div className="flex items-center gap-1.5">
+                {['R', 'G', 'B'].map((label, i) => (
+                    <div key={label} className="flex items-center gap-1 flex-1 min-w-0">
+                        <span className="text-[10px] text-gray-500 flex-none">{label}</span>
+                        <input
+                            type="number"
+                            min="0"
+                            max="255"
+                            step="1"
+                            value={rgb255Draft[i]}
+                            onChange={(e) => {
+                                const nd = rgb255Draft.slice();
+                                nd[i] = e.target.value;
+                                setRgb255Draft(nd);
+                                // Native step-arrows and the up/down arrow
+                                // keys produce input events with NO
+                                // inputType (typing yields 'insertText' etc.
+                                // per the InputEvent spec) — commit those
+                                // live so the color follows the spinner.
+                                // Typed digits still wait for blur/Enter
+                                // (committing '2' mid-keystroke of '255'
+                                // would flash dark).
+                                if (!(e.nativeEvent && e.nativeEvent.inputType)) commit255(i, e.target.value);
+                            }}
+                            onBlur={() => commit255(i, rgb255Draft[i])}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') { commit255(i, rgb255Draft[i]); e.target.blur(); }
+                                if (e.key === 'Escape') {
+                                    setRgb255Draft((d) => {
+                                        const nd = d.slice();
+                                        nd[i] = String(Math.round(rgb[i] * 255));
+                                        return nd;
+                                    });
+                                    e.target.blur();
+                                }
+                            }}
+                            className="w-full min-w-0 bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
+                        />
+                    </div>
+                ))}
+            </div>
         </div>
     ) : null;
 
@@ -466,9 +797,29 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
     );
 };
 
+// The site ships production React with no error boundaries — one render
+// throw anywhere unmounts the ENTIRE app (blank page). This boundary
+// wraps the docs page's 3D preview so a preview crash degrades to an
+// inline error card instead (the toggle bug it was added alongside is
+// fixed, but previews touch wasm/GL and stay the riskiest subtree).
+class PreviewErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { error: null }; }
+    static getDerivedStateFromError(error) { return { error }; }
+    render() {
+        if (this.state.error) {
+            return (
+                <div className="rounded-lg border border-red-900/60 bg-red-950/30 text-red-300 text-xs p-3">
+                    {'3D preview crashed: ' + String((this.state.error && this.state.error.message) || this.state.error)}
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
 Object.assign(window, {
     useEscapeToClose, useFullscreen, useViewToggle,
     downloadSnapshot, downloadXml, openInGraphEditor, openInViewer,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
-    ColorSwatch,
+    ColorSwatch, PreviewErrorBoundary,
 });

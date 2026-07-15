@@ -106,6 +106,20 @@
                                 title={inp.authored === false ? 'Not set in the document — nodedef default' : undefined}>
                                 <Handle type="target" position={Position.Left} id={'in:' + inp.name}
                                     onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: inp.name, portType: inp.type, dir: 'in' }); }}
+                                    // An OCCUPIED input's handle is made
+                                    // click-through (pointer-events: none —
+                                    // .mtlx-handle-connected rule in
+                                    // index.html/webview.html) so drags fall
+                                    // through to ReactFlow's edge-updater
+                                    // circle at the same spot: grabbing the
+                                    // existing wire (drop back = keep, void =
+                                    // delete, other valid input = reconnect).
+                                    // Tradeoff: the onDoubleClick above is
+                                    // unreachable for occupied inputs (it
+                                    // still works on empty ones). ReactFlow
+                                    // merges this className onto its own
+                                    // .react-flow__handle class.
+                                    className={inp.connected ? 'mtlx-handle-connected' : undefined}
                                     style={handleStyle(typeColor(inp.type))} />
                                 <span className="text-gray-300 truncate">{inp.name}</span>
                                 {!inp.connected && inp.value !== '' && (

@@ -260,29 +260,35 @@
                 setAutoDoc({ name, status: 'loading', tables: [] });
                 getMxEnv()
                     .then(({ mx, stdlib }) => {
-                        if (!alive) return;
-                        const doc = mx.createDocument();
-                        // setDataLibrary REFERENCES the standard library
-                        // (nodedef matching, validation, and shadergen all
-                        // consult it) without making it part of the document —
-                        // so a plain writeToXmlString(doc) contains only OUR
-                        // nodes. importLibrary would bake megabytes of stdlib
-                        // into the doc, and the JS binding of XmlWriteOptions
-                        // exposes only writeXIncludeEnable (elementPredicate is
-                        // NOT bound), so there is no way to filter at write
-                        // time. Verified: all preview kinds generate and export
-                        // cleanly through the data library.
-                        if (typeof doc.setDataLibrary === 'function') {
-                            doc.setDataLibrary(stdlib);
-                        } else {
-                            // Ancient binding without setDataLibrary — exports
-                            // would include the library. Loud, not silent:
-                            console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
-                            doc.importLibrary(stdlib);
-                        }
-                        const defs = dedupeDefsBySignature(vecToArray(doc.getMatchingNodeDefs(name)));
-                        const tables = buildAutoTablesFromDefs(defs);
-                        if (!alive) return;
+                        if (!alive) return undefined;
+                        // Serialized against the shared wasm heap (see
+                        // mxExclusive in js/mtlx-engine.js).
+                        return window.mxExclusive(() => {
+                            const doc = mx.createDocument();
+                            // setDataLibrary REFERENCES the standard library
+                            // (nodedef matching, validation, and shadergen all
+                            // consult it) without making it part of the document —
+                            // so a plain writeToXmlString(doc) contains only OUR
+                            // nodes. importLibrary would bake megabytes of stdlib
+                            // into the doc, and the JS binding of XmlWriteOptions
+                            // exposes only writeXIncludeEnable (elementPredicate is
+                            // NOT bound), so there is no way to filter at write
+                            // time. Verified: all preview kinds generate and export
+                            // cleanly through the data library.
+                            if (typeof doc.setDataLibrary === 'function') {
+                                doc.setDataLibrary(stdlib);
+                            } else {
+                                // Ancient binding without setDataLibrary — exports
+                                // would include the library. Loud, not silent:
+                                console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
+                                doc.importLibrary(stdlib);
+                            }
+                            const defs = dedupeDefsBySignature(vecToArray(doc.getMatchingNodeDefs(name)));
+                            return buildAutoTablesFromDefs(defs);
+                        });
+                    })
+                    .then((tables) => {
+                        if (!alive || tables === undefined) return;
                         setAutoDoc({ name, status: tables.length ? 'ready' : 'unavailable', tables });
                     })
                     .catch(() => { if (alive) setAutoDoc({ name, status: 'unavailable', tables: [] }); });
@@ -304,17 +310,21 @@
                 let alive = true;
                 getMxEnv()
                     .then(({ mx, stdlib }) => {
-                        if (!alive) return;
-                        const doc = mx.createDocument();
-                        if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
-                        else doc.importLibrary(stdlib);
-                        // Intentionally UNFILTERED across libraries: ambiguous categories
-                        // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) should list every
-                        // signature in the dropdown; the previewer itself notices the
-                        // un-compilable closure ones instead of hiding them here.
-                        const groups = groupDefVersions(vecToArray(doc.getMatchingNodeDefs(name)));
-                        if (alive) setNodeVersionGroups(groups);
+                        if (!alive) return undefined;
+                        // Serialized against the shared wasm heap (see
+                        // mxExclusive in js/mtlx-engine.js).
+                        return window.mxExclusive(() => {
+                            const doc = mx.createDocument();
+                            if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
+                            else doc.importLibrary(stdlib);
+                            // Intentionally UNFILTERED across libraries: ambiguous categories
+                            // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) should list every
+                            // signature in the dropdown; the previewer itself notices the
+                            // un-compilable closure ones instead of hiding them here.
+                            return groupDefVersions(vecToArray(doc.getMatchingNodeDefs(name)));
+                        });
                     })
+                    .then((groups) => { if (alive && groups !== undefined) setNodeVersionGroups(groups); })
                     .catch(() => { if (alive) setNodeVersionGroups(null); });
                 return () => { alive = false; };
             }, [selectedNode]);
@@ -765,7 +775,11 @@
                                             </div>
                                         </div>
 
-                                        {/* INJECTED 3D PREVIEW */}
+                                        {/* INJECTED 3D PREVIEW — wrapped in PreviewErrorBoundary
+                                            since previews touch wasm/GL and a render throw here
+                                            would otherwise blank the whole page (no other error
+                                            boundary exists anywhere in the app). */}
+                                        <PreviewErrorBoundary>
                                         <Node3DPreview
                                             nodeName={selectedNode.name}
                                             library={selectedNode.lib}
@@ -778,6 +792,7 @@
                                             active={active}
                                             embed={chromeless}
                                         />
+                                        </PreviewErrorBoundary>
 
                                         {/* Implementation-target matrix: which shading
                                             languages the standard library ships an

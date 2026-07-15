@@ -305,6 +305,14 @@
                 timerRef.current = setTimeout(flush, 300);
             };
             const commitNow = (v) => { setDraft(v); pendingRef.current = v; flush(); };
+            // Native number step-arrows (and PageUp/Down step presses) fire
+            // an input `change` event whose nativeEvent.inputType is
+            // undefined; typing produces 'insertText'/'deleteContentBackward'/
+            // etc. Used below to flush spinner-driven edits immediately
+            // instead of waiting out the typing debounce — repeated arrow
+            // clicks previously kept pushing the 300ms deadline back, so the
+            // doc/canvas value updated only once the user stopped clicking.
+            const isSpinEvent = (e) => !(e && e.nativeEvent && e.nativeEvent.inputType);
             React.useEffect(() => flush, []); // unmount: don't drop a pending edit
             const commit = () => { flush(); if (draft !== (inp.value || '')) onCommit(draft); };
 
@@ -399,7 +407,7 @@
                         const n = parseFloat(s);
                         return isFinite(n) ? n : 0;
                     });
-                    const setComp = (i, raw) => {
+                    const setComp = (i, raw, spin) => {
                         const nv = compText.slice();
                         nv[i] = raw;
                         setCompText(nv);
@@ -415,6 +423,10 @@
                         // any input's value directly anymore — it only
                         // needs to hold the canonical committed value.
                         commitSoon(nums.map(numStr).join(', '));
+                        // Spinner (step-arrow) click, not typing — flush the
+                        // debounce immediately instead of waiting 300ms (see
+                        // isSpinEvent above).
+                        if (spin) flush();
                     };
                     const chan = isColor ? 'RGBA' : 'XYZW';
                     const fmt = (n) => Math.round(Number(n) * 1000) / 1000; // display only
@@ -449,7 +461,7 @@
                                         title={chan[i] + (isColor ? ' (linear, 0-1)' : '')}
                                         className={'w-full min-w-0 px-1 py-0.5 ' + boxCls}
                                         value={s}
-                                        onChange={(e) => setComp(i, e.target.value)}
+                                        onChange={(e) => setComp(i, e.target.value, isSpinEvent(e))}
                                         onBlur={(e) => {
                                             const v = String(fmt(comps[i]));
                                             e.target.value = v;
@@ -496,7 +508,13 @@
                                     // commitSoonRaw's comment. Intermediate
                                     // states like "", "-", "1." stay
                                     // displayed but don't commit.
-                                    if (!isNaN(n)) commitSoonRaw(raw, numStr(n));
+                                    if (!isNaN(n)) {
+                                        commitSoonRaw(raw, numStr(n));
+                                        // Spinner (step-arrow) click, not
+                                        // typing — flush immediately (see
+                                        // isSpinEvent above).
+                                        if (isSpinEvent(e)) flush();
+                                    }
                                     else setDraft(raw);
                                 }}
                                 onBlur={() => setDraft(numStr(curN))}

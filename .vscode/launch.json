@@ -9,7 +9,7 @@
             "type": "extensionHost",
             "request": "launch",
             "args": [
-                "--extensionDevelopmentPath=${workspaceFolder}/vscode_extension"
+                "--extensionDevelopmentPath=${workspaceFolder}"
             ]
         }
     ]

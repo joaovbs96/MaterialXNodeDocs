@@ -87,7 +87,7 @@
         }
     }
 
-    var tabBase = 'flex items-center px-3 sm:px-4 border-b-2 transition-colors text-sm font-medium';
+    var tabBase = 'flex items-center px-3 sm:px-4 border-b-2 transition-colors text-sm font-medium whitespace-nowrap';
     var tabOn = ' border-blue-500 text-blue-300';
     var tabOff = ' border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600';
 
@@ -127,7 +127,7 @@
 
     var html =
         '<header class="sticky top-0 z-40 border-b border-gray-800 bg-gray-900/95 backdrop-blur">' +
-            '<div class="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 flex items-stretch gap-2 sm:gap-5">' +
+            '<div id="mtlx-header-bar" class="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 flex items-stretch gap-2 sm:gap-5">' +
 
                 // Brand: logo mark + site title (links home). Inside the
                 // shell "home" means the docs view, not a page navigation.
@@ -146,32 +146,41 @@
                 // Page tabs (desktop only \u2014 the long labels don't fit
                 // alongside the right-side links on narrow screens; the
                 // hamburger + mobile panel below covers mobile).
-                '<nav class="hidden md:flex items-stretch" aria-label="Site">' + tabs + '</nav>' +
+                '<nav id="mtlx-nav-desktop" class="hidden md:flex items-stretch" aria-label="Site">' + tabs + '</nav>' +
 
                 // Right: MaterialX version badge (filled by the engine when the
                 // WASM loads), source, issues. Desktop only, see above.
-                '<div class="ml-auto hidden md:flex items-center gap-1.5 sm:gap-2">' +
+                // whitespace-nowrap on the container AND each child: without
+                // it, under width pressure the text wraps INSIDE the flex
+                // items (bar grows taller, not wider) instead of the items
+                // overflowing horizontally \u2014 and measure() below only checks
+                // scrollWidth > clientWidth, which wrapped-taller text never
+                // triggers. Single-line rigidity makes overflow horizontal,
+                // which is what measure() detects.
+                '<div id="mtlx-nav-right" class="ml-auto hidden md:flex items-center gap-1.5 sm:gap-2 whitespace-nowrap">' +
                     '<a id="mtlx-header-version" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
                         ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
-                        ' class="hidden sm:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 transition-colors">' +
+                        ' class="hidden sm:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 transition-colors whitespace-nowrap">' +
                         'MaterialX <span data-role="ver">\u2026</span>' +
                     '</a>' +
                     '<a href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer" title="View the source code on GitHub"' +
-                        ' class="text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors flex items-center gap-1.5">' +
+                        ' class="text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors flex items-center gap-1.5 whitespace-nowrap">' +
                         '<svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="currentColor" aria-hidden="true">' +
                             '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>' +
                         '</svg>' +
                         '<span class="hidden md:inline">Source</span>' +
                     '</a>' +
                     '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" title="Report a bug or request a feature"' +
-                        ' class="hidden md:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors">' +
+                        ' class="hidden md:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors whitespace-nowrap">' +
                         'Feedback & Issues' +
                     '</a>' +
                 '</div>' +
 
                 // Hamburger: mobile only. Toggles #mtlx-mobile-menu below.
+                // self-center: the bar is items-stretch so a fixed-height
+                // (w-9 h-9) button can't stretch and top-aligns without it.
                 '<button id="mtlx-nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false"' +
-                    ' class="md:hidden ml-auto flex items-center justify-center w-9 h-9 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors">' +
+                    ' class="md:hidden ml-auto flex items-center justify-center w-9 h-9 self-center rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6" aria-hidden="true">' +
                         '<line x1="4" y1="6" x2="20" y2="6" />' +
                         '<line x1="4" y1="12" x2="20" y2="12" />' +
@@ -231,6 +240,64 @@
                 closeMobileMenu();
             }
         });
+    }
+
+    // ---- Measured collapse to hamburger ---------------------------------
+    // The desktop nav, right-side links and hamburger all switch at a
+    // single fixed Tailwind `md:` breakpoint. That leaves a band of
+    // in-between widths where the tabs are technically under `md:` but
+    // don't actually fit alongside the right-side links group, so their
+    // labels wrap to two lines. Rather than guess a second breakpoint,
+    // measure: force the full desktop layout visible, check whether the
+    // bar actually overflows, then commit to hamburger or full nav.
+    // Forcing visible and then applying the final state both happen
+    // synchronously within this one function call (one task), and
+    // browsers only paint after a task finishes — so the "forced visible"
+    // intermediate state is never actually painted, i.e. no flicker.
+    // Inline style.display wins over the md:flex/md:hidden Tailwind
+    // classes, which stay in the markup as the no-JS fallback.
+    var headerBar = document.getElementById('mtlx-header-bar');
+    var navDesktop = document.getElementById('mtlx-nav-desktop');
+    var navRight = document.getElementById('mtlx-nav-right');
+    if (headerBar && navDesktop && navRight && navToggle) {
+        var rafId = null;
+        var measure = function () {
+            navDesktop.style.display = 'flex';
+            navRight.style.display = 'flex';
+            navToggle.style.display = 'none';
+            var collapse = headerBar.scrollWidth > headerBar.clientWidth;
+            if (collapse) {
+                navDesktop.style.display = 'none';
+                navRight.style.display = 'none';
+                navToggle.style.display = 'flex';
+                // Don't fight the mobile panel's own open/closed state —
+                // collapsing to hamburger shouldn't force the panel open.
+            } else {
+                // Empty string restores the md: classes' own behavior, so
+                // genuinely narrow (sub-md) widths still collapse even
+                // though the measured bar "fits" (it fits BECAUSE the
+                // md:hidden/md:flex classes already hid/showed things).
+                navDesktop.style.display = '';
+                navRight.style.display = '';
+                navToggle.style.display = '';
+                // Expanding back to the full desktop nav: force the
+                // mobile panel closed so it can't be left open underneath
+                // a now-hidden hamburger.
+                closeMobileMenu();
+            }
+        };
+        measure();
+        window.addEventListener('resize', function () {
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(measure);
+        });
+        // Web font metrics can still be settling after first paint —
+        // re-measure once everything (including fonts) has fully loaded.
+        window.addEventListener('load', measure);
+        // The version badge widens the right-side cluster once the WASM
+        // reports itself; that alone can push the bar from fitting to
+        // overflowing.
+        window.addEventListener('mtlx-version', measure);
     }
 
     // Shell only: the header is static innerHTML, so when the hash changes

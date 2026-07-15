@@ -621,55 +621,69 @@
                     throw new Error('spec-parser: stdlib.getNodeDefs is not bound in this MaterialX build');
                 }
 
-                const nodeDatabase = {};
-                let unknownLibs = 0, total = 0;
+                // The nodedef walk below both ALLOCATES (vector marshaling —
+                // stdlib.getNodeDefs() and friends — can grow the wasm heap)
+                // and READS the shared stdlib, so it must be serialized
+                // against concurrent shader generation/other wasm work (see
+                // mxExclusive in js/mtlx-engine.js) — otherwise this
+                // docs-page load races the first node preview's
+                // generatePreviewSources call, one of the sources of the
+                // irregular "memory access out of bounds" wasm errors. The
+                // spec markdown fetch/parse above (parsedByFile) never
+                // touches wasm, so it stays OUTSIDE the lock — only the walk
+                // itself (fully synchronous: no awaits in the callback
+                // below) goes through mxExclusive.
+                return window.mxExclusive(() => {
+                    const nodeDatabase = {};
+                    let unknownLibs = 0, total = 0;
 
-                for (const nodeDef of toArray(stdlib.getNodeDefs())) {
-                    const category = nodeDef.getNodeString();
-                    if (!category) continue;
-                    total++;
+                    for (const nodeDef of toArray(stdlib.getNodeDefs())) {
+                        const category = nodeDef.getNodeString();
+                        if (!category) continue;
+                        total++;
 
-                    const nodeGroup = nodeDef.getNodeGroup() || 'uncategorized';
-                    const sourceUri = (typeof nodeDef.getSourceUri === 'function')
-                        ? nodeDef.getSourceUri() : '';
-                    const libraryName = libraryFromSourceUri(sourceUri);
-                    if (libraryName === 'unknown') unknownLibs++;
+                        const nodeGroup = nodeDef.getNodeGroup() || 'uncategorized';
+                        const sourceUri = (typeof nodeDef.getSourceUri === 'function')
+                            ? nodeDef.getSourceUri() : '';
+                        const libraryName = libraryFromSourceUri(sourceUri);
+                        if (libraryName === 'unknown') unknownLibs++;
 
-                    if (!nodeDatabase[libraryName]) nodeDatabase[libraryName] = {};
-                    if (!nodeDatabase[libraryName][nodeGroup]) nodeDatabase[libraryName][nodeGroup] = {};
+                        if (!nodeDatabase[libraryName]) nodeDatabase[libraryName] = {};
+                        if (!nodeDatabase[libraryName][nodeGroup]) nodeDatabase[libraryName][nodeGroup] = {};
 
-                    // Look up documentation in THIS library's spec file only.
-                    const libDocs = docsForLibrary(parsedByFile, libraryName);
-                    let nodeInfo = resolveDoc(libDocs[category], nodeGroup);
-                    if (nodeInfo === null) {
-                        nodeInfo = {
-                            description: 'No documentation available.',
-                            notes: '',
-                            section: '',
-                            references: [],
-                            port_tables: [],
-                        };
+                        // Look up documentation in THIS library's spec file only.
+                        const libDocs = docsForLibrary(parsedByFile, libraryName);
+                        let nodeInfo = resolveDoc(libDocs[category], nodeGroup);
+                        if (nodeInfo === null) {
+                            nodeInfo = {
+                                description: 'No documentation available.',
+                                notes: '',
+                                section: '',
+                                references: [],
+                                port_tables: [],
+                            };
+                        }
+
+                        // Direct link into the official spec on GitHub. Prefer the
+                        // anchor parsed from the MD (exact); fall back to the
+                        // observed hyphenated convention (oren_nayar_diffuse_bsdf
+                        // -> #node-oren-nayar-diffuse-bsdf).
+                        const anchor = nodeInfo.anchor || ('node-' + category.split('_').join('-'));
+                        delete nodeInfo.anchor;
+                        nodeInfo.spec_url = BLOB_BASE() + specFileForLibrary(libraryName) + '#' + anchor;
+
+                        nodeDatabase[libraryName][nodeGroup][category] = nodeInfo;
                     }
 
-                    // Direct link into the official spec on GitHub. Prefer the
-                    // anchor parsed from the MD (exact); fall back to the
-                    // observed hyphenated convention (oren_nayar_diffuse_bsdf
-                    // -> #node-oren-nayar-diffuse-bsdf).
-                    const anchor = nodeInfo.anchor || ('node-' + category.split('_').join('-'));
-                    delete nodeInfo.anchor;
-                    nodeInfo.spec_url = BLOB_BASE() + specFileForLibrary(libraryName) + '#' + anchor;
+                    // The JS build should report source URIs from its virtual
+                    // filesystem; if it didn't, every node collapsed into
+                    // 'unknown' and no docs matched — worth a loud warning.
+                    if (total && unknownLibs === total) {
+                        console.warn('spec-parser: no nodedef reported a source URI — library classification (and therefore all documentation matching) failed.');
+                    }
 
-                    nodeDatabase[libraryName][nodeGroup][category] = nodeInfo;
-                }
-
-                // The JS build should report source URIs from its virtual
-                // filesystem; if it didn't, every node collapsed into
-                // 'unknown' and no docs matched — worth a loud warning.
-                if (total && unknownLibs === total) {
-                    console.warn('spec-parser: no nodedef reported a source URI — library classification (and therefore all documentation matching) failed.');
-                }
-
-                return nodeDatabase;
+                    return nodeDatabase;
+                });
             });
 
         if (!opts.mxEnv) {

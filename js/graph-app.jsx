@@ -37,7 +37,10 @@
         // (every candidate is already type-compatible). A real component
         // (not a plain render helper) because it owns its own filter-text
         // and selection-index state across re-renders while it's open.
-        // portPicker: { x, y, candidates, targetName }; rootRef is forwarded
+        // portPicker: { x, y, candidates, targetName, replaceEdge? } —
+        // replaceEdge (set only when the picker was opened by dropping a
+        // GRABBED wire on a node body) is consumed by the parent's pickPort,
+        // not here; rootRef is forwarded
         // so the parent's outside-pointerdown-closes effect keeps working;
         // Escape is handled by the parent's useEscapeToClose (window-level),
         // so this component doesn't need its own Escape handling.
@@ -379,6 +382,13 @@
                     }
                     return;
                 }
+                // Notify the VS Code extension bridge (defined in
+                // vscode_extension/media/bootstrap.js; inert/undefined in the
+                // standalone browser) that a coalesced edit has settled, so it
+                // can sync this XML into the real .mtlx document buffer —
+                // reusing this function's existing debounce/coalescing
+                // instead of re-implementing it on the extension side.
+                if (typeof window.__mtlxNotifyEdit === 'function') window.__mtlxNotifyEdit(xml);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
                 if (u.savedIndex > u.index) u.savedIndex = -1;
@@ -799,6 +809,20 @@
                 // externally should disappear here too, same as a fresh
                 // ingest() replace would do.
                 const merged = Object.assign({}, map);
+                // Locally-picked textures (registerPickedFile) never round-trip
+                // through disk, so docScanner.js's on-disk scan — what `map` is
+                // built from — can never include them. Preserve them across this
+                // reload instead of silently dropping them (the wholesale-replace
+                // behavior above is otherwise correct/intended for anything that
+                // WAS on disk and got removed externally) — but only while the
+                // document still actually references them, and only until the
+                // host DOES find a same-named file on disk (its entry wins then,
+                // since it's now the authoritative source).
+                for (const name of pickedFileNamesRef.current) {
+                    if (merged[name]) { pickedFileNamesRef.current.delete(name); continue; }
+                    const prior = fileMapRef.current[name];
+                    if (prior) merged[name] = prior;
+                }
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
@@ -991,10 +1015,11 @@
             // this session saved" hook, so the extension can sync the app's
             // own unsaved-changes state once the host confirms the write
             // landed, the same way doExportMtlx's markSaved() does after a
-            // successful in-browser export. Also exposes undo/redo: the
-            // extension's contributed Ctrl+Z/Ctrl+Y keybindings route here
-            // (vscode_extension/media/bootstrap.js) since the webview's
-            // native undo stack isn't wired to this app's document history.
+            // successful in-browser export. Undo/redo in the extension defer
+            // to VS Code's own native document undo/redo instead (the
+            // document buffer is kept continuously in sync via
+            // window.__mtlxNotifyEdit, called from flushUndoSnapshot above)
+            // — there's no separate JS-side graph undo hook exposed here.
             // NOT gated behind IN_VSCODE — inert globals in the browser,
             // same as __mtlxGetGraphXml/__mtlxMarkGraphSaved above.
             React.useEffect(() => {
@@ -1004,13 +1029,9 @@
                     return xml;
                 };
                 window.__mtlxMarkGraphSaved = () => markSaved();
-                window.__mtlxGraphUndo = () => undoDocRef.current();
-                window.__mtlxGraphRedo = () => redoDocRef.current();
                 return () => {
                     delete window.__mtlxGetGraphXml;
                     delete window.__mtlxMarkGraphSaved;
-                    delete window.__mtlxGraphUndo;
-                    delete window.__mtlxGraphRedo;
                 };
             }, []);
 
@@ -1163,20 +1184,45 @@
 
             // Re-run the automatic layout on the CURRENT node sizes (visible
             // rows) — for after nodes were expanded/collapsed or dragged.
+            // Also SNAPSHOTS the freshly computed positions into the document
+            // as xpos/ypos (same element-resolution + mxSafe convention as
+            // onNodeDragStop), so the new layout survives reload/export and
+            // the "unsaved changes" indicator fires.
             const reorganize = () => {
-                setFlow((prev) => {
-                    const descsLike = prev.nodes.map((n) => ({
-                        id: n.id,
-                        inputs: (n.data && n.data.inputs) || [],
-                        outputs: (n.data && n.data.outputs) || [],
-                        pos: null, // ignore stored editor positions: full re-layout
-                    }));
-                    const posOf = layoutScope(descsLike, prev.edges);
-                    return {
-                        edges: prev.edges,
-                        nodes: prev.nodes.map((n) => Object.assign({}, n, { position: posOf[n.id] })),
-                    };
-                });
+                const descsLike = flow.nodes.map((n) => ({
+                    id: n.id,
+                    inputs: (n.data && n.data.inputs) || [],
+                    outputs: (n.data && n.data.outputs) || [],
+                    pos: null, // ignore stored editor positions: full re-layout
+                }));
+                const posOf = layoutScope(descsLike, flow.edges);
+
+                const c = scopeContainer();
+                if (c && parsed) {
+                    let wrote = false;
+                    for (const n of flow.nodes) {
+                        const pos = posOf[n.id];
+                        if (!pos) continue;
+                        const name = n.id.slice(2);
+                        let el = null;
+                        if (n.id.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
+                        else if (n.id.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                        else if (n.id.indexOf('i:') === 0) el = mxSafe(() => c.getInput(name), null) || mxSafe(() => c.getChild(name), null);
+                        else if (n.id.indexOf('o:') === 0) el = mxSafe(() => c.getOutput(name), null) || mxSafe(() => c.getChild(name), null);
+                        if (!el) continue;
+                        const x = Math.round((pos.x / 240) * 10000) / 10000;
+                        const y = Math.round((pos.y / 240) * 10000) / 10000;
+                        mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
+                        mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                        wrote = true;
+                    }
+                    if (wrote) markDirty();
+                }
+
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => Object.assign({}, n, { position: posOf[n.id] })),
+                }));
                 // Glide the viewport to the fresh layout once it's applied.
                 // fitView returns false while nodes have no measured size yet
                 // — which is the case for a couple of frames right after a
@@ -1466,6 +1512,12 @@
                 }));
             };
 
+            // Names added via registerPickedFile below — these never round-trip
+            // through disk, so externalReload's host-resent map can never
+            // include them. Tracked here so externalReload can preserve them
+            // instead of silently dropping them on the next live-reload.
+            const pickedFileNamesRef = React.useRef(new Set());
+
             // A texture picked from the parameter panel joins the session's
             // file map — the preview binds it by name, exactly like a
             // dropped file. Nothing re-parses; the map is a texture source.
@@ -1473,6 +1525,7 @@
                 const merged = Object.assign({}, fileMapRef.current, { [file.name]: file });
                 fileMapRef.current = merged;
                 setFileMap(merged);
+                pickedFileNamesRef.current.add(file.name);
             };
 
             // Tag an input with a COLORSPACE — or clear it back to the
@@ -2466,13 +2519,46 @@
                 setSelectedEdgeId((cur) => (cur === edge.id ? null : cur));
             };
 
-            // Dragging an edge END: dropped on a compatible port →
-            // reconnect; dropped in the void → disconnect. The ref tells the
-            // two callbacks apart (the standard React Flow pattern).
+            // Where a connection/edge drag actually ended, as
+            // { el, client }. Mouse: the native event's own target and
+            // clientX/Y. Touch: touch events keep `target`/coordinates
+            // pinned to where the touch STARTED (not where it ended), so
+            // the drop point has to come from changedTouches +
+            // elementFromPoint instead. Shared by onConnectEnd and
+            // onEdgeUpdateEnd.
+            const resolveDropPoint = (event) => {
+                const touchPoint = (event && event.changedTouches && event.changedTouches.length)
+                    ? event.changedTouches[0] : null;
+                return {
+                    el: touchPoint
+                        ? document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
+                        : (event && event.target),
+                    client: touchPoint
+                        ? { x: touchPoint.clientX, y: touchPoint.clientY }
+                        : (event ? { x: event.clientX, y: event.clientY } : null),
+                };
+            };
+
+            // Dragging an edge END (the updater circle on the target
+            // endpoint), four outcomes: dropped back on the SAME port →
+            // keep (onEdgeUpdate's same-endpoints early return); dropped
+            // on another compatible port → reconnect (onEdgeUpdate);
+            // dropped on a NODE BODY → port-picker seeded with the wire's
+            // anchored source (picking a port MOVES the wire there via
+            // replaceEdge, dismissing keeps it); dropped in the void →
+            // disconnect. The ref tells the callbacks apart (the standard
+            // React Flow pattern).
             const edgeUpdateDone = React.useRef(true);
             const onEdgeUpdateStart = () => { edgeUpdateDone.current = false; };
             const onEdgeUpdate = (oldEdge, conn) => {
                 edgeUpdateDone.current = true;
+                // Any onEdgeUpdate invocation means the drop landed on a
+                // handle (same-port keep, reconnect, or invalid) — mark the
+                // gesture handled so onConnectEnd's popup machinery stays
+                // out. Without this, a same-port drop-back leaked into the
+                // pane branch (the click-through occupied handle no longer
+                // intercepts the drop element) and spawned the add-search.
+                connectDidRunRef.current = true;
                 if (!isValidConnection(conn)) return;
                 if (oldEdge.source === conn.source && oldEdge.sourceHandle === conn.sourceHandle
                     && oldEdge.target === conn.target && oldEdge.targetHandle === conn.targetHandle) return;
@@ -2480,7 +2566,52 @@
                 onConnect(conn);
             };
             const onEdgeUpdateEnd = (evt, edge) => {
-                if (!edgeUpdateDone.current) disconnectEdge(edge);
+                if (!edgeUpdateDone.current) {
+                    const { el: dropEl, client: dropClient } = resolveDropPoint(evt);
+                    const nodeEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__node');
+                    if (nodeEl) {
+                        // Dropped the grabbed wire on a NODE BODY: offer
+                        // the same port-picker as a new-connection drag,
+                        // with the wire's anchored SOURCE as the origin.
+                        // NO disconnect here — dismissing the picker keeps
+                        // the wire; picking a port moves it (replaceEdge,
+                        // consumed in pickPort). Dropping on the wire's own
+                        // target node is fine: the original port shows up
+                        // as a candidate and picking it nets out unchanged.
+                        const targetId = nodeEl.getAttribute('data-id');
+                        const targetNode = targetId ? flow.nodes.find((n) => n.id === targetId) : null;
+                        const candidates = [];
+                        if (targetNode) {
+                            const inputs = targetNode.data.allInputs || targetNode.data.inputs || [];
+                            for (const inp of inputs) {
+                                const params = {
+                                    source: edge.source, sourceHandle: edge.sourceHandle,
+                                    target: targetId, targetHandle: 'in:' + inp.name,
+                                };
+                                // isValidConnection also rejects self-loops,
+                                // so dropping on the wire's own SOURCE node
+                                // yields no candidates.
+                                if (isValidConnection(params)) {
+                                    candidates.push({ label: inp.name, type: inp.type, connected: !!inp.connected, params });
+                                }
+                            }
+                        }
+                        if (candidates.length) {
+                            setPortPicker({
+                                x: dropClient ? dropClient.x : 0, y: dropClient ? dropClient.y : 0,
+                                candidates, targetName: targetNode.data.name,
+                                replaceEdge: edge,
+                            });
+                        }
+                        // No compatible port on this node → silent no-op:
+                        // the wire snaps back. Less destructive than
+                        // deleting; the pane is the delete gesture.
+                    } else {
+                        // Pane/void (anything that isn't a node) → delete,
+                        // as before.
+                        disconnectEdge(edge);
+                    }
+                }
                 edgeUpdateDone.current = true;
             };
 
@@ -2527,23 +2658,12 @@
                 // snapped it onto a nearby handle) — no popup either way.
                 if (connectDidRunRef.current) return;
                 if (!origin || !origin.nodeId) return;
-                // Same touch-vs-mouse split as the drop-target resolution
-                // below: touch events keep `target`/coordinates pinned to
-                // where the touch STARTED, so the actual drop point has to
-                // come from changedTouches instead of event.clientX/Y.
-                const touchPoint = (event && event.changedTouches && event.changedTouches.length)
-                    ? event.changedTouches[0] : null;
-                const dropEl = touchPoint
-                    ? document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
-                    : (event && event.target);
-                // Drop point in page/client coordinates (item A3) — lets
-                // addNodeFromCatalog place the picked node so the newly
-                // wired handle lands under the cursor instead of the
-                // viewport center; also used to position the node-body
-                // port-picker popover below.
-                const dropClient = touchPoint
-                    ? { x: touchPoint.clientX, y: touchPoint.clientY }
-                    : (event ? { x: event.clientX, y: event.clientY } : null);
+                // Touch-vs-mouse drop resolution — see resolveDropPoint
+                // above. dropClient (item A3) lets addNodeFromCatalog place
+                // the picked node so the newly wired handle lands under the
+                // cursor instead of the viewport center; also used to
+                // position the node-body port-picker popover below.
+                const { el: dropEl, client: dropClient } = resolveDropPoint(event);
                 // FIRST: dropped on a handle → React Flow already handled
                 // it (onConnect ran if the connection was valid); a plain
                 // click on a port is also a zero-distance drag that starts
@@ -2644,6 +2764,14 @@
             // Commit a candidate pick: wire it exactly like a completed
             // drag-to-handle connection, then close the popover.
             const pickPort = (candidate) => {
+                // A picker opened by dropping a GRABBED wire on a node body
+                // (replaceEdge set in onEdgeUpdateEnd) — the pick MOVES the
+                // wire: remove the old edge, then wire the chosen port.
+                // When the pick happens to be the wire's original port,
+                // disconnect+reconnect nets out to the same edge —
+                // acceptable. Dismiss/Escape/outside-click never get here,
+                // which is exactly the "keep the wire" behavior.
+                if (portPicker.replaceEdge) disconnectEdge(portPicker.replaceEdge);
                 onConnect(candidate.params);
                 setPortPicker(null);
             };
@@ -4132,6 +4260,48 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
+            // ReactFlow toggles a `.dragging` class (grab/grabbing cursor via its
+            // vendored stylesheet) during node/pane drags and clears it on mouseup —
+            // but a release OUTSIDE the window never delivers that mouseup, leaving
+            // the class (and the grabbing cursor) stuck until the next interaction.
+            // Self-heal: if the pointer moves with NO buttons held right after a
+            // drag might have been interrupted, or the window loses focus, strip any
+            // orphaned `dragging` classes. dragMayBeStuckRef keeps the mousemove
+            // path a no-op in the common case (no DOM queries unless a mousedown
+            // happened whose mouseup we never saw).
+            const dragMayBeStuckRef = React.useRef(false);
+            React.useEffect(() => {
+                const onMouseDown = (e) => {
+                    if (e.target && e.target.closest && e.target.closest('.react-flow')) {
+                        dragMayBeStuckRef.current = true;
+                    }
+                };
+                const onMouseUp = () => { dragMayBeStuckRef.current = false; };
+                const stripStuckDragging = () => {
+                    document.querySelectorAll('.react-flow__pane.dragging, .react-flow__node.dragging')
+                        .forEach((el) => el.classList.remove('dragging'));
+                };
+                const onMouseMove = (e) => {
+                    if (!dragMayBeStuckRef.current || e.buttons !== 0) return;
+                    dragMayBeStuckRef.current = false;
+                    stripStuckDragging();
+                };
+                const onBlur = () => {
+                    dragMayBeStuckRef.current = false;
+                    stripStuckDragging();
+                };
+                document.addEventListener('mousedown', onMouseDown, true);
+                window.addEventListener('mouseup', onMouseUp);
+                document.addEventListener('mousemove', onMouseMove);
+                window.addEventListener('blur', onBlur);
+                return () => {
+                    document.removeEventListener('mousedown', onMouseDown, true);
+                    window.removeEventListener('mouseup', onMouseUp);
+                    document.removeEventListener('mousemove', onMouseMove);
+                    window.removeEventListener('blur', onBlur);
+                };
+            }, []);
+
             const nodegraphs = (parsed && parsed.nodegraphs) || [];
             // Remounting on this key re-runs fitView for every new graph.
             const graphKey = (parsed ? parsed.label : 'empty') + '\u241F' + scope;
@@ -4341,6 +4511,10 @@
             // doesn't leak its state onto an unrelated node reusing a name.
             const [panelFoldersOpen, setPanelFoldersOpen] = React.useState({});
             React.useEffect(() => { setPanelFoldersOpen({}); }, [displayNode && displayNode.id]);
+            // Collapse/expand toggle for the static help-text footer below,
+            // default expanded so behavior is unchanged until the user
+            // clicks to collapse it.
+            const [helpTextOpen, setHelpTextOpen] = React.useState(true);
             // One ParamRow, shared by the ungrouped list and every folder
             // below so the markup doesn't drift between the two — only
             // called once displayNode is known truthy (both call sites are
@@ -4450,6 +4624,7 @@
                             onInit={(inst) => { rfInstRef.current = inst; }}
                             onNodesChange={onNodesChange}
                             onNodeDragStop={onNodeDragStop}
+                            onSelectionDragStop={onNodeDragStop}
                             onNodeDoubleClick={onNodeDoubleClick}
                             onNodeClick={onNodeClick}
                             onEdgeClick={onEdgeClick}
@@ -4463,6 +4638,8 @@
                             onEdgeUpdate={onEdgeUpdate}
                             onEdgeUpdateStart={onEdgeUpdateStart}
                             onEdgeUpdateEnd={onEdgeUpdateEnd}
+                            // slightly enlarged (default 10) so the updater's grab zone covers the occupied port's dot+halo area now that connected handles are click-through (see index.html's .mtlx-handle-connected rule)
+                            edgeUpdaterRadius={12}
                             fitView
                             fitViewOptions={{ padding: 0.15 }}
                             minZoom={0.05}
@@ -5154,10 +5331,23 @@
                                     </div>
                                 )}
                             </div>
-                            <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
-                                Edits write to the MaterialX document and re-render the preview.
-                                Drag between ports to connect {'\u00B7'} drag an edge end off to
-                                disconnect {'\u00B7'} Del removes the selection {'\u00B7'} F fits the view.
+                            <div className="border-t border-gray-700">
+                                <button
+                                    type="button"
+                                    onClick={() => setHelpTextOpen((o) => !o)}
+                                    title={helpTextOpen ? 'Collapse help text' : 'Expand help text'}
+                                    className="w-full flex items-center gap-1.5 px-3 py-1 text-[10px] text-gray-500 hover:text-gray-300"
+                                >
+                                    <MtlxIcon name={helpTextOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3 h-3" />
+                                    <span>Help</span>
+                                </button>
+                                {helpTextOpen && (
+                                    <div className="px-3 pb-1.5 text-[10px] text-gray-500">
+                                        Edits write to the MaterialX document and re-render the preview.
+                                        Drag between ports to connect {'\u00B7'} drag an edge end off to
+                                        disconnect {'\u00B7'} Del removes the selection {'\u00B7'} F fits the view.
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ) : (

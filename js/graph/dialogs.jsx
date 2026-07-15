@@ -46,7 +46,7 @@
             return (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
                     onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                         onMouseDown={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
                             <div className="text-sm font-bold text-gray-100">Keyboard shortcuts</div>

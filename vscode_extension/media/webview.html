@@ -239,6 +239,37 @@
         .react-flow__edge.selected .react-flow__edge-path { stroke: #3b82f6 !important; }
         .react-flow__handle { cursor: crosshair; }
         .react-flow__handle::after { content: ''; position: absolute; inset: -5px; }
+        /* The edge-updater circle sits on the edge's endpoint triangle —
+           dragging it reconnects/detaches the edge, so advertise move
+           instead of the generic connect-cursor. An occupied input port
+           reads as "grab the existing connection" too — see the
+           pointer-events rule below. */
+        .react-flow__edgeupdater { cursor: move; }
+        /* An OCCUPIED input's handle becomes click-through so hover/drag
+           falls to the edge-updater circle beneath it (same spot, edges
+           layer) — dragging there runs ReactFlow's real edge-update
+           gesture: the wire detaches and follows the cursor; drop back on
+           the port keeps the connection, drop in the void deletes it
+           (onEdgeUpdateEnd), drop on another valid input reconnects it
+           there (onEdgeUpdate). The move cursor over the port comes from
+           ReactFlow's own .react-flow__edgeupdater rule (mirrored above).
+           New connections can still be DROPPED on occupied ports: ReactFlow
+           completes them by connectionRadius proximity, not by hovering the
+           handle's DOM element. Known tradeoffs: port double-click no
+           longer works on occupied inputs (it still works on empty ones),
+           and the inner half of the dot (over the node body) drags the
+           node. */
+        .react-flow__handle.connectionindicator.mtlx-handle-connected { pointer-events: none; }
+
+        /* WEBVIEW-ONLY — do NOT mirror this rule back to index.html / the
+           real site. VS Code webview only (not in index.html / the real
+           site): the webview's Chromium build shows a native focus outline
+           on click for elements like React Flow's tabIndex'd pane/nodes
+           that a regular browser's :focus-visible heuristics would
+           normally suppress. */
+        :focus {
+            outline: none;
+        }
     </style>
 </body>
 </html>

@@ -26,22 +26,21 @@ const RELOAD_DEBOUNCE_MS = 400;
 // Returns the repo-root Uri so callers can hand it to
 // wireCommonWebviewMessages() without re-deriving it.
 async function buildHtml(context, webview, initialHash) {
-    // v1 runs the extension straight out of a checkout of this repo (see
-    // README.md "Development" — F5 "Run Extension"), so the site lives
-    // one directory up from the extension (../index.html, ../js, ...).
-    // Packaging this as a .vsix later will need the site's files copied
-    // INTO the extension (e.g. vscode_extension/site/) and this uri
-    // updated to point there instead — an extension package cannot
-    // reach outside its own install directory at runtime.
-    const repoRootUri = vscode.Uri.joinPath(context.extensionUri, '..');
+    // package.json now lives at the repo root, so packaging (vsce
+    // package) bundles both the site's files (index.html, js/,
+    // libraries/, ...) and vscode_extension/ into the same install
+    // directory — context.extensionUri already IS that root, both when
+    // run out of a repo checkout (see README.md "Development" — F5 "Run
+    // Extension") and when installed from a .vsix.
+    const repoRootUri = context.extensionUri;
 
     webview.options = {
         enableScripts: true,
         localResourceRoots: [repoRootUri],
     };
 
-    const templateUri = vscode.Uri.joinPath(context.extensionUri, 'media', 'webview.html');
-    const bootstrapUri = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'bootstrap.js'));
+    const templateUri = vscode.Uri.joinPath(context.extensionUri, 'vscode_extension', 'media', 'webview.html');
+    const bootstrapUri = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'vscode_extension', 'media', 'bootstrap.js'));
     const baseUri = webview.asWebviewUri(repoRootUri).toString() + '/';
 
     const bytes = await vscode.workspace.fs.readFile(templateUri);
@@ -200,13 +199,17 @@ function saveActiveGraph() {
 // Command handlers for materialxPlayground.undoGraph/redoGraph
 // (registered in extension.js, bound to the Ctrl+Z/Cmd+Z and
 // Ctrl+Shift+Z/Cmd+Shift+Z/Ctrl+Y keybindings). These commands must
-// exist at all because, while the custom editor is active, these
-// contributed keybindings OUTRANK VS Code's built-in text-document
-// undo/redo, which would otherwise silently revert the .mtlx file
-// underneath the live graph session (our 'mtlx-save' WorkspaceEdits push
-// onto that same text-document undo stack). Routing the chord here
-// instead sends it to the graph's own in-page undo/redo — see
-// media/bootstrap.js's 'mtlx-request-undo'/'mtlx-request-redo' handling.
+// exist at all so, while the custom editor is active, these contributed
+// keybindings can OUTRANK the workbench's default routing of the chord
+// and hand it to this extension first — the webview's own
+// 'mtlx-request-undo'/'mtlx-request-redo' handling (media/bootstrap.js)
+// then guards on graph-view-visible / not-focused-in-a-text-field and, if
+// those pass, asks US (via 'mtlx-native-undo'/'mtlx-native-redo', see the
+// messageSub handling below) to run VS Code's own native document
+// undo/redo — safe because the .mtlx document buffer is kept continuously
+// in sync with the live graph session via 'mtlx-sync' (window.
+// __mtlxNotifyEdit in js/graph-app.jsx), so the native undo/redo stack
+// already reflects every graph edit, not just explicit saves.
 function undoActiveGraph() {
     postToActivePanel({ type: 'mtlx-request-undo' });
 }
@@ -301,6 +304,13 @@ class MaterialXEditorProvider {
                         // per file, or every dangling texture ref in a
                         // large scene would pop a toast.
                         console.warn('[MaterialX Playground] ' + document.fileName + ':\n  ' + warnings.join('\n  '));
+                        // Also surface to the visible Output channel —
+                        // console.warn only reaches the dev host's
+                        // devtools console, which most users never open.
+                        const channel = getSharedOutputChannel();
+                        for (const warning of warnings) {
+                            channel.appendLine('[' + new Date().toISOString() + '] ' + document.fileName + ': ' + warning);
+                        }
                     }
                     webviewPanel.webview.postMessage({
                         type: 'mtlx-open',
@@ -317,20 +327,32 @@ class MaterialXEditorProvider {
                 }
             };
 
-            // Echo-suppression flag for the 'mtlx-save' handler below:
-            // while true, EVERY change event on this document is our own
-            // doing — the mtlx-save handler's applyEdit plus whatever
-            // edits VS Code's save participants (files.insertFinalNewline,
-            // files.trimTrailingWhitespace, format-on-save, third-party
-            // formatters) apply inside document.save() — so changeSub must
-            // not schedule a resend for any of them. The previous
-            // mechanism here (an exact-text marker) was single-shot and
-            // only matched the applyEdit event, letting save-participant
-            // edits leak through and trigger the destructive resend: the
-            // re-ingest wiped the graph's undo history right after every
-            // save. false whenever no webview-originated save is
-            // in-flight, so it can never suppress a real external edit.
-            let webviewSaveInFlight = false;
+            // Echo-suppression counter for the 'mtlx-save' and 'mtlx-sync'
+            // handlers below: while > 0, EVERY change event on this
+            // document is our own doing — the mtlx-save handler's
+            // applyEdit plus whatever edits VS Code's save participants
+            // (files.insertFinalNewline, files.trimTrailingWhitespace,
+            // format-on-save, third-party formatters) apply inside
+            // document.save(), or the mtlx-sync handler's own applyEdit —
+            // so changeSub must not schedule a resend for any of them. The
+            // previous mechanism here (an exact-text marker) was
+            // single-shot and only matched the applyEdit event, letting
+            // save-participant edits leak through and trigger the
+            // destructive resend: the re-ingest wiped the graph's undo
+            // history right after every save.
+            //
+            // This is a COUNTER, not a boolean, because 'mtlx-sync' fires
+            // much more often than 'mtlx-save' ever did (once per settled
+            // graph edit, ~350ms coalesced, vs. once per explicit Ctrl+S)
+            // and the two can in principle overlap — a sync landing while
+            // a save's document.save() (which can trigger save-participant
+            // edits) hasn't resolved yet. A plain boolean risks one
+            // operation's `finally` clearing suppression while the other
+            // is still in-flight; a counter (suppressed while > 0) stays
+            // correct under overlap. 0 whenever no webview-originated
+            // edit/save is in-flight, so it can never suppress a real
+            // external edit.
+            let hostEditDepth = 0;
 
             // The webview sends {type:'ready'} once its own boot (site
             // shell + WASM env warmup kickoff) has reached the point
@@ -361,12 +383,12 @@ class MaterialXEditorProvider {
                         const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
                         const edit = new vscode.WorkspaceEdit();
                         edit.replace(document.uri, fullRange, xml);
-                        // Set BEFORE applyEdit: applyEdit synchronously
-                        // fires onDidChangeTextDocument (changeSub below),
-                        // so the flag has to already be in place by the
-                        // time that listener runs, or the echo-suppression
-                        // check there would miss it.
-                        webviewSaveInFlight = true;
+                        // Incremented BEFORE applyEdit: applyEdit
+                        // synchronously fires onDidChangeTextDocument
+                        // (changeSub below), so the counter has to already
+                        // be incremented by the time that listener runs, or
+                        // the echo-suppression check there would miss it.
+                        hostEditDepth++;
                         const applied = await vscode.workspace.applyEdit(edit);
                         if (!applied) {
                             throw new Error('edit was not applied (document may have changed concurrently)');
@@ -380,13 +402,74 @@ class MaterialXEditorProvider {
                         );
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: false, error: message });
                     } finally {
-                        // Always cleared once the save settles, success or
-                        // failure. Safe to clear here: save participants'
-                        // change events all fire before document.save()
-                        // resolves, so by the time this finally runs, every
-                        // change event this save could produce has already
-                        // been (correctly) suppressed by changeSub below.
-                        webviewSaveInFlight = false;
+                        // Always decremented once the save settles, success
+                        // or failure. Safe to decrement here: save
+                        // participants' change events all fire before
+                        // document.save() resolves, so by the time this
+                        // finally runs, every change event this save could
+                        // produce has already been (correctly) suppressed
+                        // by changeSub below.
+                        hostEditDepth--;
+                    }
+                    return;
+                }
+                if (msg.type === 'mtlx-sync') {
+                    // Fire-and-forget buffer sync: js/graph-app.jsx's
+                    // flushUndoSnapshot calls window.__mtlxNotifyEdit
+                    // (bootstrap.js posts this) whenever a coalesced graph
+                    // edit settles, so the real .mtlx document buffer stays
+                    // continuously in sync — this is what makes the VS Code
+                    // tab's "unsaved changes" dot track live graph edits,
+                    // and keeps any other open view of the same file (e.g.
+                    // a plain text editor split) live. Unlike 'mtlx-save':
+                    // no document.save() (does not write to disk) and no
+                    // reply is posted back.
+                    const xml = typeof msg.xml === 'string' ? msg.xml : null;
+                    if (xml === null) return;
+                    try {
+                        if (xml === document.getText()) return; // no-op, avoid a redundant WorkspaceEdit
+                        const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(document.uri, fullRange, xml);
+                        hostEditDepth++;
+                        try {
+                            await vscode.workspace.applyEdit(edit);
+                        } finally {
+                            hostEditDepth--;
+                        }
+                    } catch (err) {
+                        vscode.window.showErrorMessage(
+                            'MaterialX Playground: failed to sync "' + path.basename(document.fileName) + '" — '
+                            + (err && err.message ? err.message : String(err))
+                        );
+                    }
+                    return;
+                }
+                if (msg.type === 'mtlx-native-undo' || msg.type === 'mtlx-native-redo') {
+                    // Requested by media/bootstrap.js's
+                    // 'mtlx-request-undo'/'mtlx-request-redo' handling (in
+                    // turn triggered by the materialxPlayground.undoGraph/
+                    // redoGraph commands below). Deliberately does NOT
+                    // touch hostEditDepth — the whole point is for the
+                    // resulting document change to flow through the normal
+                    // live-reload path (changeSub below) so the graph
+                    // re-renders the undone/redone state.
+                    try {
+                        await vscode.commands.executeCommand(msg.type === 'mtlx-native-undo' ? 'undo' : 'redo');
+                        // Skip the generic RELOAD_DEBOUNCE_MS wait so
+                        // undo/redo feels immediate: cancel any pending
+                        // debounced resend and send the fresh state right
+                        // away.
+                        if (debounceTimer) {
+                            clearTimeout(debounceTimer);
+                            debounceTimer = null;
+                        }
+                        sendUpdate();
+                    } catch (err) {
+                        vscode.window.showErrorMessage(
+                            'MaterialX Playground: ' + (msg.type === 'mtlx-native-undo' ? 'undo' : 'redo') + ' failed — '
+                            + (err && err.message ? err.message : String(err))
+                        );
                     }
                 }
             });
@@ -397,19 +480,19 @@ class MaterialXEditorProvider {
             let debounceTimer = null;
             const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
                 if (e.document.uri.toString() !== uriKey) return;
-                // Echo suppression: this fires for the 'mtlx-save' handler's
-                // own applyEdit above too — and for every edit VS Code's
-                // save participants apply inside its document.save() —
-                // since those are changes to THIS document like any other.
-                // Resending in those cases would re-ingest the graph's own
-                // just-written serialization back into the webview on the
-                // next debounce tick, destroying its undo history/selection
-                // over data it JUST saved — so while a webview-originated
-                // save is in flight, skip scheduling a resend entirely (see
-                // the comment on webviewSaveInFlight above for why a flag
-                // covering the whole save, not an exact-text marker, is
+                // Echo suppression: this fires for the 'mtlx-save' and
+                // 'mtlx-sync' handlers' own applyEdit calls above too — and
+                // for every edit VS Code's save participants apply inside
+                // document.save() — since those are changes to THIS
+                // document like any other. Resending in those cases would
+                // re-ingest the graph's own just-written serialization back
+                // into the webview on the next debounce tick, destroying
+                // its undo history/selection over data it JUST wrote — so
+                // while a webview-originated edit/save is in flight, skip
+                // scheduling a resend entirely (see the comment on
+                // hostEditDepth above for why a counter, not a boolean, is
                 // what's needed here).
-                if (webviewSaveInFlight) return;
+                if (hostEditDepth > 0) return;
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(sendUpdate, RELOAD_DEBOUNCE_MS);
             });

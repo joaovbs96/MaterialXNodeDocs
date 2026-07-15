@@ -394,6 +394,7 @@
             const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
             const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
             const [envAvail, setEnvAvail] = React.useState(false);
+            const [viewEpoch, setViewEpoch] = React.useState(0);
             const [isFullscreen, toggleFullscreenView] = useFullscreen(viewportRef);
             const takeScreenshot = () => {
                 const view = viewRef && viewRef.current;
@@ -471,7 +472,15 @@
                         // MTLX_PERF_LOG (bare window global, model.jsx
                         // loads before this file).
                         const __pvStart = MTLX_PERF_LOG ? performance.now() : 0;
-                        const built = buildPreviewRenderable(parsed, target);
+                        // buildPreviewRenderable mutates the LIVE document via
+                        // wasm (transient __pv_* nodes/outputs, addNode/
+                        // addOutput/setAttribute) — serialize it against
+                        // concurrent shader generation/introspection (see
+                        // mxExclusive in js/mtlx-engine.js). buildPreviewRenderable
+                        // is fully synchronous (verified: no awaits anywhere in
+                        // its body, js/graph/preview.jsx:91-342), so this
+                        // callback is await-free.
+                        const built = await window.mxExclusive(() => buildPreviewRenderable(parsed, target));
                         if (MTLX_PERF_LOG) {
                             console.log('[mtlx-perf] buildPreviewRenderable: '
                                 + (performance.now() - __pvStart).toFixed(1) + 'ms (target: '
@@ -508,7 +517,10 @@
                         if (live && live.__geom === geom) {
                             let res = { refreshed: false };
                             try {
-                                res = tryRefreshRenderView({
+                                // Async since the shared-wasm serialization
+                                // (mxExclusive, js/mtlx-engine.js): its shader
+                                // regen now waits its turn on the wasm queue.
+                                res = await tryRefreshRenderView({
                                     view: live, mx, gen, genContext,
                                     renderable: built.renderable,
                                     label: built.label || parsed.label,
@@ -523,8 +535,25 @@
                                 // when it didn't, `built` stays alive
                                 // uncleaned and the rebuild path's own
                                 // try/finally below cleans it up once.
-                                if (res.refreshed) built.cleanup();
+                                // built.cleanup() is a synchronous wasm
+                                // mutation (removeChild on the live document) —
+                                // serialize it too (mxExclusive, js/mtlx-engine.js).
+                                // Fire-and-forget (no await): this runs inside a
+                                // finally block, where blocking on the wasm
+                                // queue isn't needed — the mutex still orders it
+                                // behind/ahead of other exclusive work correctly
+                                // either way, since mxExclusive queues by call
+                                // order, not by whether the caller awaits.
+                                if (res.refreshed) window.mxExclusive(() => built.cleanup());
                             }
+                            // Staleness re-check after the await, same idiom
+                            // as the other awaits above: a superseded run
+                            // must not setState or fall through to the
+                            // rebuild path (which disposes the live view the
+                            // newer run may be reusing). cleanup() is
+                            // idempotent, so calling it again after the
+                            // refreshed-branch finally is harmless.
+                            if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
                             if (res.refreshed) {
                                 // Bind any dropped texture files onto the
                                 // shader's filename uniforms (same pass as
@@ -571,7 +600,7 @@
                         if (!canvas) {
                             await new Promise((r) => requestAnimationFrame(r));
                             canvas = canvasRef.current;
-                            if (!canvas || !mounted) { built.cleanup(); return; }
+                            if (!canvas || !mounted) { window.mxExclusive(() => built.cleanup()); return; }
                         }
                         let view = null;
                         try {
@@ -593,13 +622,16 @@
                             // The '__pv_*' wrappers only exist for shader
                             // generation — remove them before anything can
                             // rebuild the graph from the live document.
-                            built.cleanup();
+                            // Fire-and-forget mxExclusive (see the fast-path
+                            // finally block above for the full rationale).
+                            window.mxExclusive(() => built.cleanup());
                         }
                         if (!view) return;
                         if (!mounted) { view.dispose(); return; }
                         view.__geom = geom;
                         liveViewRef.current = view;
                         if (viewRef) viewRef.current = view;
+                        setViewEpoch((n) => n + 1);
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         // Bind any dropped texture files onto the shader's
                         // filename uniforms (same pass as the viewer). Missing
@@ -657,6 +689,8 @@
                         envBg={envBg}
                         onToggleEnvBg={toggleEnvBg}
                         envAvail={envAvail}
+                        viewRef={viewRef}
+                        viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
                         isFullscreen={isFullscreen}
                         onToggleFullscreen={toggleFullscreenView}

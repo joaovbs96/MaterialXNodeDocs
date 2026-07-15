@@ -187,6 +187,20 @@
                 postError('Save failed: ' + String((e && e.message) || e));
             });
     }
+
+    // Called by js/graph-app.jsx's flushUndoSnapshot whenever a coalesced
+    // graph edit settles (350ms debounce, collapsing e.g. a slider drag into
+    // one call), to sync the real .mtlx document buffer in the extension
+    // host — this keeps the VS Code tab's "unsaved changes" dot in sync and
+    // live-syncs any other open view of the same file (e.g. a plain text
+    // editor split). Separate from 'mtlx-save' (Ctrl+S), which additionally
+    // writes to disk. No debounce needed here — the caller already debounced
+    // — and no reply/pending-promise mechanism like pendingSave: fire and
+    // forget.
+    window.__mtlxNotifyEdit = function (xml) {
+        if (!vscodeApi) return;
+        vscodeApi.postMessage({ type: 'mtlx-sync', xml: xml });
+    };
     document.addEventListener('keydown', function (event) {
         var isSaveChord = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
             && (event.key === 's' || event.key === 'S');
@@ -338,30 +352,28 @@
         }
 
         // 'mtlx-request-undo' / 'mtlx-request-redo': the extension host
-        // asking this webview to run the graph's own in-page undo/redo,
-        // posted by editorProvider.js's undoActiveGraph()/redoActiveGraph()
-        // in response to the materialxPlayground.undoGraph/redoGraph
-        // commands (the contributed Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y
-        // keybindings). Same primary-path rationale as Ctrl+S above — the
-        // workbench keybinding service, not this page, is the reliable
-        // responder for a chord VS Code also wants — but these keybindings
-        // additionally SHADOW VS Code's own text-document undo/redo while
-        // our editor is active: without them, Ctrl+Z would revert the
-        // .mtlx file's TEXT (our own 'mtlx-save' WorkspaceEdits push onto
-        // that same stack) and the live-reload debounce would clobber
-        // whatever the graph editor currently has in memory. Fire-and-
-        // forget: no reply is posted back (unlike save, nothing here needs
-        // to settle a pending promise).
+        // asking this webview to undo/redo, posted by editorProvider.js's
+        // undoActiveGraph()/redoActiveGraph() in response to the
+        // materialxPlayground.undoGraph/redoGraph commands (the contributed
+        // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y keybindings). Same primary-path
+        // rationale as Ctrl+S above — the workbench keybinding service, not
+        // this page, is the reliable responder for a chord VS Code also
+        // wants — but these keybindings additionally SHADOW VS Code's own
+        // text-document undo/redo while our editor is active. Undo/redo now
+        // defer to VS Code's own NATIVE document undo/redo (requested via
+        // 'mtlx-native-undo'/'mtlx-native-redo', handled host-side in
+        // editorProvider.js) rather than a separate JS-side graph undo
+        // stack: the document buffer is kept continuously in sync via
+        // window.__mtlxNotifyEdit ('mtlx-sync', see above), so the native
+        // stack already reflects every graph edit. The guards below (graph
+        // view visible, not focused in a text field) still matter because
+        // the contributed keybinding fires unconditionally regardless of
+        // webview-internal DOM focus.
         if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') {
             // No-op unless the Graph view is the visible/mounted one —
             // same guard requestGraphSave() uses.
             if (location.hash.indexOf('#!graph') !== 0) return;
             var isUndo = msg.type === 'mtlx-request-undo';
-            var hook = isUndo ? window.__mtlxGraphUndo : window.__mtlxGraphRedo;
-            // No-op unless the corresponding hook exists — js/graph-app.jsx
-            // only defines these while the graph view is mounted (same
-            // lifecycle as window.__mtlxGetGraphXml).
-            if (typeof hook !== 'function') return;
             // No-op when focus is in an editable element: a text field's
             // native undo already handled the chord in-page (e.g. a label
             // being typed into), so this contributed keybinding firing on
@@ -372,7 +384,7 @@
                 || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '')
             );
             if (isEditable) return;
-            hook();
+            vscodeApi.postMessage({ type: isUndo ? 'mtlx-native-undo' : 'mtlx-native-redo' });
             return;
         }
 

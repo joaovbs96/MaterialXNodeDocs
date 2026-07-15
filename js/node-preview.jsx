@@ -8,6 +8,15 @@
         // parameter panel go side-by-side starting at the md: breakpoint
         // instead of lg:, since the iframe never reaches lg: width.
         const EMBED = !!window.__MTLX_EMBED;
+        // Some heavy nodegraphs (e.g. triplanarprojection) generate essl
+        // whose call depth blows the wasm shadergen module's stack — a
+        // deterministic overflow ('memory access out of bounds'), because
+        // the stack size is baked into the .wasm at link time; there's no
+        // app-side fix, and retrying always fails the same way. Once a
+        // node+signature (identKey, see below) is confirmed to hit this in
+        // THIS session, remember it and show a neutral notice next time
+        // instead of re-running (and re-trapping) the doomed generation.
+        const WASM_STACK_BLACKLIST = new Set();
         const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true, embed = EMBED }) => {
             // Lets a future multi-view shell pause this preview's WebGL render
             // loop while its parent view is backgrounded, without unmounting.
@@ -110,6 +119,7 @@
             // an environment (lit previews) — see envAvail below.
             const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
             const [envAvail, setEnvAvail] = React.useState(false);
+            const [viewEpoch, setViewEpoch] = React.useState(0);
             // PNG snapshot named after the node + geometry.
             const takeScreenshot = () => {
                 const view = viewRef.current;
@@ -353,6 +363,17 @@
                     let mxRef = null;
 
                     try {
+                        // Same node+signature already blew the wasm stack
+                        // earlier this session (see WASM_STACK_BLACKLIST
+                        // above) — it will fail identically every time
+                        // (stack size is baked in at link time), so skip
+                        // straight to the neutral notice instead of paying
+                        // for another doomed generation attempt.
+                        if (WASM_STACK_BLACKLIST.has(identKey)) {
+                            const eB = new Error('Preview unavailable: this node’s generated shader exceeds the WASM stack in this build.');
+                            eB.isNotice = true;
+                            throw eB;
+                        }
                         // The docs page already knows the selected signature's
                         // exact input/output types and decided previewability
                         // there (index.html) — bail before any WASM/doc work.
@@ -370,26 +391,24 @@
                         // `surface`; color/float/vector nodes preview unlit via
                         // surface_unlit.emission (converting to color3 first if
                         // needed). Everything else isn't a color surface.
-                        const doc = mx.createDocument();
-                        // setDataLibrary REFERENCES the standard library
-                        // (nodedef matching, validation, and shadergen all
-                        // consult it) without making it part of the document —
-                        // so a plain writeToXmlString(doc) contains only OUR
-                        // nodes. importLibrary would bake megabytes of stdlib
-                        // into the doc, and the JS binding of XmlWriteOptions
-                        // exposes only writeXIncludeEnable (elementPredicate is
-                        // NOT bound), so there is no way to filter at write
-                        // time. Verified: all preview kinds generate and export
-                        // cleanly through the data library.
-                        if (typeof doc.setDataLibrary === 'function') {
-                            doc.setDataLibrary(stdlib);
-                        } else {
-                            // Ancient binding without setDataLibrary — exports
-                            // would include the library. Loud, not silent:
-                            console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
-                            doc.importLibrary(stdlib);
-                        }
-
+                        //
+                        // Island A: the whole throwaway-document build below
+                        // (doc creation, setDataLibrary, node-kind resolution,
+                        // every addNode/ensureTypedInput/applyOverrides call,
+                        // down through the closing validate()) allocates and
+                        // mutates a live wasm document — serialize it against
+                        // concurrent shader generation/introspection (see
+                        // mxExclusive in js/mtlx-engine.js). Verified
+                        // synchronous: no awaits anywhere in this region (the
+                        // next await is the rAF well after it closes). `doc`
+                        // and `renderable` returned below are raw wasm-object
+                        // pointers, which SURVIVE heap growth (see the
+                        // mxExclusive comment at the top of mtlx-engine.js) —
+                        // safe to hold across the awaits later in this
+                        // function; only a JS-held heap VIEW (e.g. a
+                        // getData() typed array) would be unsafe, and none is
+                        // created in this region.
+                        //
                         // ---- Nodedef identity filter ------------------------
                         // getMatchingNodeDefs matches by CATEGORY only, so for
                         // ambiguous names ('add' is stdlib/math float/color/...
@@ -401,6 +420,17 @@
                         // node's library (from each def's sourceUri) and
                         // nodegroup; fall back to unfiltered if the identity
                         // info would eliminate every def.
+                        // Hoisted to initViewer scope (OUTSIDE Island A's
+                        // callback below): these are pure JS closures over
+                        // `nodeName`/`library`/`nodegroup` only, no wasm/doc
+                        // access, so hoisting is safe — and necessary, because
+                        // Island B (a separate mxExclusive callback further
+                        // down) also calls filterDefs. Sibling callbacks don't
+                        // share each other's locals, so nesting filterDefs
+                        // inside Island A left Island B calling an undefined
+                        // `filterDefs` — a ReferenceError silently swallowed
+                        // by Island B's catch, which emptied the parameter
+                        // panel with no console signal (see that catch below).
                         const libOfDef = (def) => {
                             try {
                                 const uri = def.getSourceUri ? String(def.getSourceUri() || '') : '';
@@ -428,6 +458,27 @@
                             const kept = defs.filter(defMatchesIdentity);
                             return kept.length ? kept : defs;
                         };
+
+                        const { doc, renderable, needsLighting, kind, outType, multiOutput } = await window.mxExclusive(() => {
+                        const doc = mx.createDocument();
+                        // setDataLibrary REFERENCES the standard library
+                        // (nodedef matching, validation, and shadergen all
+                        // consult it) without making it part of the document —
+                        // so a plain writeToXmlString(doc) contains only OUR
+                        // nodes. importLibrary would bake megabytes of stdlib
+                        // into the doc, and the JS binding of XmlWriteOptions
+                        // exposes only writeXIncludeEnable (elementPredicate is
+                        // NOT bound), so there is no way to filter at write
+                        // time. Verified: all preview kinds generate and export
+                        // cleanly through the data library.
+                        if (typeof doc.setDataLibrary === 'function') {
+                            doc.setDataLibrary(stdlib);
+                        } else {
+                            // Ancient binding without setDataLibrary — exports
+                            // would include the library. Loud, not silent:
+                            console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
+                            doc.importLibrary(stdlib);
+                        }
 
                         // Translation graphs (nodedef nodegroup "translation",
                         // e.g. standard_surface_to_gltf_pbr) convert between
@@ -705,7 +756,11 @@
                             }
                         }
 
-
+                        // Island A ends here (see mxExclusive comment above)
+                        // — only plain-pointer/plain-JS values cross the lock
+                        // boundary.
+                        return { doc, renderable, needsLighting, kind, outType, multiOutput };
+                        });
 
                         // --- Generation + rendering (shared engine pipeline) ---
                         // Resolve the canvas first: a message row from the
@@ -717,7 +772,7 @@
                             canvas = canvasRef.current;
                             if (!canvas || !mounted) return;
                         }
-                        const view = await createMtlxRenderView({
+                        const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
                             label: nodeName,
                             needsLighting,
@@ -728,10 +783,54 @@
                             isActive: () => activeRef.current,
                             debugKind: kind,
                         });
+                        let view;
+                        try {
+                            view = await buildView();
+                        } catch (viewErr) {
+                            // Irregular wasm-race mitigation: mtlx-engine.js's
+                            // mxExclusive mutex (serializing all shared-wasm-
+                            // heap work) is the ROOT fix for the heap-growth/
+                            // detached-pointer race behind these errors; this
+                            // catches a stale-pointer casualty from a
+                            // shader-gen call that was already in flight when
+                            // the heap grew. Retry ONCE on the tell-tale error
+                            // signatures, then fall through to the normal
+                            // error handling below on a repeat failure.
+                            const msg = mxErr(mx, viewErr);
+                            if (!mounted || !/memory access out of bounds|has no outputs/i.test(msg)) {
+                                throw viewErr;
+                            }
+                            await new Promise((r) => setTimeout(r, 250));
+                            if (!mounted) return;
+                            try {
+                                view = await buildView();
+                            } catch (viewErr2) {
+                                // Retry exhausted. 'has no outputs' stays
+                                // exactly as before (rethrow raw) — only the
+                                // wasm-stack-overflow signature is contained
+                                // here: unlike the heap-growth race above,
+                                // it's a DETERMINISTIC failure (stack size is
+                                // baked into the .wasm at link time, see
+                                // WASM_STACK_BLACKLIST above), so a same-
+                                // session retry can never succeed. Remember
+                                // this node+signature and surface the neutral
+                                // notice instead of letting the outer catch
+                                // render it as an amber error card.
+                                const msg2 = mxErr(mx, viewErr2);
+                                if (mounted && /memory access out of bounds/i.test(msg2)) {
+                                    WASM_STACK_BLACKLIST.add(identKey);
+                                    const eB = new Error('Preview unavailable: this node’s generated shader exceeds the WASM stack in this build.');
+                                    eB.isNotice = true;
+                                    throw eB;
+                                }
+                                throw viewErr2;
+                            }
+                        }
                         if (!view) return; // unmounted mid-setup (already disposed)
                         if (!mounted) { view.dispose(); return; }
                         viewHandle = view;
                         viewRef.current = view;
+                        setViewEpoch((n) => n + 1);
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         controlsRef.current = view.controls;
                         const { uniforms, introspected } = view;
@@ -895,40 +994,60 @@
                         // like `mix` differ per signature); dedup by input name.
                         const preferType = kind === 'color' ? (multiOutput ? null : outType)
                             : (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'));
-                        const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
-                        defsAll.sort((a, b) => {
-                            // An explicit preferredDef (the docs page's exact
-                            // nodedef pick, e.g. to disambiguate float-amplitude
-                            // overloads sharing an output type) wins outright
-                            // over the output-type match below.
-                            if (preferredDef) {
-                                const ad = (a.getName && a.getName() === preferredDef) ? 0 : 1;
-                                const bd = (b.getName && b.getName() === preferredDef) ? 0 : 1;
-                                if (ad !== bd) return ad - bd;
-                            }
-                            const am = (a.getType && a.getType() === preferType) ? 0 : 1;
-                            const bm = (b.getType && b.getType() === preferType) ? 0 : 1;
-                            return am - bm;
-                        });
+                        // Island B: getMatchingNodeDefs + getActiveInputs/
+                        // getInputs, plus every getName/getType/getAttribute/
+                        // getValueString read inside buildInputParam, are all
+                        // wasm calls — serialize this whole enumeration against
+                        // concurrent shader generation (see mxExclusive in
+                        // js/mtlx-engine.js). Verified synchronous (no awaits
+                        // in this callback). buildInputParam only ever returns
+                        // plain param-descriptor object literals (see its
+                        // definition above) — no live wasm handle crosses the
+                        // lock boundary in `uiParams`.
                         let uiParams = [];
-                        const seenInput = new Set();
                         try {
-                            for (const def of defsAll) {
-                                const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
-                                    : (def.getInputs ? def.getInputs() : null));
-                                for (const inp of inputs) {
-                                    const nm = inp.getName();
-                                    if (seenInput.has(nm)) continue;
-                                    const p = buildInputParam(inp);
-                                    // Consume the name only when a param was
-                                    // produced: if this def's signature yields
-                                    // nothing (e.g. a filename without a live
-                                    // sampler), a later overload may still
-                                    // contribute the input.
-                                    if (p) { seenInput.add(nm); uiParams.push(p); }
+                            uiParams = await window.mxExclusive(() => {
+                                const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
+                                defsAll.sort((a, b) => {
+                                    // An explicit preferredDef (the docs page's exact
+                                    // nodedef pick, e.g. to disambiguate float-amplitude
+                                    // overloads sharing an output type) wins outright
+                                    // over the output-type match below.
+                                    if (preferredDef) {
+                                        const ad = (a.getName && a.getName() === preferredDef) ? 0 : 1;
+                                        const bd = (b.getName && b.getName() === preferredDef) ? 0 : 1;
+                                        if (ad !== bd) return ad - bd;
+                                    }
+                                    const am = (a.getType && a.getType() === preferType) ? 0 : 1;
+                                    const bm = (b.getType && b.getType() === preferType) ? 0 : 1;
+                                    return am - bm;
+                                });
+                                const out = [];
+                                const seenInput = new Set();
+                                for (const def of defsAll) {
+                                    const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
+                                        : (def.getInputs ? def.getInputs() : null));
+                                    for (const inp of inputs) {
+                                        const nm = inp.getName();
+                                        if (seenInput.has(nm)) continue;
+                                        const p = buildInputParam(inp);
+                                        // Consume the name only when a param was
+                                        // produced: if this def's signature yields
+                                        // nothing (e.g. a filename without a live
+                                        // sampler), a later overload may still
+                                        // contribute the input.
+                                        if (p) { seenInput.add(nm); out.push(p); }
+                                    }
                                 }
-                            }
+                                return out;
+                            });
                         } catch (inputErr) {
+                            // Always warn — this used to be DEBUG_SHADERS-only,
+                            // so the filterDefs ReferenceError regression (see
+                            // the hoist comment above Island A) failed SILENTLY
+                            // for everyone not running with debug logging on,
+                            // showing only as "the parameter panel is empty".
+                            console.warn('MaterialX docs: parameter enumeration failed —', inputErr);
                             if (DEBUG_SHADERS) console.warn('nodedef input enumeration failed:', mxErr(mx, inputErr));
                         }
 
@@ -1009,7 +1128,38 @@
                 };
             }, [identKey, enabled, geom, overrides]);
 
+            // Group params by uifolder (item F2.3): un-foldered params
+            // render first, ungrouped, exactly as before; foldered ones are
+            // bucketed under a collapsible header, preserving the FIRST
+            // appearance order of each folder name. A node with no
+            // uifolder attrs anywhere yields an empty `folders` array, so
+            // the render below falls back to the old flat list untouched.
+            const paramGroups = React.useMemo(() => {
+                const ungrouped = [];
+                const folderOrder = [];
+                const byFolder = new Map();
+                for (const p of params) {
+                    const folder = p.uifolder;
+                    if (!folder) { ungrouped.push(p); continue; }
+                    if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
+                    byFolder.get(folder).push(p);
+                }
+                return { ungrouped, folders: folderOrder.map((name) => ({ name, params: byFolder.get(name) })) };
+            }, [params]);
+            // Open/closed state per folder name, default expanded (a name
+            // absent from this map reads as open — see `!== false` below).
+            // Reset whenever the selected node/signature changes, same as
+            // resetNonce, so a folder collapsed on one node doesn't leak
+            // its state onto an unrelated one that happens to reuse a name.
+            const [paramFoldersOpen, setParamFoldersOpen] = React.useState({});
+            React.useEffect(() => { setParamFoldersOpen({}); }, [identKey]);
+
             // Disabled state: cheap placeholder instead of the canvas/panel.
+            // No hooks may be declared after this point (React hook-order
+            // rule) — toggling `enabled` re-renders this SAME component
+            // instance with/without the early return below, and a hook
+            // declared after it would change the hook count between
+            // renders, crashing the whole page (React error #310/#300).
             if (enabled === false) {
                 return (
                     <div className="flex items-center justify-between gap-3 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 my-6 text-sm text-gray-400">
@@ -1212,32 +1362,6 @@
                 );
             };
 
-            // Group params by uifolder (item F2.3): un-foldered params
-            // render first, ungrouped, exactly as before; foldered ones are
-            // bucketed under a collapsible header, preserving the FIRST
-            // appearance order of each folder name. A node with no
-            // uifolder attrs anywhere yields an empty `folders` array, so
-            // the render below falls back to the old flat list untouched.
-            const paramGroups = React.useMemo(() => {
-                const ungrouped = [];
-                const folderOrder = [];
-                const byFolder = new Map();
-                for (const p of params) {
-                    const folder = p.uifolder;
-                    if (!folder) { ungrouped.push(p); continue; }
-                    if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
-                    byFolder.get(folder).push(p);
-                }
-                return { ungrouped, folders: folderOrder.map((name) => ({ name, params: byFolder.get(name) })) };
-            }, [params]);
-            // Open/closed state per folder name, default expanded (a name
-            // absent from this map reads as open — see `!== false` below).
-            // Reset whenever the selected node/signature changes, same as
-            // resetNonce, so a folder collapsed on one node doesn't leak
-            // its state onto an unrelated one that happens to reuse a name.
-            const [paramFoldersOpen, setParamFoldersOpen] = React.useState({});
-            React.useEffect(() => { setParamFoldersOpen({}); }, [identKey]);
-
             // Desktop (lg+): panel sits to the RIGHT of the preview.
             // Mobile: flex-col stacks it BELOW.
             // Notice/error render as a slim row; the viewport layout is then
@@ -1272,6 +1396,8 @@
                             envBg={envBg}
                             onToggleEnvBg={toggleEnvBg}
                             envAvail={envAvail}
+                            viewRef={viewRef}
+                            viewEpoch={viewEpoch}
                             onScreenshot={takeScreenshot}
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreenView}
