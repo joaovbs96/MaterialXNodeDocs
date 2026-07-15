@@ -1382,7 +1382,11 @@
             // prefix from surface-shader input paths.
             const tryFastUniformUpdate = (nodeId, inputName, newValue, type) => {
                 const view = previewViewRef.current;
-                if (!view || !FAST_UNIFORM_TYPES[type]) return false;
+                // view.__outdated: an in-place material swap (the APPLY path
+                // in graph/preview.jsx) is currently in flight on this view —
+                // its uniforms are about to be superseded, so bail and let
+                // the docRev-triggered rebuild/apply pick up this edit instead.
+                if (!view || view.__outdated || !FAST_UNIFORM_TYPES[type]) return false;
                 const name = nodeId.slice(2);
                 const path = nodeId.indexOf('i:') === 0
                     ? (scope ? scope + '/' : '') + name

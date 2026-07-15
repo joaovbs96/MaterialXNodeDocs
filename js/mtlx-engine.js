@@ -2026,11 +2026,23 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
 // left untouched here.
 // Args: { view, mx, gen, genContext, renderable, label, isMounted }
 // where `view` is a previous createMtlxRenderView() return value.
-// Returns { refreshed: false } when the source changed (or generation
-// threw/bailed) — caller falls back to the full rebuild path, which
-// eats its own +20-40ms regen; that duplicate cost is judged
-// acceptable over plumbing the already-generated sources through,
-// since a real rebuild (renderer + GL compile) dwarfs it anyway.
+// Returns { refreshed: false, srcs: null } when generation itself threw
+// or bailed (isMounted() went false mid-generate, or gen.generate
+// failed) — there is nothing usable to hand back, so the caller must
+// fall back to its own from-scratch rebuild (which will regenerate).
+// Returns { refreshed: false, srcs } when the regenerated source is a
+// real mismatch against the live view's compiled vs/fs (including the
+// filename-value-mismatch case below, which additionally sets
+// `texChange: true`) — `srcs` IS the already-generated
+// { vs, fs, introspected } for `renderable`, so the caller's fallback
+// rebuild/apply path can consume it directly instead of calling
+// generatePreviewSources() a second time. (The old contract returned a
+// bare `{ refreshed: false }` here and accepted the caller re-running
+// generation from scratch — a real rebuild's renderer+GL-compile cost
+// dwarfed the extra 20-40ms regen, so it was judged fine at the time;
+// now that callers can apply a pre-generated material in place instead
+// of always tearing down the renderer, that duplicate regen is no
+// longer negligible, so it's eliminated by threading `srcs` through.)
 // Returns { refreshed: true } when `view.uniforms`/`view.introspected`
 // were updated in place.
 // NOTE: async (awaits the mxExclusive-locked generatePreviewSources —
@@ -2043,10 +2055,10 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
     try {
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
     } catch (e) {
-        return { refreshed: false };
+        return { refreshed: false, srcs: null };
     }
-    if (!srcs) return { refreshed: false };
-    if (srcs.vs !== view.vs || srcs.fs !== view.fs) return { refreshed: false };
+    if (!srcs) return { refreshed: false, srcs: null };
+    if (srcs.vs !== view.vs || srcs.fs !== view.fs) return { refreshed: false, srcs };
 
     // A `filename`-type input's VALUE (the referenced texture path) can
     // change without the generated GLSL text changing at all — the path
@@ -2077,7 +2089,7 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
     for (const name of filenameNames) {
         const oldVal = oldFilenames.has(name) ? oldFilenames.get(name) : null;
         const newVal = newFilenames.has(name) ? newFilenames.get(name) : null;
-        if (oldVal !== newVal) return { refreshed: false };
+        if (oldVal !== newVal) return { refreshed: false, srcs, texChange: true };
     }
 
     // Introspection (getStage/collectMxUniforms + the heap-view→plain-JS
@@ -2095,18 +2107,47 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 };
 
 // ------------------------------------------------------------------
-// createMtlxRenderView — the ENTIRE render pipeline for one
-// renderable MaterialX element, encapsulated so both pages share it:
-//   generate ESSL (transparency + COMPLETE interface options)
-//   -> three.js renderer/camera/orbit -> upload MaterialX uniform
-//   defaults (introspection) -> bind env/lights -> geometry ->
-//   compile-check -> animation loop.
+// createMtlxRenderView — the PERSISTENT render pipeline shell for one
+// preview surface, encapsulated so both pages share it. Everything
+// expensive to recreate — WebGLRenderer, scene/camera/orbit controls,
+// env (IBL) textures, preview geometry — is built ONCE, right here;
+// every later document edit instead calls the returned handle's
+// applyMaterial() to swap in just a fresh RawShaderMaterial (generate
+// ESSL -> upload MaterialX uniform defaults (introspection) -> bind
+// env/lights -> compile-check) onto this SAME shell, so the old
+// material keeps rendering (camera/controls untouched, env textures
+// never re-uploaded) until the new one compiles and swaps in. This
+// replaces the old design, where every edit tore the whole view down
+// and rebuilt it from scratch (new WebGLRenderer on the same canvas,
+// full env re-upload, camera/controls reset) — see git history of
+// this file for the abandoned two-canvas alternative that predated
+// this shell design.
+// The FIRST build below (see "First build" near the bottom) routes
+// through the exact same inner helper — applyMaterialInternal, see
+// further down — that the handle's applyMaterial() uses for every
+// later swap, so first-build behavior/return shape stays byte-
+// compatible for callers that only ever do a single first build and
+// never call applyMaterial() again (node-preview.jsx, viewer-app.jsx).
+// See also tryRefreshRenderView above, whose mismatch returns now hand
+// back already-generated `srcs` for exactly this apply path to
+// consume without a second, redundant generatePreviewSources() call.
 // Args: { canvas, mx, gen, genContext, renderable, lightData, label,
-//         needsLighting, geomName, autoRotate, isMounted, debugKind }
+//         needsLighting, geomName, autoRotate, isMounted, isActive,
+//         isAlive, debugKind }
+// isAlive (optional — see the comment on `aliveFn` below): a liveness
+// check consumed ONLY by the animate() rAF loop. Every creation-time
+// bail check in this function keeps reading the run-scoped
+// `isMounted` (THIS build must still abort if its own caller unmounts
+// mid-init) — `isAlive` exists because a persistent shell can outlive
+// the `isMounted` of whichever build first created it (every later
+// applyMaterial() call brings its own, shorter-lived isMounted).
+// Callers that never call applyMaterial() again can omit it; `aliveFn`
+// then falls back to `isMounted`, which is exactly today's behavior.
 // Returns { uniforms, introspected, vs, fs, controls, renderer,
-//           dispose() } or null when isMounted() went false mid-way
-// (already cleaned up). Throws Error with a decoded MaterialX/GLSL
-// message on failure.
+//           applyMaterial(), setGeometry(), setEnvironment(),
+//           setEnvExposure(), ..., dispose() } or null when
+// isMounted() went false mid-way through THIS build (already cleaned
+// up). Throws Error with a decoded MaterialX/GLSL message on failure.
 // ------------------------------------------------------------------
 const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
@@ -2116,21 +2157,59 @@ const createMtlxRenderView = async ({
     // render loop terminates and in-flight init aborts. isActive: visibility —
     // false is TEMPORARY (view backgrounded in the multi-view shell); the loop
     // keeps scheduling frames but skips all render work until it flips back.
-    isMounted = () => true, isActive = () => true, debugKind = '',
+    // isAlive: OPTIONAL — see the big doc comment above this function.
+    // Only the animate() loop reads it (via `aliveFn` just below); every
+    // creation-time bail check below still reads `isMounted` directly.
+    isMounted = () => true, isActive = () => true, isAlive = null, debugKind = '',
     // Initial camera pull-back. 3.6 is the classic roomy framing; small
     // square previews pass ~2.55 so the radius-1 shape fills the frame.
     cameraDistance = 3.6,
 }) => {
+    // See the isAlive doc above: defaulting to isMounted here preserves
+    // today's exact behavior for every caller that doesn't pass isAlive.
+    const aliveFn = isAlive || isMounted;
     let reqId = null;
     let renderer = null;
     let resizeObs = null;
     let controls = null;
     let stopped = false;
+    // Shell-level material/geometry/uniforms state, reassigned by
+    // applyMaterialInternal()/setGeometry() (both defined further down)
+    // on every swap so the SAME shell (renderer/scene/camera/controls/
+    // env textures below) can back a long sequence of document edits
+    // instead of paying for a fresh createMtlxRenderView() call per
+    // edit. `uniforms` was a `const` before this persistent-shell
+    // restructure; it MUST be a `let` now — every closure below that
+    // reads it (setUniforms, animate, the handle's setEnvRotation/
+    // setEnvExposure/setEnvironment, bindMaterialUniforms,
+    // applyMaterialInternal) captures this SAME binding, so reassigning
+    // it here after a swap is what makes the new material's uniforms
+    // visible to all of them without threading a fresh value through
+    // each one individually.
+    let mesh = null, material = null, geometry = null, uniforms = null;
     // The radiance texture, kept so the caller can toggle it as the
     // visible scene background (setEnvBackground) — the IBL uniforms
     // are bound regardless.
     let envBgTexture = null;
     let envRadSamplerName = null, envIrrSamplerName = null, envRotationRad = 0;
+    // Shell-level env (IBL) state — fetched ONCE, below (see the
+    // env-fetch block after the ResizeObserver setup), rather than
+    // inside every material apply: the env textures never change
+    // across a document edit, so re-fetching (or, on the no-file
+    // fallback, re-synthesizing) them on every swap would be pure
+    // waste. bindMaterialUniforms() (below) reads these on EVERY apply
+    // to bind them onto that particular material's actual sampler
+    // names. envExposure defaults to 1.0 to match the literal default
+    // the old inline code used for u_envLightIntensity.
+    let envRadiance = null, envIrradiance = null, envMips = 0, envExposure = 1.0;
+    // envHasFile/envPrefilteredIrr: used ONLY by the DEBUG_SHADERS log
+    // inside bindMaterialUniforms below, to reproduce the exact
+    // "(radiance + prefiltered irradiance files)" / "(radiance file;
+    // irradiance downsampled...)" / "(synthesized)" message the old
+    // inline code derived from the `env` descriptor object — which no
+    // longer lives past the one-time shell-level fetch, so its two
+    // relevant flags are captured here instead.
+    let envHasFile = false, envPrefilteredIrr = false;
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
@@ -2139,6 +2218,15 @@ const createMtlxRenderView = async ({
         if (reqId) cancelAnimationFrame(reqId);
         if (resizeObs) resizeObs.disconnect();
         if (controls) controls.dispose();
+        // Best-effort: renderer.dispose() below only frees the
+        // renderer's OWN GL state, not user-created three.js resources
+        // like the current material/geometry — dispose those too now
+        // that the shell can go through many material/geometry swaps
+        // over its life (each swap already disposes its own PREVIOUS
+        // material/geometry; this only matters for whatever is still
+        // live at final teardown).
+        try { if (material) material.dispose(); } catch (e) { /* already disposed/invalid */ }
+        try { if (geometry) geometry.dispose(); } catch (e) { /* ditto */ }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total — everything below, from shader
@@ -2254,149 +2342,58 @@ const createMtlxRenderView = async ({
                     resizeObs.observe(canvas);
                 }
 
-                // MaterialX-generated shaders expect their own attribute
-                // names (i_position, i_normal, i_texcoord_0, i_tangent)
-                // and transform uniforms (u_*), so we use RawShaderMaterial
-                // (no three.js built-in injection) and feed both manually.
-                const uniforms = {
-                    u_worldMatrix: { value: new THREE.Matrix4() },
-                    u_viewProjectionMatrix: { value: new THREE.Matrix4() },
-                    u_worldInverseTransposeMatrix: { value: new THREE.Matrix4() },
-                    u_viewPosition: { value: new THREE.Vector3() },
-                };
-
-                // --- Upload MaterialX's uniform DEFAULTS (introspection) ---
-                // GLSL ES 3.0 forbids `uniform float x = 1.0;` initializers,
-                // so the generated ESSL declares bare uniforms and expects
-                // the app to upload each default from the shader's uniform
-                // blocks. In WebGL an UNSET uniform reads as 0 — so
-                // surface_unlit's unconnected `emission` WEIGHT (default
-                // 1.0) was 0, multiplying every unlit preview to black,
-                // and every PBR weight/color default was 0 too, blacking
-                // out lit nodes. Mirrors the official viewer (§7.1).
-                // `introspected` (destructured from __srcs above) was
-                // already collected + plainized inside the mxExclusive lock
-                // by generatePreviewSourcesUnlocked — nothing left to read
-                // from mxShader/wasm here, just apply the plain defaults.
-                applyIntrospectedUniformDefaults(uniforms, introspected);
-                if (DEBUG_SHADERS) {
-                    console.log('introspected uniforms:',
-                        introspected.map((u) => `${u.type} ${u.name}${u.data != null ? ' (default uploaded)' : ''}`));
-                    if (!introspected.length) {
-                        console.warn('Shader introspection found NO uniform blocks — defaults not uploaded; expect black. (Binding API mismatch — report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');
-                    }
-                }
-
-
-                // Discover what the generated shader actually declares,
-                // so we bind by real names rather than assumptions.
-                const declared = parseUniforms(fs).concat(parseUniforms(vs));
-                const declaredNames = new Set(declared.map((u) => u.name));
-                const has = (n) => declaredNames.has(n);
-                // Find a declared sampler whose name matches a pattern.
-                // ALWAYS anchored to /env/i: canonical names are
-                // u_envRadiance/u_envIrradiance, and the radiance/
-                // irradiance term below is kept loose only to tolerate
-                // version drift in that suffix. Without the /env/i
-                // anchor, a MATERIAL image sampler whose name happens to
-                // contain "specular"/"diffuse" (or "radiance"/etc.) could
-                // match too — previously latent (only bound at creation),
-                // it became a live bug once the imported-HDR broadcast
-                // (see setEnvironment / LIVE_VIEWS below) started writing
-                // straight into whatever uniform name this returned.
-                const findSampler = (re) =>
-                    declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name));
-
-                if (DEBUG_SHADERS) {
-                    console.group(`MaterialX preview: ${label}`);
-                    console.log('kind:', debugKind, 'needsLighting:', needsLighting);
-                    console.log('declared uniforms:', declared.map((u) => `${u.type} ${u.name}`));
-                    console.log('VERTEX SHADER\n', vs);
-                    console.log('PIXEL SHADER\n', fs);
-                    console.groupEnd();
-                }
-
-                // Image-based lighting for lit surfaces/BSDFs. Bind the
-                // env textures to whatever sampler names the shader really
-                // uses (u_envRadiance / u_envIrradiance in current builds,
-                // but matched loosely so version drift doesn't leave them
-                // unbound → black).
+                // Image-based lighting for lit surfaces/BSDFs — fetched
+                // ONCE here, at SHELL level, rather than inside every
+                // material apply below: the env textures (radiance/
+                // irradiance/background) never change across a document
+                // edit, so re-fetching (or, on the no-file fallback,
+                // re-synthesizing) them on every swap would be pure
+                // waste. The per-material BINDING of these textures onto
+                // the CURRENT shader's actual declared sampler names still
+                // happens fresh on every apply — see bindMaterialUniforms
+                // below — since that depends on what THAT particular
+                // generated shader declares.
                 if (needsLighting) {
                     const env = envOverride || await getEnvironment();
                     if (!isMounted()) { disposePartial(); return null; }
-                    let radiance, irradiance, mips, bgTex;
                     if (env) {
-                        radiance = env.radiance; irradiance = env.irradiance; mips = env.mips;
-                        bgTex = env.background;
+                        envRadiance = env.radiance; envIrradiance = env.irradiance; envMips = env.mips;
+                        envBgTexture = env.background;
+                        envHasFile = true;
+                        envPrefilteredIrr = !!env.prefilteredIrr;
                     } else {
-                        radiance = makeEnvTexture(256, 128, false);
-                        irradiance = makeEnvTexture(64, 32, true);
-                        mips = Math.floor(Math.log2(256)) + 1;
+                        envRadiance = makeEnvTexture(256, 128, false);
+                        envIrradiance = makeEnvTexture(64, 32, true);
+                        envMips = Math.floor(Math.log2(256)) + 1;
                         // Same convention gap as the HDR path: the
                         // synthesized data is top-first too, so the
                         // background needs its own flipY=true copy.
-                        bgTex = makeBackgroundTexture(radiance);
+                        envBgTexture = makeBackgroundTexture(envRadiance);
+                        envHasFile = false;
                     }
-                    const radSampler = findSampler(/radiance|specular|prefilter/i);
-                    const irrSampler = findSampler(/irradiance|diffuse/i);
-                    if (radSampler) uniforms[radSampler.name] = { value: radiance };
-                    if (irrSampler) uniforms[irrSampler.name] = { value: irradiance };
-                    // Captured so the view-handle's setEnvironment()/
-                    // setEnvRotation()/setEnvExposure() methods below can
-                    // live-swap/mutate the right uniforms after creation.
-                    envRadSamplerName = radSampler && radSampler.name;
-                    envIrrSamplerName = irrSampler && irrSampler.name;
-                    // The (optional) visible background is a SEPARATE,
-                    // flipY=true copy of the radiance — reusing the IBL
-                    // texture directly renders the environment mirrored
-                    // vertically (see makeBackgroundTexture). Matches the
-                    // official viewer, whose background is the raw loader
-                    // texture, not the prepareEnvTexture copy.
-                    envBgTexture = bgTex;
-                    if (envBackground) scene.background = bgTex;
-                    // OFFICIAL PARITY: env matrix is ALWAYS a +90° Y
-                    // rotation (getLightRotation in main.js) — identity
-                    // orients the environment differently from the
-                    // reference render.
-                    if (has('u_envMatrix')) uniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2) };
-                    if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
-                    if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
-                    if (has('u_envLightIntensity') && !uniforms.u_envLightIntensity) uniforms.u_envLightIntensity = { value: 1.0 };
-                    if (has('u_refractionEnv')) uniforms.u_refractionEnv = { value: true };
-                    // Direct light rig (struct-array uniform; three maps
-                    // {type,direction,color,intensity} onto the generated
-                    // LightData struct members by name).
-                    const nLights = (lightData && lightData.length) || 0;
-                    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: nLights };
-                    if (nLights && has('u_lightData')) uniforms.u_lightData = { value: lightData };
-                    if (DEBUG_SHADERS) {
-                        console.log('env bound → radiance:', radSampler && radSampler.name,
-                                    '| irradiance:', irrSampler && irrSampler.name,
-                                    env ? (env.prefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance downsampled — drop ./irradiance.hdr for official parity)') : '(synthesized)',
-                                    '| direct lights:', (lightData && lightData.length) || 0);
-                        const envUnbound = declared.filter((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && !uniforms[u.name]);
-                        if (envUnbound.length) console.warn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
-                    }
+                    if (envBackground) scene.background = envBgTexture;
                 }
 
-                const material = new THREE.RawShaderMaterial({
-                    vertexShader: vs,
-                    fragmentShader: fs,
-                    glslVersion: THREE.GLSL3,
-                    uniforms,
-                    side: THREE.DoubleSide,
-                });
-
                 // Selected preview geometry (sphere/cube/shaderball),
-                // attributes aliased to MaterialX names + tangents.
-                const geometry = prepGeometry(await buildPreviewGeometry(geomName));
+                // attributes aliased to MaterialX names + tangents. Built
+                // ONCE here, at shell level — moved above the first
+                // material apply below so setGeometry() on the handle can
+                // later swap it in place without touching the material/
+                // renderer/env textures.
+                geometry = prepGeometry(await buildPreviewGeometry(geomName));
                 if (!isMounted()) { disposePartial(); return null; }
 
-                const mesh = new THREE.Mesh(geometry, material);
-                scene.add(mesh);
-
                 const vp = new THREE.Matrix4();
+                // Hoisted above the first material apply (previously
+                // defined right before the one-time compile-check
+                // further down): applyMaterialInternal below calls this
+                // itself right after building/swapping the mesh's
+                // material, and the animate() loop calls it every frame
+                // after that. The guard is defensive only — nothing
+                // calls this before the first applyMaterialInternal()
+                // populates mesh/uniforms.
                 const setUniforms = () => {
+                    if (!mesh || !uniforms) return;
                     mesh.updateMatrixWorld();
                     camera.updateMatrixWorld();
                     camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
@@ -2408,54 +2405,259 @@ const createMtlxRenderView = async ({
                     camera.getWorldPosition(uniforms.u_viewPosition.value);
                 };
 
-                // Compile now and surface any GLSL error to the UI instead
-                // of failing to a silent black canvas. (Filters benign
-                // ANGLE/fxc X4008-style warnings — see
-                // compileFilteringDriverNoise.)
-                setUniforms();
+                // ------------------------------------------------------
+                // bindMaterialUniforms — build a FRESH uniforms object
+                // for ONE material apply from freshly-generated shader
+                // sources (srcs = { vs, fs, introspected }). Pulled out
+                // of this function's per-build body (previously ran
+                // once, inline, for the shell's single material) so
+                // applyMaterialInternal below can re-run it on every
+                // swap WITHOUT re-running the surrounding one-time shell
+                // setup (renderer/scene/camera/controls/env fetch
+                // above). Reads the shell-level env state fetched once
+                // above (envRadiance/envIrradiance/envMips/envExposure/
+                // envRotationRad/envBgTexture) rather than re-fetching.
+                // Reassigns envRadSamplerName/envIrrSamplerName (shell-
+                // level, read by the handle's setEnvironment/
+                // setEnvRotation/setEnvExposure below) so they always
+                // point at the sampler names THIS material's shader
+                // actually declares. Returns the new uniforms object;
+                // does not touch the shell `uniforms` binding itself —
+                // the caller (applyMaterialInternal) does that.
+                // ------------------------------------------------------
+                const bindMaterialUniforms = (srcs) => {
+                    const { vs, fs, introspected } = srcs;
+                    // MaterialX-generated shaders expect their own attribute
+                    // names (i_position, i_normal, i_texcoord_0, i_tangent)
+                    // and transform uniforms (u_*), so we use RawShaderMaterial
+                    // (no three.js built-in injection) and feed both manually.
+                    const newUniforms = {
+                        u_worldMatrix: { value: new THREE.Matrix4() },
+                        u_viewProjectionMatrix: { value: new THREE.Matrix4() },
+                        u_worldInverseTransposeMatrix: { value: new THREE.Matrix4() },
+                        u_viewPosition: { value: new THREE.Vector3() },
+                    };
 
-                // [mtlx-perf] timing for the actual GL compile — separate
-                // from and nested inside js/graph/preview.jsx's
-                // buildPreviewRenderable timing, which wraps prep+compile
-                // together; this isolates just the renderer.compile() call
-                // below. It's one of several finer-grained timers in this
-                // function (see gen.generate / WebGLRenderer init above and
-                // the whole-function total near the return below) — this
-                // one used to be labeled 'createMtlxRenderView:', which read
-                // as if it covered the whole function; renamed to 'GL
-                // compile:' now that the total timer owns that label. Read
-                // window.MTLX_PERF_LOG defensively rather than the bare
-                // identifier: mtlx-engine.js is eager-loaded before
-                // js/graph/model.jsx (which sets the global), so a top-level
-                // reference could run before it exists — by the time a
-                // preview actually renders here, model.jsx has already
-                // loaded and set it, but this stays defensive on principle.
-                // With the pre-warm above completed, this is now typically
-                // an ANGLE program-cache hit (~15-25ms). If the pre-warm was
-                // skipped or failed, this is the full synchronous compile —
-                // measured 2.5-2.9s for real preview material shaders — see
-                // the [mtlx-perf] GL compile wait log for how long the
-                // pre-warm actually took.
-                const __compilePerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-                compileFilteringDriverNoise(renderer, scene, camera);
-                if (window.MTLX_PERF_LOG) {
-                    console.log('[mtlx-perf] GL compile: '
-                        + (performance.now() - __compilePerfStart).toFixed(1) + 'ms (target: ' + label + ')');
-                }
-                const badProg = (renderer.info.programs || []).find(
-                    (p) => p.diagnostics && p.diagnostics.runnable === false
-                );
-                if (badProg) {
-                    const d = badProg.diagnostics;
-                    const log = (d.programLog || '') + '\n' +
-                        (d.fragmentShader && d.fragmentShader.log ? 'FRAG: ' + d.fragmentShader.log : '') +
-                        (d.vertexShader && d.vertexShader.log ? ' VERT: ' + d.vertexShader.log : '');
-                    console.error('MaterialX shader compile error:', log);
-                    throw new Error(`Shader compile error for "${label}". See console. ${log.slice(0, 160)}`);
-                }
+                    // --- Upload MaterialX's uniform DEFAULTS (introspection) ---
+                    // GLSL ES 3.0 forbids `uniform float x = 1.0;` initializers,
+                    // so the generated ESSL declares bare uniforms and expects
+                    // the app to upload each default from the shader's uniform
+                    // blocks. In WebGL an UNSET uniform reads as 0 — so
+                    // surface_unlit's unconnected `emission` WEIGHT (default
+                    // 1.0) was 0, multiplying every unlit preview to black,
+                    // and every PBR weight/color default was 0 too, blacking
+                    // out lit nodes. Mirrors the official viewer (§7.1).
+                    // `introspected` was already collected + plainized inside
+                    // the mxExclusive lock by generatePreviewSourcesUnlocked —
+                    // nothing left to read from mxShader/wasm here, just
+                    // apply the plain defaults.
+                    applyIntrospectedUniformDefaults(newUniforms, introspected);
+                    if (DEBUG_SHADERS) {
+                        console.log('introspected uniforms:',
+                            introspected.map((u) => `${u.type} ${u.name}${u.data != null ? ' (default uploaded)' : ''}`));
+                        if (!introspected.length) {
+                            console.warn('Shader introspection found NO uniform blocks — defaults not uploaded; expect black. (Binding API mismatch — report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');
+                        }
+                    }
+
+                    // Discover what the generated shader actually declares,
+                    // so we bind by real names rather than assumptions.
+                    const declared = parseUniforms(fs).concat(parseUniforms(vs));
+                    const declaredNames = new Set(declared.map((u) => u.name));
+                    const has = (n) => declaredNames.has(n);
+                    // Find a declared sampler whose name matches a pattern.
+                    // ALWAYS anchored to /env/i: canonical names are
+                    // u_envRadiance/u_envIrradiance, and the radiance/
+                    // irradiance term below is kept loose only to tolerate
+                    // version drift in that suffix. Without the /env/i
+                    // anchor, a MATERIAL image sampler whose name happens to
+                    // contain "specular"/"diffuse" (or "radiance"/etc.) could
+                    // match too — previously latent (only bound at creation),
+                    // it became a live bug once the imported-HDR broadcast
+                    // (see setEnvironment / LIVE_VIEWS below) started writing
+                    // straight into whatever uniform name this returned.
+                    const findSampler = (re) =>
+                        declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name));
+
+                    if (DEBUG_SHADERS) {
+                        console.group(`MaterialX preview: ${label}`);
+                        console.log('kind:', debugKind, 'needsLighting:', needsLighting);
+                        console.log('declared uniforms:', declared.map((u) => `${u.type} ${u.name}`));
+                        console.log('VERTEX SHADER\n', vs);
+                        console.log('PIXEL SHADER\n', fs);
+                        console.groupEnd();
+                    }
+
+                    // Image-based lighting for lit surfaces/BSDFs. Bind the
+                    // (already-fetched, shell-level) env textures to
+                    // whatever sampler names THIS shader really uses
+                    // (u_envRadiance / u_envIrradiance in current builds,
+                    // but matched loosely so version drift doesn't leave
+                    // them unbound → black).
+                    if (needsLighting) {
+                        const radSampler = findSampler(/radiance|specular|prefilter/i);
+                        const irrSampler = findSampler(/irradiance|diffuse/i);
+                        if (radSampler) newUniforms[radSampler.name] = { value: envRadiance };
+                        if (irrSampler) newUniforms[irrSampler.name] = { value: envIrradiance };
+                        // Captured so the view-handle's setEnvironment()/
+                        // setEnvRotation()/setEnvExposure() methods below can
+                        // live-swap/mutate the right uniforms after creation.
+                        envRadSamplerName = radSampler && radSampler.name;
+                        envIrrSamplerName = irrSampler && irrSampler.name;
+                        // OFFICIAL PARITY: env matrix is ALWAYS a +90° Y
+                        // rotation (getLightRotation in main.js) — identity
+                        // orients the environment differently from the
+                        // reference render. DELIBERATE TWEAK: seeded from
+                        // envRotationRad (not a bare 0) so a material swap
+                        // PRESERVES whatever rotation offset the user
+                        // already dialed in via setEnvRotation() — this is
+                        // identical to the old behavior on the very first
+                        // build, when envRotationRad is still its initial 0.
+                        if (has('u_envMatrix')) newUniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
+                        if (has('u_envRadianceMips')) newUniforms.u_envRadianceMips = { value: envMips };
+                        if (has('u_envRadianceSamples')) newUniforms.u_envRadianceSamples = { value: 16 };
+                        // DELIBERATE TWEAK: seeded from envExposure (not a
+                        // literal 1.0) so a material swap PRESERVES
+                        // whatever exposure the user already dialed in via
+                        // setEnvExposure() — identical to the old behavior
+                        // on the very first build, when envExposure is
+                        // still its initial 1.0.
+                        if (has('u_envLightIntensity') && !newUniforms.u_envLightIntensity) newUniforms.u_envLightIntensity = { value: envExposure };
+                        if (has('u_refractionEnv')) newUniforms.u_refractionEnv = { value: true };
+                        // Direct light rig (struct-array uniform; three maps
+                        // {type,direction,color,intensity} onto the generated
+                        // LightData struct members by name).
+                        const nLights = (lightData && lightData.length) || 0;
+                        if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
+                        if (nLights && has('u_lightData')) newUniforms.u_lightData = { value: lightData };
+                        if (DEBUG_SHADERS) {
+                            console.log('env bound → radiance:', radSampler && radSampler.name,
+                                        '| irradiance:', irrSampler && irrSampler.name,
+                                        envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance downsampled — drop ./irradiance.hdr for official parity)') : '(synthesized)',
+                                        '| direct lights:', (lightData && lightData.length) || 0);
+                            const envUnbound = declared.filter((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && !newUniforms[u.name]);
+                            if (envUnbound.length) console.warn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
+                        }
+                    }
+
+                    return newUniforms;
+                };
+
+                // ------------------------------------------------------
+                // applyMaterialInternal — build a new RawShaderMaterial
+                // from `srcs` and swap it onto the shell's mesh IN
+                // PLACE: no renderer/scene/camera/controls/geometry/env-
+                // texture recreation. Used for BOTH the very first build
+                // (below) and every later document edit (via the
+                // handle's applyMaterial(), added further down) —
+                // routing the first build through the SAME code path is
+                // what keeps first-build behavior byte-compatible with
+                // today. On a compile error, the OLD material/uniforms
+                // are restored onto the mesh/shell vars and the BAD
+                // material is disposed BEFORE throwing — see the
+                // ordering comment in the badProg branch below; it is
+                // LOAD-BEARING.
+                // ------------------------------------------------------
+                const applyMaterialInternal = (srcs, applyLabel) => {
+                    const newUniforms = bindMaterialUniforms(srcs);
+                    const newMaterial = new THREE.RawShaderMaterial({
+                        vertexShader: srcs.vs,
+                        fragmentShader: srcs.fs,
+                        glslVersion: THREE.GLSL3,
+                        uniforms: newUniforms,
+                        side: THREE.DoubleSide,
+                    });
+
+                    // Stash the outgoing material/uniforms so a compile
+                    // failure below can restore them and this swap is a
+                    // no-op from the outside (the old material keeps
+                    // rendering). Both are null on the very first build —
+                    // nothing to restore/dispose in that case.
+                    const oldMaterial = material;
+                    const oldUniforms = uniforms;
+                    material = newMaterial;
+                    uniforms = newUniforms;
+
+                    if (!mesh) {
+                        // First call for this shell: nothing to swap onto
+                        // yet — create the mesh and add it to the
+                        // (already-created, shell-level) scene. Every
+                        // later call just reassigns mesh.material below.
+                        mesh = new THREE.Mesh(geometry, material);
+                        scene.add(mesh);
+                    } else {
+                        mesh.material = material;
+                    }
+
+                    // Compile now and surface any GLSL error to the UI
+                    // instead of failing to a silent black canvas.
+                    // (Filters benign ANGLE/fxc X4008-style warnings —
+                    // see compileFilteringDriverNoise.)
+                    setUniforms();
+
+                    // [mtlx-perf] timing for the actual GL compile —
+                    // separate from and nested inside js/graph/preview.jsx's
+                    // buildPreviewRenderable timing, which wraps prep+compile
+                    // together; this isolates just the renderer.compile() call
+                    // below. With the pre-warm (prewarmShaderCompile, called
+                    // by the first-build path and by the handle's
+                    // applyMaterial() below) completed beforehand, this is
+                    // now typically an ANGLE program-cache hit (~15-25ms).
+                    // If the pre-warm was skipped or failed, this is the
+                    // full synchronous compile — measured 2.5-2.9s for real
+                    // preview material shaders.
+                    const __compilePerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+                    compileFilteringDriverNoise(renderer, scene, camera);
+                    if (window.MTLX_PERF_LOG) {
+                        console.log('[mtlx-perf] GL compile: '
+                            + (performance.now() - __compilePerfStart).toFixed(1) + 'ms (target: ' + applyLabel + ')');
+                    }
+                    const badProg = (renderer.info.programs || []).find(
+                        (p) => p.diagnostics && p.diagnostics.runnable === false
+                    );
+                    if (badProg) {
+                        // LOAD-BEARING ORDER (verified against r128
+                        // sources): restore the OLD material/uniforms onto
+                        // the mesh AND the shell vars FIRST — so the shell
+                        // is back to a fully working state — THEN dispose
+                        // the BAD new material. r128's material.dispose()
+                        // -> deallocateMaterial -> releaseProgram frees its
+                        // GL program and removes it from
+                        // renderer.info.programs; leaving that dispose
+                        // out (or doing it before the restore) would leave
+                        // the bad program sitting in that list, so the
+                        // very next apply's badProg scan above would find
+                        // it again and this would throw forever even after
+                        // the user fixed the actual error. Do NOT reorder
+                        // this without re-verifying that behavior.
+                        mesh.material = oldMaterial;
+                        material = oldMaterial;
+                        uniforms = oldUniforms;
+                        newMaterial.dispose();
+                        const d = badProg.diagnostics;
+                        const log = (d.programLog || '') + '\n' +
+                            (d.fragmentShader && d.fragmentShader.log ? 'FRAG: ' + d.fragmentShader.log : '') +
+                            (d.vertexShader && d.vertexShader.log ? ' VERT: ' + d.vertexShader.log : '');
+                        console.error('MaterialX shader compile error:', log);
+                        throw new Error(`Shader compile error for "${applyLabel}". See console. ${log.slice(0, 160)}`);
+                    }
+
+                    // Success: the swap stuck — the OLD material/program
+                    // is no longer needed (null on the very first build,
+                    // when there's nothing to dispose).
+                    if (oldMaterial) oldMaterial.dispose();
+                };
+
+                // First build: routes through the exact same helper every
+                // later applyMaterial() call uses (see the doc comment on
+                // applyMaterialInternal above) — throws the same styled
+                // Error on a compile failure, caught by the outer
+                // try/catch below (disposePartial() + rethrow), identical
+                // to today's first-build failure behavior.
+                applyMaterialInternal({ vs, fs, introspected }, label);
 
                 const animate = () => {
-                    if (stopped || !isMounted()) return;
+                    if (stopped || !aliveFn()) return;
                     reqId = requestAnimationFrame(animate);
                     if (!isActive()) return;
                     if (controls) {
@@ -2516,6 +2718,13 @@ const createMtlxRenderView = async ({
             // previews so this reads as a full exposure control.
             setEnvExposure: (x) => {
                 if (uniforms.u_envLightIntensity) uniforms.u_envLightIntensity.value = x;
+                // Persist onto the shell too: bindMaterialUniforms()
+                // above seeds a NEW material's u_envLightIntensity from
+                // envExposure (see the DELIBERATE TWEAK comment there),
+                // so a future structural edit's swap keeps whatever
+                // exposure the user last set here instead of resetting
+                // to 1.0.
+                envExposure = x;
             },
             // Live-swap the environment (radiance/irradiance/mips/
             // background) without a shader rebuild — used by the
@@ -2529,9 +2738,91 @@ const createMtlxRenderView = async ({
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
                 if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
+                // Persist onto the SHELL env state too (not just the
+                // current material's live uniforms) — H-A2b:
+                // bindMaterialUniforms() above reads envRadiance/
+                // envIrradiance/envMips on every FUTURE material swap, so
+                // without this an import/reset here would look right on
+                // the CURRENT material but silently revert to the stale
+                // env on the very next structural edit's apply.
+                envRadiance = env.radiance;
+                envIrradiance = env.irradiance;
+                envMips = env.mips;
                 envBgTexture = env.background;
                 if (envBgTexture) envBgTexture.offset.x = -envRotationRad / (2 * Math.PI);
                 if (scene.background) scene.background = envBgTexture;
+            },
+            // Apply a newly-generated (or already-generated, via `srcs`)
+            // material into this SAME shell — the persistent-shell
+            // replacement for calling createMtlxRenderView() again on
+            // every document edit. Returns null (without touching the
+            // still-live material) when superseded/unmounted/stopped at
+            // any point, or when generation/pre-warm bailed. Throws
+            // applyMaterialInternal's styled Error on a real compile
+            // failure — the old material is already restored by then
+            // (see applyMaterialInternal above), so the caller's error
+            // overlay shows over a still-rendering preview. On success,
+            // updates this handle's public fields IN PLACE (see the
+            // comment below) and returns the handle itself.
+            applyMaterial: async ({ mx, gen, genContext, renderable, srcs = null, label, isMounted = () => true }) => {
+                const __applyPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+                // `stopped` is disposePartial's flag (set by dispose()
+                // below) — an apply arriving after teardown must do
+                // nothing, not resurrect GL state on an already-disposed
+                // renderer/context.
+                if (stopped || !isMounted()) return null;
+                if (!srcs) {
+                    srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+                }
+                // A thrown generation error (bad MaterialX graph etc.) is
+                // NOT caught here — it propagates to the caller exactly
+                // like a first-build failure does, so the UI can show the
+                // same error overlay while THIS handle's old material
+                // keeps rendering underneath it (nothing above this point
+                // has touched the live material yet).
+                if (!srcs || !isMounted() || stopped) return null;
+                const warmResult = await prewarmShaderCompile({ vs: srcs.vs, fs: srcs.fs, isMounted, label });
+                // 'bailed' (caller superseded this apply mid-warm) or a
+                // lost isMounted(): must not touch the still-rendering
+                // live material — leave it exactly as-is, nothing
+                // disposed, nothing swapped; the superseding call owns
+                // the next apply.
+                if (warmResult === 'bailed' || !isMounted() || stopped) return null;
+                applyMaterialInternal(srcs, label);
+                // Update the handle's public fields IN PLACE. Object-
+                // literal shorthand (`uniforms, introspected, vs, fs` on
+                // this handle, set once at construction below) captures
+                // the VALUE of the shell `let`s at THAT moment — it is
+                // NOT a live binding — so every successful swap must
+                // re-assign these here for external readers
+                // (tryFastUniformUpdate in graph-app.jsx,
+                // bindDroppedTextures above) to see the new material's
+                // state instead of the shell's original one.
+                handle.uniforms = uniforms;
+                handle.introspected = srcs.introspected;
+                handle.vs = srcs.vs;
+                handle.fs = srcs.fs;
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] applyMaterial total: '
+                        + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
+                }
+                return handle;
+            },
+            // Swap the preview geometry (sphere/cube/shaderball) onto the
+            // EXISTING mesh in place — no renderer/material/camera touch.
+            // Low-risk: every preview geometry gets identical i_*
+            // attribute aliasing (see prepGeometry above), so the
+            // currently-bound material's attribute locations stay valid;
+            // r128's WebGL2 VAO-per-(geometry,program) binding state
+            // handles a mesh.geometry reassignment on its own.
+            setGeometry: async (name) => {
+                if (stopped) return;
+                const newGeometry = prepGeometry(await buildPreviewGeometry(name));
+                if (stopped) { newGeometry.dispose(); return; }
+                const oldGeometry = geometry;
+                geometry = newGeometry;
+                if (mesh) mesh.geometry = newGeometry;
+                if (oldGeometry) oldGeometry.dispose();
             },
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so

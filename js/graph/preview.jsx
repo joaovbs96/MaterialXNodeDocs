@@ -344,8 +344,12 @@
         // Square shaderball preview of the CURRENT preview target — the
         // selected node, else the last selected one, else the document
         // default — rendered with the SAME createMtlxRenderView pipeline
-        // as the docs page. Re-inits whenever the target, the document,
-        // or a committed parameter edit (docRev) changes.
+        // as the docs page. The underlying effect below RE-RUNS whenever
+        // the target, the document, or a committed parameter edit (docRev)
+        // changes, but only the very FIRST run for a mounted preview pays
+        // for a full createMtlxRenderView init — every later run instead
+        // reuses the SAME persistent shell via a fast uniform-only refresh
+        // or an in-place material swap (see the APPLY path further down).
         function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, trailingChildren }) {
             const canvasRef = React.useRef(null);
             // The viewport CONTAINER (not the canvas) goes fullscreen, so
@@ -360,14 +364,24 @@
             const [notice, setNotice] = React.useState(null);
             const [loading, setLoading] = React.useState(true);
             const [label, setLabel] = React.useState('');
-            // Last rendered frame, kept around so the preview doesn't flash
-            // back to blank/checker while a docRev-triggered rebuild is in
-            // flight — the new view starts every filename uniform on the
-            // checker texture until bindDroppedTextures resolves it (see
-            // TEXTURE_CACHE above), and even a cache hit still needs a
-            // render view to exist first.
-            const lastFrameRef = React.useRef(null);
-            const [lastFrame, setLastFrame] = React.useState(null);
+            // `updating`: true while an in-place material swap (the APPLY
+            // path further down, backed by the view handle's
+            // applyMaterial()) is running against the EXISTING live view —
+            // the OLD material keeps rendering/orbiting throughout, so
+            // there's no blank/checker flash to paper over anymore (that
+            // was the job of the lastFrame snapshot machinery this
+            // replaces); this just drives a small "Updating…" badge.
+            const [updating, setUpdating] = React.useState(false);
+            // Liveness flag for the PERSISTENT render-view shell, distinct
+            // from this particular effect run's `mounted` — passed as
+            // createMtlxRenderView's `isAlive` option so the shell's own
+            // rAF loop (mtlx-engine.js) keeps animating across docRev-
+            // triggered effect re-runs that now reuse the same shell via
+            // applyMaterial()/setGeometry() instead of tearing it down and
+            // creating a fresh one each time (see mtlx-engine.js's H-A1
+            // comment above createMtlxRenderView). Flips to false exactly
+            // once, in the mount-once cleanup below, right before dispose.
+            const shellAliveRef = React.useRef(true);
 
             // ---- Viewport controls (item F2.1) — mirrors node-preview.jsx's
             // copy exactly. Preview geometry (persisted): shares the SAME
@@ -406,21 +420,30 @@
 
             // Component-lifetime handle to the CURRENTLY LIVE, GL-compiled
             // render view (if any) — persists ACROSS the main effect's
-            // docRev-triggered re-runs so a fast-refresh (item F3c below)
-            // can reuse it instead of tearing it down. Only the rebuild
-            // path (a real shader-source change) or unmount ever dispose
-            // it; a superseded/stale run must never touch it (see the
-            // mounted-staleness comments below).
+            // docRev-triggered re-runs so a fast-refresh (item F3c below) or
+            // an in-place material swap (the APPLY path further down) can
+            // reuse it instead of tearing it down. Disposal only happens on
+            // the no-renderable path, a failed in-place geometry swap, the
+            // FIRST-BUILD path's defensive stale-view guard, or actual
+            // unmount — a superseded/stale run must never touch it
+            // otherwise (see the mounted-staleness comments below).
             const liveViewRef = React.useRef(null);
 
             // Mount-once: disposes whatever view is still live when this
             // component actually UNMOUNTS. Not the per-docRev cleanup —
-            // that's handled inline by the rebuild path inside the main
-            // effect below (only a run that itself proceeds to rebuild
-            // ever disposes the previous view). No last-frame snapshot is
-            // taken here since nothing will render this preview again.
+            // that's handled inline by the no-renderable/APPLY/first-build
+            // paths inside the main effect below (only a run that itself
+            // proceeds past the `mounted` checks ever disposes the
+            // previous view). No last-frame snapshot is taken here since
+            // nothing will render this preview again.
             React.useEffect(() => {
                 return () => {
+                    // Flip BEFORE disposing: the shell's rAF loop reads this
+                    // via `isAlive` on every frame, so setting it first
+                    // guarantees the loop sees "dead" no later than the
+                    // same tick dispose() tears the renderer/GL state down
+                    // — never after.
+                    shellAliveRef.current = false;
                     if (liveViewRef.current) {
                         try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                     }
@@ -490,8 +513,7 @@
                             setLabel('');
                             setNotice(built.notice || 'This document has nothing to preview.');
                             setLoading(false);
-                            setLastFrame(null);
-                            lastFrameRef.current = null;
+                            setUpdating(false);
                             if (liveViewRef.current) {
                                 try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             }
@@ -506,13 +528,48 @@
                             return;
                         }
 
+                        // GEOMETRY-SWAP STEP — before the fast path below: a
+                        // pure geometry change (the `geom` dep just flipped,
+                        // e.g. the shaderball/sphere/cube picker) no longer
+                        // forces a full rebuild. Swap the mesh geometry in
+                        // place on the EXISTING live view via the handle's
+                        // setGeometry() (mtlx-engine.js) so the fast-path
+                        // gate right below (`live.__geom === geom`) passes
+                        // afterward and the material itself is left
+                        // completely untouched — camera/controls/env
+                        // textures/material all persist across a geometry
+                        // switch now, instead of the old full teardown.
+                        const liveForGeom = liveViewRef.current;
+                        if (liveForGeom && liveForGeom.__geom !== geom) {
+                            try {
+                                await liveForGeom.setGeometry(geom);
+                                liveForGeom.__geom = geom;
+                            } catch (e) {
+                                // Geometry rebuild failed (buildPreviewGeometry
+                                // threw, view disposed mid-await, etc.) — the
+                                // shell may be in a bad state; drop it so this
+                                // run falls through to a full FIRST-BUILD
+                                // below instead of limping along on a stale
+                                // mesh/geometry pairing.
+                                try { liveForGeom.dispose(); } catch (e2) { /* best-effort */ }
+                                liveViewRef.current = null;
+                                if (viewRef) viewRef.current = null;
+                            }
+                            // setGeometry awaits buildPreviewGeometry — a
+                            // superseding run may have started (and flipped
+                            // `mounted`) while this was in flight; same
+                            // wrapper-cleanup idiom as every other await
+                            // point in this effect.
+                            if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
+                        }
+
                         // FAST PATH (item F3c) — before any teardown: try
                         // to refresh the EXISTING compiled view in place
                         // instead of a full rebuild. Only attempted when a
-                        // live view exists for the SAME geometry (a geom
-                        // switch is also a `geom` dep change that re-runs
-                        // this effect and lands here, but the mesh/material
-                        // pairing means it always needs a real rebuild).
+                        // live view exists for the SAME geometry — the
+                        // geometry-swap step above already resolves a pure
+                        // geometry change, so by this point `live.__geom`
+                        // matches `geom` whenever a live view survived it.
                         const live = liveViewRef.current;
                         if (live && live.__geom === geom) {
                             let res = { refreshed: false };
@@ -533,8 +590,9 @@
                                 // document. Only needed here when the
                                 // refresh actually took (view kept as-is);
                                 // when it didn't, `built` stays alive
-                                // uncleaned and the rebuild path's own
-                                // try/finally below cleans it up once.
+                                // uncleaned and the APPLY path below (or the
+                                // FIRST-BUILD path's own try/finally) cleans
+                                // it up once instead.
                                 // built.cleanup() is a synchronous wasm
                                 // mutation (removeChild on the live document) —
                                 // serialize it too (mxExclusive, js/mtlx-engine.js).
@@ -548,48 +606,124 @@
                             }
                             // Staleness re-check after the await, same idiom
                             // as the other awaits above: a superseded run
-                            // must not setState or fall through to the
-                            // rebuild path (which disposes the live view the
-                            // newer run may be reusing). cleanup() is
-                            // idempotent, so calling it again after the
-                            // refreshed-branch finally is harmless.
+                            // must not setState or fall through to the APPLY
+                            // path below (which would mark the live view
+                            // `__outdated` and start swapping material on
+                            // behalf of a run that's no longer relevant).
+                            // cleanup() is idempotent, so calling it again
+                            // after the refreshed-branch finally is harmless.
                             if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
                             if (res.refreshed) {
                                 // Bind any dropped texture files onto the
                                 // shader's filename uniforms (same pass as
-                                // the viewer/rebuild path). Missing
-                                // references keep the built-in checker
-                                // texture.
+                                // the viewer/apply path). Missing references
+                                // keep the built-in checker texture.
                                 const rep = bindDroppedTextures(live, fileMap || {});
                                 if (rep.missing.length) {
                                     console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
                                 }
                                 setLabel(built.label || '');
                                 setLoading(false);
-                                setLastFrame(null);
+                                // Clear any outdated flag a previous
+                                // superseded apply may have left set (the H1
+                                // guard in graph-app.jsx's
+                                // tryFastUniformUpdate reads it) and drop the
+                                // "Updating…" badge — a pure uniform-default
+                                // refresh needs neither.
+                                live.__outdated = false;
+                                setUpdating(false);
                                 return;
                             }
-                            // Not refreshed (source actually changed, or
-                            // generation errored/bailed) — fall through to
-                            // the full rebuild below.
+
+                            // APPLY PATH — source actually changed (or a
+                            // filename/texture value changed — texChange —
+                            // or generation errored/bailed leaving `srcs`
+                            // null): swap in a fresh material on this SAME
+                            // shell instead of tearing the whole view down.
+                            // The old material keeps rendering/orbiting the
+                            // entire time (camera/controls/env untouched).
+                            // __outdated marks the live view as "a swap is
+                            // in flight" for the H1 guard in graph-app.jsx's
+                            // tryFastUniformUpdate, so a stray fast uniform
+                            // write from a mid-swap value edit doesn't land
+                            // on soon-to-be-replaced state — it falls back
+                            // to a fresh docRev rebuild/apply instead.
+                            live.__outdated = true;
+                            setUpdating(true);
+                            setLabel(built.label || '');
+                            let applied = null;
+                            if (res.srcs) {
+                                // tryRefreshRenderView already generated
+                                // fresh sources for us (that's the whole
+                                // point of threading `srcs` through its
+                                // mismatch returns — see its doc comment in
+                                // mtlx-engine.js) — clean up the '__pv_*'
+                                // wrappers NOW, before the (possibly slow)
+                                // applyMaterial below, same as the fast-
+                                // refresh branch above does.
+                                window.mxExclusive(() => built.cleanup());
+                                applied = await live.applyMaterial({
+                                    mx, gen, genContext, renderable: built.renderable,
+                                    srcs: res.srcs,
+                                    label: built.label || parsed.label,
+                                    isMounted: () => mounted,
+                                });
+                            } else {
+                                // No usable pre-generated srcs (generation
+                                // inside tryRefreshRenderView itself threw or
+                                // bailed) — applyMaterial regenerates from
+                                // `built.renderable` on its own. `built` must
+                                // stay alive (uncleaned) until THAT call
+                                // finishes, so cleanup happens in a finally
+                                // here instead of up front. A thrown
+                                // generation/compile error still propagates
+                                // out of this finally to the effect's catch
+                                // below, exactly like the srcs-available
+                                // branch — nothing here swallows it.
+                                try {
+                                    applied = await live.applyMaterial({
+                                        mx, gen, genContext, renderable: built.renderable,
+                                        label: built.label || parsed.label,
+                                        isMounted: () => mounted,
+                                    });
+                                } finally {
+                                    window.mxExclusive(() => built.cleanup());
+                                }
+                            }
+                            // null (superseded/unmounted/bailed mid-apply)
+                            // or a stale `mounted`: the old material is left
+                            // exactly as-is by applyMaterial() in that case
+                            // — nothing to dispose, no state to touch. The
+                            // superseding run owns the badge/`__outdated`/
+                            // label from here on, so this run must not
+                            // clear any of it out from under it.
+                            if (!applied || !mounted) return;
+                            live.__outdated = false;
+                            const rep = bindDroppedTextures(live, fileMap || {});
+                            if (rep.missing.length) {
+                                console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
+                            }
+                            setUpdating(false);
+                            return;
                         }
 
-                        // REBUILD PATH — full teardown + recreate. Only
-                        // NOW do we blink the loading overlay / hold the
-                        // last frame; a successful fast-refresh above never
-                        // reaches this point, so it never blinks.
+                        // FIRST-BUILD PATH — reached only when there is no
+                        // live view to apply onto (liveViewRef.current was
+                        // null on entry, or the geometry-swap step above
+                        // discarded a broken shell): full teardown+recreate
+                        // via createMtlxRenderView. Every LATER document
+                        // edit instead takes the APPLY path above, which
+                        // reuses this same shell via live.applyMaterial()
+                        // rather than paying for this block again.
                         setLoading(true);
-                        setLastFrame(lastFrameRef.current);
                         if (liveViewRef.current) {
-                            // Grab the last-drawn frame before tearing the
-                            // view down so the overlay above can paint it
-                            // over the checker-texture gap instead of
-                            // showing a blank/flashing canvas.
-                            try {
-                                const shot = liveViewRef.current.snapshot && liveViewRef.current.snapshot();
-                                if (shot) lastFrameRef.current = shot;
-                            } catch (e) { /* best-effort — keep the previous frame */ }
-                            liveViewRef.current.dispose();
+                            // Defensive only — normally unreachable, since
+                            // every code path above that leaves a live view
+                            // in place also `return`s before falling through
+                            // to here. Guards against a stale view leaking
+                            // if that invariant is ever broken by a future
+                            // edit.
+                            try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             liveViewRef.current = null;
                             if (viewRef) viewRef.current = null;
                         }
@@ -616,6 +750,17 @@
                                 cameraDistance: 2.55,
                                 isMounted: () => mounted,
                                 isActive: () => activeRef.current,
+                                // The shell this builds can outlive THIS
+                                // run's `mounted` — a LATER docRev re-run
+                                // reuses it via applyMaterial()/setGeometry()
+                                // instead of a fresh createMtlxRenderView()
+                                // call, so its rAF loop needs a liveness
+                                // check that survives across runs. isAlive
+                                // is exactly that (see mtlx-engine.js's H-A1
+                                // comment above createMtlxRenderView);
+                                // shellAliveRef only flips false at actual
+                                // unmount (see the mount-once cleanup above).
+                                isAlive: () => shellAliveRef.current,
                                 debugKind: 'graph-preview',
                             });
                         } finally {
@@ -641,11 +786,11 @@
                             console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
                         }
                         setLoading(false);
-                        setLastFrame(null);
+                        setUpdating(false);
                     } catch (e) {
                         if (!mounted) return;
                         setLoading(false);
-                        setLastFrame(null);
+                        setUpdating(false);
                         const msg = String((e && e.message) || e);
                         if (/Could not find a matching implementation/i.test(msg)) {
                             setNotice('No preview \u2014 this node has no WebGL (essl) implementation in the MaterialX libraries.');
@@ -656,11 +801,15 @@
                 })();
                 // Per-run cleanup ONLY flips `mounted` — a superseded run
                 // must never dispose the live view (it might still be the
-                // one on screen). Disposal now happens inline: on the
-                // no-renderable path and the rebuild path above (both only
-                // reachable by a run that itself passed every `mounted`
-                // check up to that point), or on actual unmount (the
-                // mount-once effect above).
+                // one on screen, or the one an in-place APPLY is mid-swap
+                // on). Disposal now happens inline: on the no-renderable
+                // path, a failed in-place geometry swap, and the FIRST-
+                // BUILD path's defensive guard above (all only reachable by
+                // a run that itself passed every `mounted` check up to that
+                // point), or on actual unmount (the mount-once effect
+                // above). The APPLY path never disposes the live view at
+                // all — it swaps the material in place and leaves the
+                // shell standing either way.
                 return () => {
                     mounted = false;
                 };
@@ -701,12 +850,15 @@
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
                     >
                         <canvas ref={canvasRef} className="block w-full h-full" />
-                        {loading && lastFrame && !notice && !error && (
-                            // Hold the previous frame over the canvas while the
-                            // view rebuilds \u2014 otherwise the checker-texture
-                            // placeholder (and blank canvas) flash for a beat on
-                            // every committed parameter edit.
-                            <img src={lastFrame} className="absolute inset-0 w-full h-full object-cover pointer-events-none" alt="" />
+                        {updating && !loading && !notice && !error && (
+                            // An in-place material swap (the APPLY path) is
+                            // running against the live view -- the OLD
+                            // material keeps rendering/orbiting underneath,
+                            // so this is a small corner badge rather than a
+                            // full overlay: there's no checker/blank flash
+                            // to paper over anymore (that was the old
+                            // lastFrame snapshot's job, deleted above).
+                            <div className="absolute top-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
                         )}
                         <LoadingOverlay
                             show={loading && !notice && !error}
