@@ -250,6 +250,18 @@
         location.hash = initialHash;
     }
 
+    // Flags this webview as the document-less, standalone "MaterialX:
+    // Open Node Documentation" panel, as opposed to the file-backed
+    // custom editor — set synchronously here (document.currentScript is
+    // only valid while THIS script is still executing, same caveat as
+    // initialHash just above), so it's in place BEFORE js/site-header.js
+    // builds the header on first paint. '1' <-> true mirrors
+    // data-initial-hash's own string-attribute encoding. Consumed by
+    // js/site-header.js's nav-item filter, which additionally hides the
+    // Viewer/Graph tabs when this is set — the standalone docs panel has
+    // no .mtlx document behind it for those views to show.
+    window.__MTLX_DOCS_ONLY__ = (document.currentScript && document.currentScript.getAttribute('data-docs-only')) === '1';
+
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,

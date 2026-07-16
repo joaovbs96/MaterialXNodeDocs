@@ -100,7 +100,23 @@
     // the editor is bound to a single opened .mtlx file — so drop the Home
     // tab from both the desktop and mobile nav copies below. No-op (same
     // NAV array) in the plain browser.
-    var navItems = window.__MTLX_VSCODE__ ? NAV.filter(function (t) { return t.id !== 'home'; }) : NAV;
+    //
+    // Additionally, inside the STANDALONE docs panel specifically (window.
+    // __MTLX_DOCS_ONLY__, set by vscode_extension/media/bootstrap.js from
+    // webview.html's data-docs-only attribute — see editorProvider.js's
+    // buildHtml) also drop the Viewer and Graph tabs, keeping only Docs:
+    // that panel isn't backed by a .mtlx document at all (it's the
+    // document-less "MaterialX: Open Node Documentation" command), so the
+    // file-bound Viewer/Graph views have nothing to show there. The
+    // file-backed MaterialX Playground custom editor never sets
+    // __MTLX_DOCS_ONLY__, so it keeps every tab exactly as before.
+    var navItems = window.__MTLX_VSCODE__
+        ? NAV.filter(function (t) {
+            if (t.id === 'home') return false;
+            if (window.__MTLX_DOCS_ONLY__ && (t.id === 'viewer' || t.id === 'graph')) return false;
+            return true;
+        })
+        : NAV;
 
     var tabs = navItems.map(function (item) {
         var active = item.id === activeId;

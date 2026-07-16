@@ -26,7 +26,16 @@ const RELOAD_DEBOUNCE_MS = 400;
 // initial hash and, for the static case, no document-payload wiring.
 // Returns the repo-root Uri so callers can hand it to
 // wireCommonWebviewMessages() without re-deriving it.
-async function buildHtml(context, webview, initialHash) {
+//
+// `docsOnly` is threaded straight through to a ${docsOnly} substitution
+// (mechanism mirrors ${initialHash} above it) so media/bootstrap.js can
+// set window.__MTLX_DOCS_ONLY__ before any site script runs — js/
+// site-header.js's nav-item filter reads that flag to hide the file-bound
+// Viewer/Graph tabs in the standalone docs panel, which has no .mtlx
+// document behind it at all. resolveCustomTextEditor passes false (the
+// file-backed editor keeps every tab); renderStaticHtml passes true (it
+// is only ever the docs panel).
+async function buildHtml(context, webview, initialHash, docsOnly) {
     // package.json now lives at the repo root, so packaging (vsce
     // package) bundles both the site's files (index.html, js/,
     // libraries/, ...) and vscode_extension/ into the same install
@@ -50,6 +59,7 @@ async function buildHtml(context, webview, initialHash) {
     html = html.split('${baseUri}').join(baseUri);
     html = html.split('${bootstrapUri}').join(bootstrapUri.toString());
     html = html.split('${initialHash}').join(initialHash);
+    html = html.split('${docsOnly}').join(docsOnly ? '1' : '');
 
     webview.html = html;
     return repoRootUri;
@@ -280,7 +290,10 @@ class MaterialXEditorProvider {
             const defaultView = vscode.workspace.getConfiguration('materialx').get('defaultView', 'viewer');
             const initialHash = defaultView === 'graph' ? '#!graph' : '#!viewer';
 
-            const repoRootUri = await buildHtml(this.context, webviewPanel.webview, initialHash);
+            // false: this IS the file-backed custom editor, so it keeps
+            // every tab (Docs + Viewer + Graph) — see buildHtml's comment
+            // on the docsOnly parameter above.
+            const repoRootUri = await buildHtml(this.context, webviewPanel.webview, initialHash, false);
 
             // Fetch bridge + error forwarding, shared with the docs
             // panel (see wireCommonWebviewMessages above).
@@ -538,7 +551,10 @@ class MaterialXEditorProvider {
     // much as the viewer/graph views do.
     static async renderStaticHtml(context, panel, initialHash) {
         try {
-            const repoRootUri = await buildHtml(context, panel.webview, initialHash);
+            // true: this is only ever the standalone docs panel (no .mtlx
+            // document backs it) — see buildHtml's comment on the
+            // docsOnly parameter above.
+            const repoRootUri = await buildHtml(context, panel.webview, initialHash, true);
             const commonSub = wireCommonWebviewMessages(panel.webview, repoRootUri);
             panel.onDidDispose(() => commonSub.dispose());
         } catch (err) {

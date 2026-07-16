@@ -22,6 +22,16 @@ const { errMsg } = require('./util');
 let diagnosticCollection = null;
 let statusBarItem = null;
 
+// materialx.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
+// activate()): which .mtlx files have already had the playground
+// auto-opened for them this extension-host session, keyed by
+// uri.toString(). Module scope (not activate()-local) because
+// vscode.workspace.onDidCloseTextDocument's re-arm handler and
+// vscode.window.onDidChangeActiveTextEditor's trigger handler both need
+// to see the same Set across the whole session, exactly like
+// diagnosticCollection/statusBarItem above.
+const autoOpenedUris = new Set();
+
 // validator.js's return shape ({ message, startLine, startChar, endLine,
 // endChar, severity: 'error' }) is plain objects, not vscode.Diagnostic
 // instances — validator.js/mtlxNode.js must stay independently loadable
@@ -137,17 +147,155 @@ function activate(context) {
         return null;
     };
 
-    const openInPlayground = async (uriArg) => {
+    // 'splitRight' placement for openInPlayground below (materialx.
+    // openBehavior, package.json contributes.configuration) — figures out
+    // WHERE to open the playground so it lands beside a text editor
+    // already open on the same file, then issues the `vscode.openWith`
+    // call itself. Returns true if it did so (placement handled — the
+    // caller must not also do its own plain open), false if there was
+    // nothing to split against or anything about the tab-group scan
+    // failed, in which case the caller falls back to opening in the
+    // active group. Never throws.
+    //
+    // vscode.window.tabGroups.all exposes every editor group with a
+    // numeric `viewColumn` and each tab's `input`, which is
+    // `vscode.TabInputText` (has `.uri`) for a plain text tab, or
+    // `vscode.TabInputCustom` (has both `.uri` and `.viewType`) for an
+    // already-open custom editor tab like ours.
+    const openBesideTextEditor = async (uri, preserveFocus) => {
+        try {
+            const uriStr = uri.toString();
+            let textGroupColumn = null; // viewColumn of the group holding a TEXT tab for this uri
+            let existingPlaygroundColumn = null; // viewColumn of a group already showing OUR editor for this uri
+
+            for (const group of vscode.window.tabGroups.all) {
+                for (const tab of group.tabs) {
+                    const input = tab.input;
+                    if (input instanceof vscode.TabInputText && input.uri.toString() === uriStr) {
+                        textGroupColumn = group.viewColumn;
+                    } else if (
+                        input instanceof vscode.TabInputCustom
+                        && input.viewType === 'materialxPlayground.editor'
+                        && input.uri.toString() === uriStr
+                    ) {
+                        existingPlaygroundColumn = group.viewColumn;
+                    }
+                }
+            }
+
+            // A playground tab for this exact file is already open
+            // somewhere — reveal it (openWith to the same resource +
+            // viewType reveals the existing tab rather than duplicating
+            // it) instead of splitting open a second copy elsewhere.
+            if (existingPlaygroundColumn !== null) {
+                await vscode.commands.executeCommand(
+                    'vscode.openWith', uri, 'materialxPlayground.editor',
+                    { viewColumn: existingPlaygroundColumn, preserveFocus }
+                );
+                return true;
+            }
+
+            // No open text editor for this file to split against at all
+            // (e.g. an Explorer right-click on a file nothing has opened
+            // yet) — nothing for 'splitRight' to do here.
+            if (textGroupColumn === null) return false;
+
+            const targetColumn = textGroupColumn + 1;
+            const rightGroupExists = vscode.window.tabGroups.all.some((g) => g.viewColumn === targetColumn);
+
+            if (rightGroupExists) {
+                // Reuse the existing right-hand group instead of splitting
+                // again — this is the whole point of 'splitRight': repeat
+                // opens land in the SAME group beside the text editor
+                // rather than each one creating a fresh split.
+                // vscode.ViewColumn.Beside would NOT give us this: it
+                // creates a brand-new group whenever the currently ACTIVE
+                // group happens to be the rightmost one
+                // (https://github.com/microsoft/vscode/issues/133260), so
+                // an explicit, already-known viewColumn is what makes the
+                // reuse deterministic here.
+                await vscode.commands.executeCommand(
+                    'vscode.openWith', uri, 'materialxPlayground.editor',
+                    { viewColumn: targetColumn, preserveFocus }
+                );
+                return true;
+            }
+
+            // No group to the right exists yet. vscode.ViewColumn.Beside
+            // always splits relative to whichever group is currently
+            // ACTIVE — not relative to textGroupColumn — and there is no
+            // API to say "create a new group at column N" directly. So:
+            // make the text editor's group the active one first (showing
+            // the document that's already open there is cheap — it does
+            // not reload anything), THEN ask for Beside, which now
+            // deterministically splits to the right of it.
+            const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uriStr)
+                || await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(doc, { viewColumn: textGroupColumn, preserveFocus: false });
+            await vscode.commands.executeCommand(
+                'vscode.openWith', uri, 'materialxPlayground.editor',
+                { viewColumn: vscode.ViewColumn.Beside, preserveFocus }
+            );
+            return true;
+        } catch (err) {
+            // Placement is a nice-to-have — never let it break opening the
+            // playground at all. The caller falls back to its own plain
+            // open in the active group.
+            return false;
+        }
+    };
+
+    // `options.preserveFocus`, when set, is threaded down to whichever
+    // `vscode.openWith` call actually runs — used by maybeAutoOpen()
+    // below so an auto-opened playground doesn't steal keyboard focus
+    // from the text editor the user is actively typing in.
+    const openInPlayground = async (uriArg, { preserveFocus } = {}) => {
         try {
             const uri = resolveTargetUri(uriArg);
             if (!uri) {
                 vscode.window.showErrorMessage('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
                 return;
             }
-            await vscode.commands.executeCommand('vscode.openWith', uri, 'materialxPlayground.editor');
+
+            const openBehavior = vscode.workspace.getConfiguration('materialx').get('openBehavior', 'splitRight');
+            if (openBehavior === 'splitRight') {
+                const placed = await openBesideTextEditor(uri, preserveFocus);
+                if (placed) return;
+                // Nothing to split against (or the scan itself failed) —
+                // fall through to the plain open below. Opening SOMEWHERE
+                // beats not opening at all.
+            }
+
+            // 'sameGroup', or a 'splitRight' fallback: today's plain open
+            // in the active group. `{ preserveFocus }` is only passed when
+            // the caller actually set it, so a bare `openInPlayground(uri)`
+            // call — every pre-existing call site — stays byte-identical
+            // to the original `executeCommand('vscode.openWith', uri,
+            // 'materialxPlayground.editor')` call with no third argument.
+            if (preserveFocus !== undefined) {
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'materialxPlayground.editor', { preserveFocus });
+            } else {
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'materialxPlayground.editor');
+            }
         } catch (err) {
             vscode.window.showErrorMessage('MaterialX Playground: failed to open — ' + errMsg(err));
         }
+    };
+
+    // materialx.autoOpenPlayground companion: the first time a .mtlx file
+    // becomes the active text editor (and on every subsequent FIRST time
+    // after the file is closed and reopened — see the re-arm comment on
+    // the onDidCloseTextDocument listener below), automatically open the
+    // playground beside it. preserveFocus: true is load-bearing here —
+    // the whole point is a side panel that appears without stealing
+    // keystrokes out from under whatever the user is actively typing.
+    const maybeAutoOpen = (editor) => {
+        if (!editor || !editor.document || editor.document.uri.scheme !== 'file' || editor.document.languageId !== 'mtlx') return;
+        if (!vscode.workspace.getConfiguration('materialx').get('autoOpenPlayground', false)) return;
+        const key = editor.document.uri.toString();
+        if (autoOpenedUris.has(key)) return;
+        autoOpenedUris.add(key);
+        openInPlayground(editor.document.uri, { preserveFocus: true });
     };
 
     context.subscriptions.push(
@@ -188,6 +336,21 @@ function activate(context) {
         // callers, older cached command URIs) behave exactly as before.
         vscode.commands.registerCommand('materialxPlayground.openDocs', async (category, sig) => {
             try {
+                // Context-menu invocations (the Explorer / editor tab
+                // title entries contributed for this command) pass the
+                // target vscode.Uri as the FIRST argument — same calling
+                // convention as materialxPlayground.open's uriArg — but
+                // this command has no file-backed behavior for a Uri to
+                // select: it always opens the same document-less node
+                // library browser. Treat any non-string first argument as
+                // "no category" rather than URL-encoding a Uri's string
+                // form into a bogus '#/<uri>' deep-link hash; a menu click
+                // then opens the plain library browser ('#!docs'), same
+                // as the Command Palette / no-arg case.
+                if (typeof category !== 'string') {
+                    category = undefined;
+                    sig = undefined;
+                }
                 // Shares the docs-panel singleton with the graph editor's
                 // "?" button (editorProvider.js's openDocsPanel, which the
                 // editor webview's message handler also calls) — no
@@ -205,6 +368,20 @@ function activate(context) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
             }
         })
+    );
+
+    // materialx.autoOpenPlayground listeners (see maybeAutoOpen() above):
+    // trigger on every active-editor change, and re-arm per file only once
+    // that FILE is actually closed — not merely defocused by switching
+    // tabs. This distinction is load-bearing: without it, tabbing away
+    // from a .mtlx editor and back would look identical to "reopening the
+    // file" and pop the playground back open even after the user
+    // deliberately closed it, which would defeat the point of closing it
+    // at all. Deleting the key only on onDidCloseTextDocument means the
+    // auto-open is genuinely a per-"open" thing, not a per-"focus" thing.
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(maybeAutoOpen),
+        vscode.workspace.onDidCloseTextDocument((doc) => autoOpenedUris.delete(doc.uri.toString()))
     );
 
     // Live .mtlx diagnostics: validate anything already open, then keep
@@ -238,6 +415,15 @@ function activate(context) {
         }),
         vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar())
     );
+
+    // activate() itself is triggered by the onLanguage:mtlx activation
+    // event (package.json activationEvents), which means a .mtlx file can
+    // already be the active editor by the time this function runs — i.e.
+    // BEFORE the onDidChangeActiveTextEditor listener registered above
+    // ever gets a chance to fire for it. Run the same auto-open check once
+    // more, by hand, against whatever's active right now, so that first
+    // file isn't skipped.
+    maybeAutoOpen(vscode.window.activeTextEditor);
 }
 
 function deactivate() {}
