@@ -335,29 +335,118 @@ function scanXml(text) {
 
 // ---------------------------------------------------------------------
 // Tier 2 — best-effort position mapping for mtlxNode.validateSemantic's
-// free-text { text, elementName } messages (the WASM binding hands back
-// no character offsets at all). This is a heuristic, not exact: it
-// guesses at names the message is likely about and searches for the
-// first place that name appears as an attribute value, so it can
-// occasionally point at the wrong occurrence of a common name, or fall
-// back to a generic location. That's an accepted limitation of a
-// boolean-only validate() binding, not a bug to chase here.
+// free-text { text, tag, attrs, elementName } messages (the WASM binding
+// hands back no character offsets at all). The PRIMARY path
+// (findElementNameRange, used when the message line carried a
+// serialized element) disambiguates same-named elements living under
+// different parents by scoring how many of the offending element's OTHER
+// attributes match; the FALLBACK path (findCandidateRange, used only
+// when there's no serialized element to key off of) is a cruder
+// heuristic that just searches for a bare attribute VALUE anywhere in
+// the document, so it can occasionally point at the wrong occurrence of
+// a common name. That's an accepted limitation of a boolean-only
+// validate() binding, not a bug to chase here.
 function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Finds `name = "candidate"` (or similar) and returns the char range of
-// just the candidate substring between the quotes, or null.
+// just the candidate substring between the quotes, or null. FALLBACK
+// ONLY — see mapSemanticMessageToRange; used when the message line has
+// no serialized element to disambiguate with, so this settles for the
+// FIRST occurrence anywhere in the document.
 function findCandidateRange(text, candidate) {
     if (!candidate) return null;
     const re = new RegExp('=\\s*"' + escapeRegExp(candidate) + '"');
     const m = re.exec(text);
     if (!m) return null;
-    const quoteAt = m.index + m[0].lastIndexOf('"');
+    // OPENING quote, not the closing one: the pattern ends `="` right
+    // before the value, so the FIRST quote in the match (indexOf) is the
+    // opening one. Using lastIndexOf here (the previous bug) grabs the
+    // CLOSING quote instead, shifting the reported range one character
+    // past the end of the value.
+    const quoteAt = m.index + m[0].indexOf('"');
     return { start: quoteAt + 1, end: quoteAt + 1 + candidate.length };
 }
 
+// Scores how many of `attrs` (excluding `name`, already used to locate
+// the candidate tag) are present verbatim as attr="value" inside
+// `tagText` — used by findElementNameRange to disambiguate multiple
+// same-tag, same-name elements (e.g. two <input name="in"> under
+// different parent nodes) by how well their OTHER attributes match the
+// failing element's own serialized form.
+function scoreAttrs(tagText, attrs) {
+    let score = 0;
+    for (const key in attrs) {
+        if (!Object.prototype.hasOwnProperty.call(attrs, key) || key === 'name') continue;
+        if (tagText.indexOf(key + '="' + attrs[key] + '"') !== -1) score++;
+    }
+    return score;
+}
+
+// PRIMARY path: finds the best-matching `<tag ... name="NAME" ...>`
+// occurrence in the document for a message line that carried a
+// serialized element (mtlxNode.js's ELEMENT_TAG_RE). The serialized
+// message line has all of the offending element's OWN attributes but no
+// parent path, so `name` alone can collide with an unrelated element of
+// the same tag/name elsewhere in the document — every occurrence is
+// scored by how many of the OTHER attrs (type, nodename, nodegraph,
+// interfacename, value, ...) match verbatim, and the highest-scoring hit
+// wins (first hit wins ties). Returns the char range of just the `name`
+// attribute's VALUE (between its quotes), or null if `tag`/`attrs.name`
+// don't match anywhere in the document.
+function findElementNameRange(text, tag, attrs) {
+    const name = attrs && attrs.name;
+    if (!tag || !name) return null;
+    const re = new RegExp('<' + escapeRegExp(tag) + '\\b[^>]*?\\bname\\s*=\\s*"' + escapeRegExp(name) + '"', 'g');
+    let best = null;
+    let bestScore = -1;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        // Candidate's FULL open tag, from the match start out to the
+        // next '>' — the match itself may stop mid-attribute-list (it's
+        // non-greedy up to the `name` attribute), so this widens the
+        // scored text to include attributes that come AFTER `name` too.
+        const gt = text.indexOf('>', m.index);
+        const tagText = gt === -1 ? m[0] : text.slice(m.index, gt + 1);
+        const score = scoreAttrs(tagText, attrs);
+        if (score > bestScore) {
+            bestScore = score;
+            // The match ends exactly at the `name` value's closing
+            // quote (non-greedy up to the literal `name="NAME"`), so the
+            // OPENING quote is the first '"' at or after where `name`
+            // itself starts in m[0] — found with indexOf (never
+            // lastIndexOf), so a `name`-like substring earlier in the
+            // tag's other attribute values can't shift the result.
+            const nameIdx = m[0].search(/\bname\s*=\s*"/);
+            if (nameIdx !== -1) {
+                const quoteAt = m.index + m[0].indexOf('"', nameIdx);
+                best = { start: quoteAt + 1, end: quoteAt + 1 + name.length };
+            }
+        }
+        if (re.lastIndex === m.index) re.lastIndex++; // guard against a zero-length match
+    }
+    return best;
+}
+
 function mapSemanticMessageToRange(text, lineStarts, item) {
+    // Primary: the message line carried a serialized element — scan the
+    // document for the best-matching `<tag ... name="...">` (scored
+    // against the element's OTHER attributes) rather than trusting the
+    // first bare name value found anywhere.
+    if (item.tag && item.attrs && item.attrs.name) {
+        const range = findElementNameRange(text, item.tag, item.attrs);
+        if (range) {
+            const s = offsetToPos(lineStarts, range.start);
+            const e = offsetToPos(lineStarts, range.end);
+            return { message: item.text, startLine: s.line, startChar: s.character, endLine: e.line, endChar: e.character, severity: 'error' };
+        }
+    }
+
+    // Fallback: no serialized element on this line (or its tag/name
+    // didn't match anywhere in the document) — fall back to the older,
+    // cruder heuristic of searching for any quoted substring from the
+    // message text as a bare attribute VALUE anywhere in the document.
     const candidates = [];
     if (item.elementName) candidates.push(item.elementName);
     const quoted = item.text.match(/"([^"]+)"/g) || [];

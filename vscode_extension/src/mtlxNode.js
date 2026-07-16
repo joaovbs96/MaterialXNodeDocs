@@ -7,9 +7,11 @@
 //
 // Mirrors (but does not import — js/mtlx-engine.js is a browser
 // global-scope script that references `window` and has no
-// module.exports) js/mtlx-engine.js's getMxEnv()/mxErr()/vecToArray()/
-// mxSafe() helpers, and js/viewer-app.jsx's loadMtlxDocument() parse
-// sequence, and js/graph-app.jsx's "Validate" dialog fallback scan.
+// module.exports) js/mtlx-engine.js's getMxEnv()/mxErr() helpers, and
+// js/viewer-app.jsx's loadMtlxDocument() parse sequence, and
+// js/graph-app.jsx's "Validate" dialog — including its use of the
+// message-holder overload of validate() to recover real diagnostic text
+// (see the comment above the validate() call below).
 // docScanner.js's own header comment sets the precedent for "mirrors but
 // does not import" for exactly this reason (the site's code has no Node
 // entry point) — same situation here.
@@ -46,31 +48,6 @@ function mxErr(mx, e) {
     if (e && e.message) return e.message;
     return String(e);
 }
-
-// MaterialX JS marshals std::vector either as a real JS array or as a
-// {size(), get(i)} object depending on the binding; normalize to array.
-function vecToArray(v) {
-    if (!v) return [];
-    if (Array.isArray(v)) return v;
-    if (typeof v.size === 'function') {
-        const out = [];
-        for (let i = 0; i < v.size(); i++) out.push(v.get(i));
-        return out;
-    }
-    return [];
-}
-
-function mxSafe(fn, fb) {
-    try {
-        const v = fn();
-        return v == null ? fb : v;
-    } catch (e) {
-        return fb;
-    }
-}
-
-function mxElName(el) { return mxSafe(() => el.getName(), ''); }
-function mxElAttr(el, name) { return mxSafe(() => el.getAttribute(name), ''); }
 
 // ---------------------------------------------------------------------
 // Singleton wasm loader / permanent-degrade state machine.
@@ -198,15 +175,27 @@ function getMxEnv(repoRoot) {
 // ---------------------------------------------------------------------
 // Semantic validation — mirrors js/viewer-app.jsx's loadMtlxDocument
 // (~lines 31-50) for the parse step, and js/graph-app.jsx's "Validate"
-// dialog (~lines 2062-2101) for the validate step + dangling-reference
-// fallback scan.
+// dialog (~lines 2062-2101) for the validate step, including its use of
+// the message-holder overload of validate() (see below) to recover the
+// real diagnostic text instead of a bare boolean.
+
+// Parses a holder.message LINE's embedded serialized element (when
+// present), e.g. `<input name="surfaceshader" type="surfaceshader"
+// value="" nodename="preview_surface" />` -> tag "input" + attrs
+// {name, type, value, nodename}. This carries every attribute the
+// element has on ITSELF, but never a parent path — validator.js's
+// mapSemanticMessageToRange uses `tag` + `attrs` (not just the bare
+// `name="..."` value) to disambiguate same-named elements living under
+// different parents, by scoring how many OTHER attributes match.
+const ELEMENT_TAG_RE = /<([\w:.\-]+)((?:\s+[\w:.\-]+\s*=\s*"[^"]*")*)\s*\/?>/;
+const ELEMENT_ATTR_RE = /([\w:.\-]+)\s*=\s*"([^"]*)"/g;
 
 // repoRoot: absolute fs path to the repo root (context.extensionUri.fsPath).
 // xmlText: the full document text.
 // Resolves (never rejects) to one of:
 //   { available: false }                                  — wasm unavailable
 //   { available: true, messages: [] }                      — parsed + validated clean
-//   { available: true, messages: [{ text, elementName }] } — parse error OR validate() issues
+//   { available: true, messages: [{ text, tag, attrs, elementName }] } — parse error OR validate() issues
 async function validateSemantic(repoRoot, xmlText) {
     try {
         const env = await getMxEnv(repoRoot);
@@ -230,52 +219,76 @@ async function validateSemantic(repoRoot, xmlText) {
         } catch (e) {
             return {
                 available: true,
-                messages: [{ text: 'MaterialX could not parse the document: ' + mxErr(mx, e), elementName: null }],
+                messages: [{ text: 'MaterialX could not parse the document: ' + mxErr(mx, e), tag: null, attrs: null, elementName: null }],
             };
         }
         if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
         else doc.importLibrary(stdlib);
 
-        // The WASM binding's validate() is boolean-only in this build —
-        // it does NOT return message strings (js/graph-app.jsx's own
-        // "Validate" dialog comment, ~line 2063-2065, verified by
-        // reading the code). Mirror that dialog's degrade path exactly:
-        // no validate() binding at all -> unavailable, same as its
-        // `typeof parsed.doc.validate !== 'function'` check.
+        // The WASM binding's validate() has an overloadTable {'0','1'} —
+        // the PREVIOUS "boolean-only" comment here was WRONG (verified
+        // headless, and js/graph-app.jsx's matching old comment was
+        // wrong for the same reason — see that file's own fix). The
+        // 1-arg overload accepts a plain object "holder" and fills
+        // holder.message with the full newline-separated MaterialX
+        // diagnostic list on failure (each line typically embeds the
+        // offending element's serialized XML, including name="..."). No
+        // validate() binding at all -> unavailable, same as before.
         if (typeof doc.validate !== 'function') return { available: false };
+        const holder = {};
         let ok;
         try {
-            ok = doc.validate();
+            ok = doc.validate(holder);
         } catch (e) {
             return {
                 available: true,
-                messages: [{ text: 'MaterialX document failed validation: ' + mxErr(mx, e), elementName: null }],
+                messages: [{ text: 'MaterialX document failed validation: ' + mxErr(mx, e), tag: null, attrs: null, elementName: null }],
             };
         }
         if (ok) return { available: true, messages: [] };
 
-        // false result -> cheap best-effort scan for dangling
-        // nodename/nodegraph references on top-level nodes, exactly
-        // like the graph editor's own fallback (rather than a real
-        // diagnostic list, which this build's validate() doesn't give
-        // us).
+        // false result -> one issue per non-empty line of holder.message.
+        // Each line typically embeds the offending element's OWN
+        // serialized open tag — parsed via ELEMENT_TAG_RE/ELEMENT_ATTR_RE
+        // above into `tag` (e.g. "input") and `attrs` (its own attribute
+        // map), so validator.js's mapSemanticMessageToRange can
+        // disambiguate same-named elements living under different
+        // parents by scoring how many attributes match, instead of
+        // trusting the first name="..." found anywhere in the line.
+        // elementName is kept for backward compatibility with existing
+        // consumers that only look at it: attrs.name when the line had a
+        // parseable element, else the old first `name="..."` capture in
+        // the line, else null.
         const issues = [];
-        const nodes = vecToArray(mxSafe(() => doc.getNodes(), []));
-        for (const n of nodes) {
-            const nm = mxElName(n);
-            for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
-                const nn = mxElAttr(inp, 'nodename');
-                if (nn && !mxSafe(() => doc.getNode(nn), null)) {
-                    issues.push({ text: nm + '.' + mxElName(inp) + ' references missing node "' + nn + '"', elementName: nm });
-                }
-                const ng = mxElAttr(inp, 'nodegraph');
-                if (ng && !mxSafe(() => doc.getNodeGraph(ng), null)) {
-                    issues.push({ text: nm + '.' + mxElName(inp) + ' references missing nodegraph "' + ng + '"', elementName: nm });
+        const rawMessage = String(holder.message || '');
+        for (const rawLine of rawMessage.split(/\r\n|\r|\n/)) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            const oldNameMatch = /name="([^"]+)"/.exec(line);
+            const oldName = oldNameMatch ? oldNameMatch[1] : null;
+
+            let tag = null;
+            let attrs = null;
+            const elMatch = ELEMENT_TAG_RE.exec(line);
+            if (elMatch) {
+                tag = elMatch[1];
+                attrs = {};
+                const attrBlob = elMatch[2] || '';
+                ELEMENT_ATTR_RE.lastIndex = 0;
+                let am;
+                while ((am = ELEMENT_ATTR_RE.exec(attrBlob)) !== null) {
+                    attrs[am[1]] = am[2];
                 }
             }
+            const elementName = (attrs && attrs.name) || oldName || null;
+            issues.push({ text: line, tag, attrs, elementName });
         }
+        // holder.message empty despite a false result (build variance,
+        // or a failure validate() itself can't attribute to any single
+        // line) -> a single generic fallback issue, never zero issues
+        // for a failed validation.
         if (!issues.length) {
-            issues.push({ text: 'MaterialX document failed validation (this build does not expose more specific diagnostic detail).', elementName: null });
+            issues.push({ text: 'MaterialX document failed validation.', tag: null, attrs: null, elementName: null });
         }
         return { available: true, messages: issues };
     } catch (e) {

@@ -349,6 +349,7 @@ const mxElCat = (el) => mxSafe(() => el.getCategory(), '');
 const mxElType = (el) => mxSafe(() => String(el.getType()), '');
 const mxElName = (el) => mxSafe(() => el.getName(), '');
 const mxElAttr = (el, name) => mxSafe(() => el.getAttribute(name), '');
+const mxElHasAttr = (el, name) => mxSafe(() => el.hasAttribute(name), false);
 
 // Shortest chain of `convert` hops fromType->toType using ONLY the
 // conversions the loaded library actually defines. This matters because
@@ -462,6 +463,56 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
         console.warn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
     }
     return inp;
+};
+
+// Belt-and-suspenders sweep run immediately before every writeToXmlString
+// call site (graph/model.jsx serializeDocXml, node-preview.jsx
+// buildExportXml, viewer-app.jsx send-to-editor): strips any leftover
+// `value` attribute from an <input> that ALSO carries a connection
+// (nodename/nodegraph/interfacename). MaterialX forbids an input binding
+// both a value and a connection — doc.validate() reports it as "Node input
+// has too many bindings" — and every consumer (shadergen, the graph UI)
+// reads the connection and ignores the value on a connected input anyway,
+// so removing it is semantics-preserving, never a behavior change to a
+// valid document. Root cause of the stale value is ensureTypedInput()
+// above copying the nodedef's default VALUE onto a freshly-created input;
+// callers are expected to strip it themselves right after wiring a
+// connection (see graph-app.jsx's stashValueBeforeRemoval call sites), but
+// this sweep also self-heals documents authored elsewhere or loaded from
+// disk before this fix existed — a later export cleans them up even
+// though nothing in THIS session wrote the bad attribute.
+//
+// Recursive walk over doc.getChildren() (mxSafe-wrapped at every step, so
+// one hostile/unbound element can't abort the sweep); depth-capped at 10,
+// which is generous headroom for MaterialX's actual nesting (doc ->
+// nodegraph -> node -> input is 3 deep) rather than a real limit anyone
+// should hit. Returns the number of attributes stripped, for perf/debug
+// logging by callers that want it.
+const stripValuesFromConnectedInputs = (doc, maxDepth) => {
+    const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
+    let stripped = 0;
+    const walk = (el, depth) => {
+        if (!el || depth > cap) return;
+        const children = vecToArray(mxSafe(() => el.getChildren(), []));
+        for (const child of children) {
+            if (mxElCat(child) === 'input') {
+                const connected = mxElAttr(child, 'nodename')
+                    || mxElAttr(child, 'nodegraph')
+                    || mxElAttr(child, 'interfacename');
+                // Presence, not truthiness: an empty value="" on a
+                // connected input is just as invalid ("too many
+                // bindings") as a non-empty one, and mxElAttr's ''
+                // fallback can't tell "absent" from "present but empty".
+                if (connected && mxElHasAttr(child, 'value')) {
+                    const removed = mxSafe(() => { child.removeAttribute('value'); return true; }, false);
+                    if (removed) stripped++;
+                }
+            }
+            walk(child, depth + 1);
+        }
+    };
+    walk(doc, 0);
+    return stripped;
 };
 
 // ------------------------------------------------------------------
@@ -3064,12 +3115,216 @@ const createMtlxRenderView = async ({
 // fill the viewport with !important rules, and the render view's
 // ResizeObserver picks up the canvas size change — so callers only
 // need to toggle and (optionally) restyle inner fixed-size elements.
+//
+// CSS-maximize fallback: some hosts never grant native fullscreen at
+// all. VS Code webviews report `document.fullscreenEnabled === false`
+// (the webview host doesn't wire up the platform fullscreen
+// transition) and reject any requestFullscreen() call outright; a
+// plain <iframe> embed without an `allowfullscreen` attribute is
+// blocked by the browser the same way. `nativeFullscreenAvailable()`
+// is checked at TOGGLE time rather than cached once at load, since a
+// host could in principle flip capability after this script runs.
+// When native isn't available, `toggleFullscreen` drives a hand-
+// rolled "CSS maximize" instead: the target element is pinned over
+// the viewport with `position:fixed` + inset 0 and an opaque
+// backdrop, any ancestor whose COMPUTED style would otherwise create
+// a new containing block or clip it (backdrop-filter, transform,
+// filter, perspective, will-change, contain — the graph editor's
+// right panel trips this via `backdrop-blur` + `overflow-hidden`, see
+// graph-app.jsx ~:4770-4778) is neutralized inline, and this module
+// synthesizes a 'fullscreenchange' event on `document` so
+// `watchFullscreen` below (left untouched) and every existing
+// consumer (useFullscreen in mtlx-ui.jsx, graph panel maximize,
+// viewer/node-preview/graph-preview fullscreen buttons) keep working
+// without any caller-side branching.
 // ------------------------------------------------------------------
+
+// True only when the platform will actually grant a requestFullscreen()
+// call. False in VS Code webviews and in iframes lacking allowfullscreen.
+const nativeFullscreenAvailable = () =>
+    !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+
+// Module-level state for the CSS-maximize fallback. null means
+// "nothing is CSS-maximized right now"; only one element can be
+// maximized at a time (mirrors native fullscreen semantics, and keeps
+// exit() unambiguous — there's exactly one thing to tear down).
+// Shape: { el, savedStyle, savedNeutralized[], savedBodyOverflow,
+//          savedHtmlOverflow, keyHandler, domObserver }
+let cssMaxState = null;
+
+// Saves an element's literal `style` ATTRIBUTE — distinguishing "no
+// style attribute at all" from "style=''" — so enter/exit can restore
+// it exactly later even though el/ancestors may carry framework-
+// authored inline styles (e.g. React style props) we must not clobber.
+const cssMaxSaveStyleAttr = (node) => ({
+    node,
+    hadAttr: node.hasAttribute('style'),
+    value: node.getAttribute('style'),
+});
+const cssMaxRestoreStyleAttr = (rec) => {
+    try {
+        if (rec.hadAttr) rec.node.setAttribute('style', rec.value);
+        else rec.node.removeAttribute('style');
+    } catch (e) { /* node may have been removed from the DOM meanwhile */ }
+};
+
+// Whether `cs` (a getComputedStyle() result) would make its element a
+// containing block for — or otherwise clip — a `position:fixed`
+// descendant. Checked property-by-property per the CSS spec: any
+// non-'none' backdrop-filter/transform/filter/perspective, a
+// will-change listing transform/filter/perspective, or a contain
+// value including paint/layout/strict/content all qualify (contain's
+// `size`/`style` keywords alone do not, so they're intentionally not
+// matched here).
+const cssMaxComputedIsTrap = (cs) => {
+    try {
+        if (cs.backdropFilter && cs.backdropFilter !== 'none') return true;
+        if (cs.webkitBackdropFilter && cs.webkitBackdropFilter !== 'none') return true;
+        if (cs.transform && cs.transform !== 'none') return true;
+        if (cs.filter && cs.filter !== 'none') return true;
+        if (cs.perspective && cs.perspective !== 'none') return true;
+        if (/transform|filter|perspective/.test(cs.willChange || '')) return true;
+        if (/paint|layout|strict|content/.test(cs.contain || '')) return true;
+        return false;
+    } catch (e) { return false; }
+};
+
+// Exit the current CSS-maximize, restoring everything it touched.
+// Called both from toggleFullscreen (user-initiated exit) and from
+// the MutationObserver below (auto-exit when el is disconnected).
+const exitCssMaximize = () => {
+    const state = cssMaxState;
+    if (!state) return;
+    // Null the module state FIRST, before any teardown work below. The
+    // MutationObserver's callback (and, in principle, a rapid double
+    // toggle) can re-enter this function while teardown is still
+    // running; with the state already null that re-entrant call is a
+    // harmless no-op instead of double-restoring styles or throwing.
+    cssMaxState = null;
+    try { state.domObserver.disconnect(); } catch (e) { /* already gone */ }
+    try { document.removeEventListener('keydown', state.keyHandler); } catch (e) { /* ignore */ }
+    cssMaxRestoreStyleAttr(state.savedStyle);
+    for (const rec of state.savedNeutralized) cssMaxRestoreStyleAttr(rec);
+    try { document.body.style.overflow = state.savedBodyOverflow; } catch (e) { /* ignore */ }
+    try { document.documentElement.style.overflow = state.savedHtmlOverflow; } catch (e) { /* ignore */ }
+    // Same notification channel the native path uses, so watchFullscreen
+    // subscribers see this exit exactly like a native fullscreenchange.
+    try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+};
+
+// Enter CSS-maximize on `el`. Caller (toggleFullscreen) guarantees
+// cssMaxState is currently null — only one element maximizes at a time.
+const enterCssMaximize = (el) => {
+    try {
+        const savedStyle = cssMaxSaveStyleAttr(el);
+
+        // Ancestor neutralization walk: anything between el and <body>
+        // (inclusive) that would trap a fixed-position descendant gets
+        // its trapping properties inlined away, with its own style
+        // attribute saved first so this is fully reversible.
+        const savedNeutralized = [];
+        for (let node = el.parentElement; node; node = node.parentElement) {
+            let trap = false;
+            try { trap = cssMaxComputedIsTrap(getComputedStyle(node)); } catch (e) { trap = false; }
+            if (!trap) continue;
+            savedNeutralized.push(cssMaxSaveStyleAttr(node));
+            try {
+                node.style.backdropFilter = 'none';
+                node.style.webkitBackdropFilter = 'none';
+                node.style.transform = 'none';
+                node.style.filter = 'none';
+                node.style.perspective = 'none';
+                node.style.willChange = 'auto';
+                node.style.contain = 'none';
+            } catch (e) { /* stay defensive even though inline writes rarely throw */ }
+            if (node === document.body) break;
+        }
+
+        // Pin el over the viewport. zIndex 9990 stays below the 9999
+        // used by body-portaled overlays (mtlx-ui.jsx EnvDialog/popovers)
+        // so those remain usable while maximized. backgroundColor is
+        // needed because the graph/viewer preview containers have no
+        // opaque background of their own — without it, whatever used to
+        // be behind el would show through the gaps during the transition.
+        // The box starts below the site header (js/site-header.js renders
+        // a sticky <header> inside #site-header, a sibling of #root at
+        // z-40) instead of at the very top, so the header stays visible
+        // and clickable rather than being covered by el's z-index 9990.
+        // When the header is absent/hidden (embed-mode iframes hide it),
+        // its rect bottom is 0 and this collapses back to full-viewport.
+        try {
+            const hdr = document.querySelector('#site-header header');
+            const topPx = hdr ? Math.max(0, hdr.getBoundingClientRect().bottom) : 0;
+            el.style.position = 'fixed';
+            el.style.top = topPx + 'px';
+            el.style.left = '0';
+            el.style.right = '0';
+            el.style.bottom = '0';
+            el.style.width = '100%';
+            // auto, not 100%: with top offset by topPx AND bottom pinned
+            // to 0, height:100% would overflow past the viewport bottom
+            // by topPx — auto lets top+bottom do the sizing instead.
+            el.style.height = 'auto';
+            el.style.maxWidth = 'none';
+            el.style.maxHeight = 'none';
+            el.style.margin = '0';
+            el.style.zIndex = '9990';
+            el.style.backgroundColor = '#111827';
+        } catch (e) {
+            // Couldn't style el at all — nothing was actually maximized,
+            // so undo the ancestor neutralization and bail rather than
+            // leaving cssMaxState pointing at a half-applied maximize.
+            for (const rec of savedNeutralized) cssMaxRestoreStyleAttr(rec);
+            return;
+        }
+
+        const savedBodyOverflow = document.body.style.overflow;
+        const savedHtmlOverflow = document.documentElement.style.overflow;
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+
+        // Esc parity with native fullscreen. Bubble phase + document
+        // target so it doesn't need to compete with per-widget handlers.
+        const keyHandler = (e) => { if (e.key === 'Escape') exitCssMaximize(); };
+        document.addEventListener('keydown', keyHandler);
+
+        // Native fullscreen auto-exits when the fullscreened element
+        // leaves the document; CSS-maximize has no such built-in, so a
+        // MutationObserver stands in for it. Without this, switching
+        // shell views (graph -> docs) while maximized would unmount el
+        // but leave body/html stuck at overflow:hidden forever.
+        const domObserver = new MutationObserver(() => {
+            if (!document.body.contains(el)) exitCssMaximize();
+        });
+        domObserver.observe(document.body, { childList: true, subtree: true });
+
+        cssMaxState = {
+            el, savedStyle, savedNeutralized,
+            savedBodyOverflow, savedHtmlOverflow,
+            keyHandler, domObserver,
+        };
+
+        try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+    } catch (e) { /* CSS maximize is best-effort; never throw into the caller */ }
+};
+
 const fullscreenElement = () =>
-    document.fullscreenElement || document.webkitFullscreenElement || null;
+    document.fullscreenElement || document.webkitFullscreenElement ||
+    (cssMaxState ? cssMaxState.el : null);
 // Enter fullscreen on `el`, or exit if anything is fullscreen now.
 const toggleFullscreen = (el) => {
     try {
+        if (!nativeFullscreenAvailable()) {
+            // CSS-maximize fallback (VS Code webview / no-allowfullscreen
+            // iframe). Same "exit whatever's active, else enter on el"
+            // shape as the native branch below, just against cssMaxState
+            // instead of the browser's real fullscreen element — so a
+            // toggle while a DIFFERENT element is maximized exits it
+            // (native parity: it never swaps targets, just closes).
+            if (cssMaxState) exitCssMaximize();
+            else if (el) enterCssMaximize(el);
+            return;
+        }
         if (fullscreenElement()) {
             const exit = document.exitFullscreen || document.webkitExitFullscreen;
             if (exit) { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); }
@@ -3123,6 +3378,7 @@ const MTLX_ICON_PATHS = {
     'chevron-right': { filled: false, inner: '<path d="M9 6l6 6l-6 6"/>' },
     'chevron-down': { filled: false, inner: '<path d="M6 9l6 6l6 -6"/>' },
     'check': { filled: false, inner: '<path d="M5 12l5 5l10 -10"/>' },
+    x: { filled: false, inner: '<path d="M18 6l-12 12"/><path d="M6 6l12 12"/>' },
 };
 
 // React component (plain createElement — this file stays JSX-free).
@@ -3185,7 +3441,7 @@ Object.assign(window, {
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
-    findConvertChain, ensureTypedInput,
+    findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     collectMxUniforms, mxValueToThreeUniform,

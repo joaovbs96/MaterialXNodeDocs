@@ -1,20 +1,24 @@
 // hoverProvider.js — registers a vscode.languages.HoverProvider for the
 // 'mtlx' language: hovering a node CATEGORY (an element tag name that
 // isn't one of MaterialX's structural/document elements, or the value of
-// a node="X" attribute) shows its spec description (via specDocs.js) plus
-// a command link that opens/reuses the docs panel at that node
-// (materialxPlayground.openDocs, extended in extension.js to accept a
-// category argument). Structural elements and anything else that isn't a
-// recognizable category hover to nothing — never noisy.
+// a node="X" attribute) shows its spec description (via specDocs.js), a
+// port table matching the hovered element's own signature when one can
+// be derived (via nodeSignature.js), and a command link that opens/
+// reuses the docs panel at that node — with the matching signature
+// deep-linked when derivable (materialxPlayground.openDocs, extended in
+// extension.js to accept an optional signature-token second argument).
+// Structural elements and anything else that isn't a recognizable
+// category hover to nothing — never noisy.
 //
-// This file DOES require('vscode') (unlike specDocs.js/validator.js/
-// mtlxNode.js/docScanner.js) — it's UI-only glue, not part of the
-// pure-Node validation/doc-extraction core those files intentionally stay
-// independent of.
+// This file DOES require('vscode') (unlike specDocs.js/nodeSignature.js/
+// validator.js/mtlxNode.js/docScanner.js) — it's UI-only glue, not part
+// of the pure-Node validation/doc-extraction core those files
+// intentionally stay independent of.
 'use strict';
 
 const vscode = require('vscode');
 const specDocs = require('./specDocs');
+const nodeSignature = require('./nodeSignature');
 
 // Structural/document elements — i.e. every non-node MaterialX element
 // that can appear as a tag name in a .mtlx file. Nodes are just elements
@@ -53,7 +57,14 @@ const ATTR_NODE_RE = /\bnode\s*=\s*("[^"]*"|'[^']*')/g;
 const TOKEN_RE = /[\w:.\-]+/;
 const CATEGORY_SHAPE_RE = /^[\w:.\-]+$/;
 
-function buildHoverMarkdown(category, repoRootFsPath) {
+// `ctx`: the hovered element's { type, inputs } (nodeSignature.js's
+// extractElementContext), or null when there is none — either the hover
+// was on a node="X" attribute value (no element to scan: the attribute's
+// OWNING element is a different tag entirely, e.g. <materialassign
+// node="...">) rather than the node's own opening tag, or extraction
+// failed/degraded. A null ctx just means "no signature info": the
+// description and a fallback table still render.
+function buildHoverMarkdown(category, repoRootFsPath, ctx) {
     const doc = specDocs.getNodeDoc(repoRootFsPath, category);
 
     const md = new vscode.MarkdownString();
@@ -74,12 +85,31 @@ function buildHoverMarkdown(category, repoRootFsPath) {
         md.appendMarkdown(doc.description + '\n\n');
     }
 
+    // Port table: prefer the table matching the hovered element's ACTUAL
+    // signature (ctx.type, resolved via pickTableForType against every
+    // table's output-port types) when derivable; otherwise fall back to
+    // the FIRST table — the same "no confident signature: show
+    // something rather than nothing" rule the docs site itself applies
+    // (js/docs-app.jsx ~:528's `pickTableForType(...) || portTables[0]`),
+    // so a hover on an element with no readable type (or no <input>
+    // children to key off of) still surfaces useful port data.
+    const tables = (doc && doc.port_tables) || [];
+    const table = nodeSignature.pickTableForType(tables, ctx && ctx.type) || tables[0] || null;
+    if (table) {
+        const rendered = nodeSignature.renderPortsMarkdown(table);
+        if (rendered) md.appendMarkdown(rendered + '\n\n');
+    }
+
     // Command link args must be a JSON array (executeCommand-style),
     // URI-encoded into the command: URI per VS Code's command-link
     // convention (see e.g. workbench.action.openWalkthrough docs for the
-    // same encoding).
-    const commandArgs = encodeURIComponent(JSON.stringify([category]));
-    md.appendMarkdown('[Open documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
+    // same encoding). A signature token — built from ctx, so only ever
+    // present on the tag-name hover path — is appended as a second arg
+    // when derivable, so the docs panel lands on (and pre-selects) the
+    // matching signature/version instead of the node's first.
+    const sigToken = nodeSignature.buildSigToken(ctx);
+    const commandArgs = encodeURIComponent(JSON.stringify(sigToken ? [category, sigToken] : [category]));
+    md.appendMarkdown('[Open Interactive Documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
 
     if (doc && doc.specUrl) {
         md.appendMarkdown(' &nbsp;|&nbsp; [Spec](' + doc.specUrl + ')');
@@ -140,12 +170,21 @@ function provideHover(document, position, repoRootFsPath) {
     if (tagRange) {
         const name = document.getText(tagRange);
         if (STRUCTURAL_ELEMENTS.has(name.toLowerCase())) return null;
-        return new vscode.Hover(buildHoverMarkdown(name, repoRootFsPath), tagRange);
+        // Hovering the element's OWN opening tag: extract its signature
+        // context (own type= + typed <input> children) from the full
+        // document text, offset at the tag name's own start.
+        const ctx = nodeSignature.extractElementContext(document.getText(), document.offsetAt(tagRange.start), name);
+        return new vscode.Hover(buildHoverMarkdown(name, repoRootFsPath, ctx), tagRange);
     }
 
     const attrValue = nodeAttrValueAt(document, position);
     if (attrValue) {
-        return new vscode.Hover(buildHoverMarkdown(attrValue, repoRootFsPath));
+        // A node="X" attribute value names a DIFFERENT element's
+        // nodedef/category (e.g. <materialassign node="...">) — there's
+        // no element here whose own signature to extract, so ctx is
+        // null (buildHoverMarkdown degrades to the first table, no
+        // signature-deep-linked command arg).
+        return new vscode.Hover(buildHoverMarkdown(attrValue, repoRootFsPath, null));
     }
 
     return null;

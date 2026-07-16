@@ -81,6 +81,18 @@ async function runValidation(document) {
 const VALIDATE_DEBOUNCE_MS = 400;
 const debounceTimers = new Map(); // uri.toString() -> NodeJS.Timeout
 
+// Shape-validated signature token for the materialxPlayground.openDocs
+// command's optional second argument: `<outType>` optionally followed by
+// `(<name>:<type>,...)` — exactly the grammar vscode_extension/src/
+// nodeSignature.js's buildSigToken emits (see that file's own comment on
+// why every token it can produce is guaranteed to match this), and the
+// same grammar js/docs/doc-links.jsx's parseSigHint expects on the other
+// end. Validated here (plus a length cap) before ever being spliced into
+// a URI — a command: link's JSON-encoded args are effectively untrusted
+// input by the time they reach a command handler (built from hover
+// markdown over a possibly hand-edited/untrusted .mtlx document).
+const SIG_TOKEN_RE = /^[\w.\-:]+(\([\w.\-:]+:[\w.\-:]+(,[\w.\-:]+:[\w.\-:]+)*\))?$/;
+
 function activate(context) {
     // Before anything else, so semantic (tier 2) validation is ready as
     // soon as the first .mtlx document is opened.
@@ -154,15 +166,22 @@ function activate(context) {
         // `category` is optional: no-arg (Command Palette / explorer menu)
         // opens the docs library browser exactly as before ('#!docs').
         // Passed a category string — from hoverProvider.js's "Open
-        // documentation" command link on a node hover, e.g.
+        // Interactive Documentation" command link on a node hover, e.g.
         // command:materialxPlayground.openDocs?["standard_surface"] — it
         // instead deep-links straight to that node, using the SAME
         // name-only permalink hash format the website's own hashToSel
         // (js/docs/doc-links.jsx) resolves by search (exact match, then
         // squashed-lowercase fallback), so an arbitrary category string
         // always lands somewhere sensible even without knowing its
-        // lib/group.
-        vscode.commands.registerCommand('materialxPlayground.openDocs', async (category) => {
+        // lib/group. `sig` is a further-optional signature-token second
+        // argument (also from hoverProvider.js, when the hovered
+        // element's own signature was derivable) that additionally
+        // pre-selects the matching signature/version once the node
+        // resolves — see js/docs/doc-links.jsx's parseSigHint and
+        // js/docs-app.jsx's matchSigHintToGroups. Both args are
+        // backward compatible: no-arg and category-only calls (existing
+        // callers, older cached command URIs) behave exactly as before.
+        vscode.commands.registerCommand('materialxPlayground.openDocs', async (category, sig) => {
             try {
                 // Shares the docs-panel singleton with the graph editor's
                 // "?" button (editorProvider.js's openDocsPanel, which the
@@ -172,7 +191,10 @@ function activate(context) {
                 // index.html#!docs directly in a browser), and
                 // reveals/re-navigates the existing panel instead of
                 // spawning a new one if it's already open.
-                const hash = category ? '#/' + encodeURIComponent(String(category)) : '#!docs';
+                const sigOk = typeof sig === 'string' && sig.length <= 512 && SIG_TOKEN_RE.test(sig);
+                const hash = category
+                    ? '#/' + encodeURIComponent(String(category)) + (sigOk ? '?sig=' + encodeURIComponent(sig) : '')
+                    : '#!docs';
                 await openDocsPanel(context, hash, vscode.ViewColumn.Active);
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err)));
