@@ -1827,6 +1827,75 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     return 'done';
 };
 
+// prewarmPreviewTarget — background driver pre-warm for a preview TARGET
+// that isn't the one currently on screen (the graph view's idle-warm
+// effect, js/graph-app.jsx, walks the document's other nodes with this
+// after the main build settles). Builds that target's preview renderable,
+// generates its shader sources, and hands them to prewarmShaderCompile
+// above — all without touching any live render view — so that if the user
+// later clicks the node, createMtlxRenderView/applyMaterial hits the warm
+// path (~0.3s) instead of paying a fresh driver compile (~3s for a heavy
+// standard_surface/OpenPBR shader).
+//
+// `buildRenderable` is a SYNCHRONOUS caller-supplied closure (graph-app.jsx
+// passes () => window.buildPreviewRenderable(parsed, target)) returning
+// { renderable, cleanup, ... } — only .renderable and .cleanup are used
+// here, matching buildPreviewRenderable's contract (js/graph/preview.jsx).
+// buildRenderable mutates the LIVE MaterialX document (transient __pv_*
+// wrapper nodes/outputs via addNode/addOutput/setAttribute — see preview.
+// jsx's own comment above buildPreviewRenderable), so it must run inside
+// the SAME mxExclusive hold as the shader generation that consumes those
+// wrappers, and the wrappers must be gone again before that hold releases:
+// findDocRenderable (preview.jsx) walks the live document's node list and
+// does NOT filter out '__pv_material'/'__pv_*' names, so a wrapper left
+// behind even momentarily after the lock releases could be picked up as
+// the DOCUMENT'S OWN default renderable by a concurrent
+// buildPreviewRenderable(parsed, null) call racing on the wasm queue
+// (H-B1). Hence: build -> generate -> cleanup, all inside ONE synchronous
+// mxExclusive callback, never split across separate locked calls.
+//
+// NEVER call this from inside an existing mxExclusive callback — same
+// deadlock convention as generatePreviewSources/generatePreviewSourcesUnlocked
+// above: mxExclusive queues callbacks strictly in call order, so a
+// callback that awaits THIS function's return (which itself needs a fresh
+// turn of that same queue) would wait on work that can only run after it.
+//
+// Returns 'done' | 'bailed' | 'skipped' | 'failed'. Never throws — a
+// failed pre-warm (missing ESSL implementation, unsupported node, closure-
+// modifier filtered upstream, etc.) is expected and must never surface as
+// a visible error; the node in question just keeps its normal (unwarmed)
+// cost the first time it's actually selected.
+const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, label, isMounted = () => true }) => {
+    // No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
+    // generating sources here would only be thrown away — skip the work.
+    if (!getWarmContext()) return 'skipped';
+
+    let srcs = null;
+    try {
+        srcs = await mxExclusive(() => {
+            const built = buildRenderable();
+            if (!built || !built.renderable) return null;
+            try {
+                return generatePreviewSourcesUnlocked({
+                    mx, gen, genContext, renderable: built.renderable, label, isMounted,
+                });
+            } finally {
+                // Best-effort, ALWAYS: the transient __pv_* wrappers must
+                // never survive past this hold (H-B1 above) — including
+                // when generation itself threw.
+                try { built.cleanup(); } catch (e) { /* best-effort */ }
+            }
+        });
+    } catch (e) {
+        // Silent by design (see the doc comment above): a generation
+        // failure for an idle-warm target must never bubble up.
+        return 'failed';
+    }
+
+    if (!srcs || !isMounted()) return 'bailed';
+    return prewarmShaderCompile({ vs: srcs.vs, fs: srcs.fs, isMounted, label });
+};
+
 
 // ------------------------------------------------------------------
 // generatePreviewSources — shader-generation slice of
@@ -2989,7 +3058,7 @@ Object.assign(window, {
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
-    createMtlxRenderView, tryRefreshRenderView,
+    createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget,
     fullscreenElement, toggleFullscreen, watchFullscreen,
     MtlxIcon, MTLX_ICON_PATHS,
 });

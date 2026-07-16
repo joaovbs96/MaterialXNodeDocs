@@ -4447,6 +4447,171 @@
                 return { scope: previewTargetKey.slice(0, i), id: previewTargetKey.slice(i + 1) };
             }, [previewTargetKey]);
 
+            // Idle-warm: once a build settles, silently pre-compile the
+            // preview shaders of the document's OTHER nodes in the
+            // background (window.prewarmPreviewTarget, mtlx-engine.js) so
+            // actually clicking one later hits the warm path (~0.3s)
+            // instead of paying a fresh driver compile (~3s for a heavy
+            // standard_surface/OpenPBR shader). Walks at low priority
+            // (requestIdleCallback) and defers around anything that
+            // actually needs the wasm queue / warm GL context right now —
+            // it must never make a real edit feel slower.
+            const idleWarmTokenRef = React.useRef(null);
+            React.useEffect(() => {
+                // Cancel whatever walk the PREVIOUS parsed/docRev/scope
+                // generation left running — its queued targets are for a
+                // now-stale document/scope.
+                if (idleWarmTokenRef.current) idleWarmTokenRef.current.cancelled = true;
+                if (!parsed) return undefined;
+
+                const token = { cancelled: false };
+                idleWarmTokenRef.current = token;
+
+                // The current selection/preview target is read ONCE, right
+                // here at effect start, and is DELIBERATELY NOT a
+                // dependency of this effect (only [parsed, docRev, scope]
+                // are). If it were a dep, every click would cancel and
+                // restart the whole idle walk from scratch — a user
+                // clicking around the graph would mean the walk never
+                // gets anywhere. [parsed, docRev, scope] already cover
+                // every event that actually invalidates the queued
+                // targets (a new/changed document, or a different scope's
+                // node list); starting the BFS below from wherever the
+                // selection happened to be at that moment is good enough
+                // — it doesn't need to track it live.
+                const startTarget = previewTarget;
+                const startId = (startTarget && startTarget.scope === scope) ? startTarget.id : null;
+
+                // Candidate targets: every previewable node in the
+                // CURRENT scope (same id kinds setPreviewSel accepts —
+                // n:/g:/i:/o:, see onNodeClick/handleSelect above) other
+                // than the one the main build that just settled already
+                // warmed.
+                const VALID_PREFIXES = ['n:', 'g:', 'i:', 'o:'];
+                const candidateIds = [];
+                const candidateSet = new Set();
+                for (const n of flow.nodes) {
+                    if (VALID_PREFIXES.indexOf(n.id.slice(0, 2)) === -1) continue;
+                    if (n.id === startId) continue;
+                    candidateIds.push(n.id);
+                    candidateSet.add(n.id);
+                }
+
+                // Order by BFS distance from the current selection over
+                // flow.edges (treated as UNDIRECTED — a node one hop
+                // upstream is just as likely to be clicked next as one
+                // downstream), so whatever is closest to what the user is
+                // already looking at warms first; remaining nodes follow
+                // in flow order. Capped so one huge document can't queue
+                // an unbounded background walk.
+                const IDLE_WARM_MAX = 40;
+                const ordered = [];
+                if (startId && candidateSet.size) {
+                    const adjacency = new Map();
+                    const link = (a, b) => {
+                        // `a` may be the start id itself (not in
+                        // candidateSet, since it's excluded above) or any
+                        // other candidate; `b` must be a real candidate to
+                        // be worth visiting.
+                        if (a !== startId && !candidateSet.has(a)) return;
+                        if (!candidateSet.has(b)) return;
+                        if (!adjacency.has(a)) adjacency.set(a, []);
+                        adjacency.get(a).push(b);
+                    };
+                    for (const e of flow.edges) {
+                        link(e.source, e.target);
+                        link(e.target, e.source);
+                    }
+                    const visited = new Set([startId]);
+                    const queue = [startId];
+                    while (queue.length) {
+                        const cur = queue.shift();
+                        const neighbors = adjacency.get(cur) || [];
+                        for (const nb of neighbors) {
+                            if (visited.has(nb)) continue;
+                            visited.add(nb);
+                            ordered.push(nb);
+                            queue.push(nb);
+                        }
+                    }
+                    for (const id of candidateIds) {
+                        if (!visited.has(id)) ordered.push(id);
+                    }
+                } else {
+                    // No usable start point (nothing selected yet, or the
+                    // selection lives in a different scope than the one
+                    // being viewed) — flow order is the best we've got.
+                    for (const id of candidateIds) ordered.push(id);
+                }
+                const targets = ordered.slice(0, IDLE_WARM_MAX);
+
+                if (!targets.length) {
+                    return () => { token.cancelled = true; };
+                }
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] idle-warm: ' + targets.length + ' targets queued');
+                }
+
+                // Serial per-target step. `idx` advances only after a
+                // target's prewarm actually runs (bailing for
+                // hidden/outdated reschedules the SAME target instead).
+                const runTarget = (idx) => {
+                    if (token.cancelled) return; // permanent bail
+                    if (idx >= targets.length) {
+                        if (window.MTLX_PERF_LOG && !token.cancelled) {
+                            console.log('[mtlx-perf] idle-warm: walk complete (' + targets.length + ' targets)');
+                        }
+                        return;
+                    }
+                    // A backgrounded tab: don't burn the idle budget on
+                    // warm compiles nobody can see yet.
+                    if (document.hidden) { setTimeout(() => runTarget(idx), 1000); return; }
+                    // An in-flight material swap (graph/preview.jsx's
+                    // APPLY path) owns the warm context/wasm queue right
+                    // now for a build the user IS looking at — defer
+                    // rather than contend with it.
+                    if (previewViewRef.current && previewViewRef.current.__outdated) {
+                        setTimeout(() => runTarget(idx), 500);
+                        return;
+                    }
+                    const id = targets[idx];
+                    (async () => {
+                        try {
+                            const { mx, gen, genContext } = await getMxEnv();
+                            if (token.cancelled) return;
+                            await window.prewarmPreviewTarget({
+                                mx, gen, genContext,
+                                buildRenderable: () => window.buildPreviewRenderable(parsed, { scope, id }),
+                                label: 'idle:' + id,
+                                isMounted: () => !token.cancelled,
+                            });
+                        } catch (e) {
+                            // Defensive only — prewarmPreviewTarget is
+                            // documented to never throw; this just keeps
+                            // one bad target from stalling the whole walk.
+                        }
+                        if (token.cancelled) return;
+                        const next = () => runTarget(idx + 1);
+                        if (window.requestIdleCallback) window.requestIdleCallback(next, { timeout: 500 });
+                        else setTimeout(next, 250);
+                    })();
+                };
+
+                // Let the main build that just triggered this effect (the
+                // one that bumped docRev) get the wasm queue and warm GL
+                // context to itself first — idle-warm only ever contends
+                // for scraps. Cleared on cleanup too, though token.cancelled
+                // alone is already enough to make a fired callback a no-op
+                // — belt-and-suspenders against the timer firing in the
+                // gap between cleanup running and the callback executing.
+                const kickoffTimer = setTimeout(() => runTarget(0), 1500);
+
+                return () => {
+                    token.cancelled = true;
+                    clearTimeout(kickoffTimer);
+                };
+            }, [parsed, docRev, scope]);
+
             // The node the panel DISPLAYS (header + parameters): the
             // selection, else the preview target when it lives in the
             // current view. Interface-input pseudo nodes carry their value
