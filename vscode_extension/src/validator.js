@@ -22,6 +22,7 @@
 'use strict';
 
 const mtlxNode = require('./mtlxNode');
+const { escapeRegExp } = require('./util');
 
 // ---------------------------------------------------------------------
 // Shared position mapping: precompute line-start offsets once per scan,
@@ -346,9 +347,6 @@ function scanXml(text) {
 // the document, so it can occasionally point at the wrong occurrence of
 // a common name. That's an accepted limitation of a boolean-only
 // validate() binding, not a bug to chase here.
-function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 // Finds `name = "candidate"` (or similar) and returns the char range of
 // just the candidate substring between the quotes, or null. FALLBACK

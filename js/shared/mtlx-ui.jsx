@@ -11,6 +11,13 @@
 // plain script, so it self-exports via a single Object.assign(window, {})
 // at the bottom.
 
+// Recurring Tailwind button class strings — pulled out because the exact
+// same string (verbatim, byte-for-byte) shows up in more than one file;
+// near-twin variants elsewhere (different opacity/sizing) are NOT this —
+// leave those as their own inline strings rather than forcing a match.
+const BTN_SECONDARY = 'h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+
 // Adds a window keydown listener that calls onClose() on Escape, active
 // whenever `when` isn't exactly `false` (so callers can pass a boolean
 // "is this dialog open" flag directly). Mirrors the Esc-to-close pattern
@@ -62,7 +69,10 @@ const useViewToggle = (viewRef, method, initial) => {
 // `<baseName, sanitized>.png`. Silently no-ops if the view has no frame to
 // snapshot (falsy dataURL) — matches both original copies' behavior.
 // Callers that want an error surfaced (e.g. viewer-app's setError) wrap
-// the call in their own try/catch; view.snapshot() can throw.
+// the call in their own try/catch; view.snapshot() can throw. Unlike
+// downloadBlob below, view.snapshot() hands back a plain data: URL —
+// there's no object URL to revoke, so this deliberately has no setTimeout
+// cleanup step.
 const downloadSnapshot = (view, baseName) => {
     const url = view.snapshot();
     if (!url) return;
@@ -72,16 +82,78 @@ const downloadSnapshot = (view, baseName) => {
     a.click();
 };
 
-// Download an XML string as a .mtlx (or any) file: Blob -> object URL ->
-// synthetic anchor click -> delayed revoke (gives the download a moment
-// to start before the URL is freed).
-const downloadXml = (xml, filename) => {
-    const blob = new Blob([xml], { type: 'application/xml' });
+// Download a Blob as a file: object URL -> synthetic anchor click ->
+// delayed revoke (gives the download a moment to start before the URL is
+// freed).
+const downloadBlob = (blob, filename) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+
+// Download an XML string as a .mtlx (or any) file.
+const downloadXml = (xml, filename) => {
+    downloadBlob(new Blob([xml], { type: 'application/xml' }), filename);
+};
+
+// Bundles the viewport-control state cluster duplicated across the three
+// preview surfaces (viewer-app.jsx, node-preview.jsx, graph/preview.jsx):
+// rotate/env-background toggles (useViewToggle), env-availability +
+// view-epoch state (both consumed by ViewportControls' Environment
+// dialog), fullscreen (useFullscreen), and a screenshot action.
+// `getSnapshotBase` supplies the FULL PNG base name — each caller's own
+// `<name>_<geom>` convention (material name / node name / preview label)
+// — this hook has no opinion on geometry suffixes itself. Deliberately
+// has NO try/catch around takeScreenshot: the material viewer wraps its
+// own call in try/setError to surface failures to the user; the other
+// two callers swallow them at the call site, matching their original
+// copies.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
+    const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
+    const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
+    const [envAvail, setEnvAvail] = React.useState(false);
+    const [viewEpoch, setViewEpoch] = React.useState(0);
+    const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
+    const takeScreenshot = () => {
+        const view = viewRef.current;
+        // Null/snapshot-less view → silent no-op, reproducing all three
+        // pre-refactor call sites' guard.
+        if (!view || !view.snapshot) return;
+        downloadSnapshot(view, getSnapshotBase());
+    };
+    return {
+        rotating, toggleRotating,
+        envBg, toggleEnvBg,
+        envAvail, setEnvAvail,
+        viewEpoch, setViewEpoch,
+        isFullscreen, toggleFullscreen,
+        takeScreenshot,
+    };
+};
+
+// The `mtlx_preview_geom` localStorage read/validate/write pattern shared
+// by node-preview.jsx and graph/preview.jsx: on mount, read the stored
+// geometry choice and fall back to `defaultGeom` if it's missing or no
+// longer one of the valid options (guards against a stale persisted value
+// rendering the geometry dropdown empty). `pickGeom` writes a new choice
+// back to the SAME key (both previews intentionally share one setting,
+// best-effort — some browsers block localStorage entirely) and updates
+// state. Returns [geom, pickGeom].
+const usePersistedGeom = (defaultGeom) => {
+    const [geom, setGeom] = React.useState(() => {
+        const valid = ['shaderball', 'sphere', 'cube'];
+        try {
+            const g = localStorage.getItem('mtlx_preview_geom');
+            return valid.indexOf(g) !== -1 ? g : defaultGeom;
+        } catch (e) { return defaultGeom; }
+    });
+    const pickGeom = (g) => {
+        try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
+        setGeom(g);
+    };
+    return [geom, pickGeom];
 };
 
 // Hand a document off to the node graph editor: stash it (plus any loose
@@ -93,6 +165,19 @@ const openInGraphEditor = ({ xml, name, files }) => {
     window.__mtlxPendingImport = { xml, name, files: files || null };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
+};
+
+// Filters a relPath -> File|Blob session map down to the loose
+// (non-.mtlx) companion files — the payload openInGraphEditor/
+// openInViewer above hand off ALONGSIDE a document's XML (textures etc.),
+// as opposed to the .mtlx itself. Duplicated verbatim in viewer-app.jsx's
+// sendToEditor and graph-app.jsx's sendToViewer before this extraction.
+const looseFilesFrom = (fileMap) => {
+    const files = {};
+    Object.keys(fileMap || {}).forEach((k) => {
+        if (!/\.mtlx$/i.test(k)) files[k] = fileMap[k];
+    });
+    return files;
 };
 
 // Hand a document off to the material viewer — the graph editor's "Send to
@@ -848,8 +933,11 @@ class PreviewErrorBoundary extends React.Component {
 }
 
 Object.assign(window, {
+    BTN_SECONDARY, BTN_PRIMARY,
     useEscapeToClose, useFullscreen, useViewToggle,
-    downloadSnapshot, downloadXml, openInGraphEditor, openInViewer,
+    downloadSnapshot, downloadBlob, downloadXml,
+    useViewportControls, usePersistedGeom,
+    openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, PreviewErrorBoundary,
 });

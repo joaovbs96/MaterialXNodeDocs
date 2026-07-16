@@ -61,6 +61,69 @@
             return candidates[0];
         };
 
+        // Which table(s) to render for the current selection: documented
+        // nodes with SEVERAL port tables under one heading (e.g.
+        // `multiply`: scalar/vector table + matrixNN table) narrow to the
+        // ONE table matching the selected signature's output type once
+        // there's more than one live signature to choose from — otherwise
+        // every table renders stacked, which reads as duplicated content.
+        // Single-table documented nodes are unaffected. Undocumented nodes
+        // show the ONE auto-generated table matching the selected group.
+        // groupDefVersions and dedupeDefsBySignature (js/docs/port-
+        // tables.jsx) walk the SAME getMatchingNodeDefs(name) list in the
+        // same order with the same signature key (nodeDefSigKey), so index
+        // `sig` lines up across sigGroups and autoDoc.tables — see
+        // buildAutoTablesFromDefs. The `sigCount > 1` gate here must stay
+        // in sync with the same gate on typesOverride/defaultsOverride at
+        // the call site below (all three only read live nodedef data once
+        // there's more than one signature to disambiguate with).
+        const resolveDisplayTables = (portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables) =>
+            portTables.length > 0
+                ? (portTables.length > 1 && sigCount > 1 && selectedGroup
+                    ? [pickTableForType(portTables, selectedGroup.type) || portTables[0]]
+                    : portTables)
+                : (sigCount > 1 ? [autoDoc && autoDoc.tables && autoDoc.tables[sig]].filter(Boolean)
+                    : effectiveTables);
+
+        // Previewability decided from the selected signature's exact types
+        // (group/version data), passed down to Node3DPreview — the
+        // previewer must not re-derive signature info from nodedefs.
+        // Returns a user-facing notice string when the signature can't be
+        // previewed in isolation, else null (also null before the groups
+        // have loaded, and for multi-output/translation signatures, which
+        // the previewer decides on its own — see its working translation
+        // branch).
+        const resolvePreviewDisabled = (selectedGroup, selectedVersion, selectedNode) => {
+            if (!selectedGroup || !selectedVersion) return null; // groups not loaded — previewer decides
+            const CLOSURE = ['BSDF', 'EDF', 'VDF'];
+            const VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
+            const out = selectedGroup.type;
+            // '+'-joined multi-output signature, or the literal 'multioutput'
+            // type string a real multi-output nodedef's getType() returns —
+            // no single primary output type to gate on; multioutput
+            // signatures (including translation graphs) are deferred to the
+            // previewer, which has a working translation branch.
+            if (!out || out.indexOf('+') !== -1 || out === 'multioutput') return null;
+            const inTypes = Object.values(selectedVersion.inputTypes || {});
+            const hasClosureInput = inTypes.some((t) => CLOSURE.indexOf(t) !== -1);
+            // A surfaceshader with unbound closure (BSDF/EDF) inputs passes
+            // the VIEWABLE-ish gate below but renders as a meaningless black
+            // ball — catch it before the generic previewable check.
+            if (out === 'surfaceshader' && hasClosureInput) {
+                return `No preview for "${selectedNode.name}" — its closure inputs (BSDF/EDF) are unbound in an isolated preview; open it in the node graph editor and wire it up to see a result.`;
+            }
+            const previewable = VIEWABLE.indexOf(out) !== -1
+                || out === 'surfaceshader'
+                || out === 'material'
+                || (out === 'BSDF' && !hasClosureInput)
+                || (out === 'EDF' && !hasClosureInput);
+            if (previewable) return null;
+            if (CLOSURE.indexOf(out) !== -1 && hasClosureInput) {
+                return `No preview for "${selectedNode.name}" — closure operators (BSDF/EDF/VDF in and out) aren't previewed in isolation. Open it in the node graph editor to see it in context.`;
+            }
+            return `No preview for "${selectedNode.name}" — it outputs ${out}, which isn't a viewable color surface. Try it in the node graph editor.`;
+        };
+
         function App({ active = true, inline = false, initialHash } = {}) {
             // Embed mode: focused single-node view, iframed by the graph
             // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
@@ -607,24 +670,11 @@
             const sigCount = sigGroups.length;
             const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
             const selectedGroup = sigGroups[sig] || null;
-            // Documented nodes: when the spec write-up authors SEVERAL port
-            // tables under one heading (e.g. `multiply`: scalar/vector table
-            // + matrixNN table) and there's more than one live signature to
-            // choose from, show only the ONE table matching the selected
-            // signature's output type — otherwise every table renders
-            // stacked, which reads as duplicated content. Single-table
-            // documented nodes are unaffected. Undocumented nodes show the
-            // ONE auto-generated table matching the selected group.
-            // groupDefVersions and dedupeDefsBySignature walk the SAME
-            // getMatchingNodeDefs(name) list in the same order with the same
-            // signature key (nodeDefSigKey), so index `sig` lines up across
-            // sigGroups and autoDoc.tables — see buildAutoTablesFromDefs.
-            const displayTables = portTables.length > 0
-                ? (portTables.length > 1 && sigCount > 1 && selectedGroup
-                    ? [pickTableForType(portTables, selectedGroup.type) || portTables[0]]
-                    : portTables)
-                : (sigCount > 1 ? [autoDoc && autoDoc.tables && autoDoc.tables[sig]].filter(Boolean)
-                    : effectiveTables);
+            // Which table(s) to render — see resolveDisplayTables above for
+            // the full selection rules (documented multi-table narrowing,
+            // undocumented auto-table pick, sigGroups/autoDoc.tables index
+            // alignment).
+            const displayTables = resolveDisplayTables(portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables);
             // Concrete type this signature previews as (null → auto-pick).
             // While nodeVersionGroups is still loading (async), fall back to
             // the markdown-table-derived heuristic so the preview isn't
@@ -648,38 +698,9 @@
             const defaultsOverride = selectedVersion && (sigCount > 1 || !selectedVersion.isDefaultVersion)
                 ? selectedVersion.defaults : null;
             // Previewability decided HERE, where the selected signature's exact
-            // types are known, and passed down — the previewer must not re-derive
-            // signature info from nodedefs.
-            const previewDisabled = (() => {
-                if (!selectedGroup || !selectedVersion) return null; // groups not loaded — previewer decides
-                const CLOSURE = ['BSDF', 'EDF', 'VDF'];
-                const VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
-                const out = selectedGroup.type;
-                // '+'-joined multi-output signature, or the literal 'multioutput'
-                // type string a real multi-output nodedef's getType() returns —
-                // no single primary output type to gate on; multioutput
-                // signatures (including translation graphs) are deferred to the
-                // previewer, which has a working translation branch.
-                if (!out || out.indexOf('+') !== -1 || out === 'multioutput') return null;
-                const inTypes = Object.values(selectedVersion.inputTypes || {});
-                const hasClosureInput = inTypes.some((t) => CLOSURE.indexOf(t) !== -1);
-                // A surfaceshader with unbound closure (BSDF/EDF) inputs passes
-                // the VIEWABLE-ish gate below but renders as a meaningless black
-                // ball — catch it before the generic previewable check.
-                if (out === 'surfaceshader' && hasClosureInput) {
-                    return `No preview for "${selectedNode.name}" — its closure inputs (BSDF/EDF) are unbound in an isolated preview; open it in the node graph editor and wire it up to see a result.`;
-                }
-                const previewable = VIEWABLE.indexOf(out) !== -1
-                    || out === 'surfaceshader'
-                    || out === 'material'
-                    || (out === 'BSDF' && !hasClosureInput)
-                    || (out === 'EDF' && !hasClosureInput);
-                if (previewable) return null;
-                if (CLOSURE.indexOf(out) !== -1 && hasClosureInput) {
-                    return `No preview for "${selectedNode.name}" — closure operators (BSDF/EDF/VDF in and out) aren't previewed in isolation. Open it in the node graph editor to see it in context.`;
-                }
-                return `No preview for "${selectedNode.name}" — it outputs ${out}, which isn't a viewable color surface. Try it in the node graph editor.`;
-            })();
+            // types are known, and passed down — see resolvePreviewDisabled
+            // above for the type-gating rules.
+            const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
             // Column set for the displayed table(s).
             const columns = displayTables.length > 0 ? unionColumns(displayTables) : [];
             // Footnote references: map key -> {n, url, text}, numbered by

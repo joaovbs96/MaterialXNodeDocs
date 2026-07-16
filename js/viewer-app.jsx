@@ -21,10 +21,10 @@
             'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/' +
             'v1.39.5/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx';
 
-        // normPath, readDroppedItems, expandZips, findFileForRef and
-        // resolveIncludes now live in js/mtlx-engine.js (loaded before this
-        // script) and are used here as window globals like the rest of the
-        // shared engine API.
+        // normPath, readDroppedItems, expandZips, findFileForRef,
+        // resolveIncludes and readMtlxText now live in js/mtlx-engine.js
+        // (loaded before this script) and are used here as window globals
+        // like the rest of the shared engine API.
 
         // ---- Document loading ---------------------------------------------
 
@@ -138,31 +138,37 @@
             const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
 
             // --- Viewport controls (mirror the node previewer's) ---
-            // Camera auto-rotation pause: applied live on the view; also passed
-            // at creation so it survives geometry/material regens.
-            // OFF by default: the model starts still; the rotate button
-            // switches the camera turntable on/off (applied live, and passed
-            // at creation so it survives material/geometry regens).
-            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
-            // Environment map shown as the visible background (IBL is always on).
-            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
-            // Bumped every time a new view is assigned into viewRef.current
-            // below (view creation effect) — ViewportControls' Environment
-            // dialog watches this to re-apply rotation/exposure/session
-            // override onto the fresh view after a rebuild.
-            const [viewEpoch, setViewEpoch] = React.useState(0);
-            // Fullscreen: the CONTAINER div goes fullscreen (not the canvas),
-            // so the overlaid viewport controls stay visible. The engine's
-            // ResizeObserver resizes the render buffer automatically.
+            // Shared with node-preview.jsx / graph/preview.jsx via
+            // useViewportControls (js/shared/mtlx-ui.jsx): camera
+            // auto-rotation pause (OFF by default — the model starts
+            // still), the environment-background toggle (IBL is always
+            // on), the view-epoch bump ViewportControls' Environment
+            // dialog watches to re-apply rotation/exposure/session
+            // override onto a fresh view after a rebuild, and fullscreen
+            // (the CONTAINER div goes fullscreen, not the canvas, so the
+            // overlaid viewport controls stay visible — the engine's
+            // ResizeObserver resizes the render buffer automatically).
             const viewportRef = React.useRef(null);
-            const [isFullscreen, onToggleFullscreen] = useFullscreen(viewportRef);
-            // PNG snapshot of the current frame, named after material + geometry.
-            const takeScreenshot = () => {
-                const view = viewRef.current;
-                if (!view || !view.snapshot) return;
+            // PNG snapshot base name — material + geometry, exactly as
+            // before; read fresh by the hook on every screenshot.
+            const getSnapshotBase = () => {
                 const matName = (renderables[chosenMat] && renderables[chosenMat].name) || 'material';
+                return matName + '_' + geom;
+            };
+            const {
+                rotating, toggleRotating,
+                envBg, toggleEnvBg,
+                viewEpoch, setViewEpoch,
+                isFullscreen, toggleFullscreen: onToggleFullscreen,
+                takeScreenshot: takeScreenshotRaw,
+            } = useViewportControls(viewRef, viewportRef, getSnapshotBase);
+            // The hook's takeScreenshot has no internal try/catch (shared
+            // with the previewers, which swallow a failed snapshot
+            // silently) — the viewer instead surfaces it as an error
+            // banner, so that wrapping stays local to this call site.
+            const takeScreenshot = () => {
                 try {
-                    downloadSnapshot(view, matName + '_' + geom);
+                    takeScreenshotRaw();
                 } catch (e) {
                     setError('Save PNG preview failed: ' + String(e && e.message || e));
                 }
@@ -186,10 +192,7 @@
                     console.warn('Send to Editor: failed to serialize the document', e);
                     return;
                 }
-                const files = {};
-                Object.keys(fileMapRef.current || {}).forEach((k) => {
-                    if (!/\.mtlx$/i.test(k)) files[k] = fileMapRef.current[k];
-                });
+                const files = looseFilesFrom(fileMapRef.current || {});
                 const name = (chosenMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
                 openInGraphEditor({ xml, name, files });
             };
@@ -393,11 +396,11 @@
                 setBusy(true); // stays on through the render effect below
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
-                    let xml = await map[path].text();
-                    if (/<xi:include\b/.test(xml)) {
-                        const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
-                        xml = await resolveIncludes(xml, map, dir);
-                    }
+                    // readMtlxText resolves xi:includes for us; only the
+                    // resolved text is parsed here (the raw half of its
+                    // return is for callers that need the as-authored text,
+                    // e.g. the graph editor's own load path — unused here).
+                    const { resolved: xml } = await readMtlxText(map[path], path, map);
                     const loaded = await loadMtlxDocument(xml);
                     loadedRef.current = loaded;
                     setRenderables(loaded.renderables);

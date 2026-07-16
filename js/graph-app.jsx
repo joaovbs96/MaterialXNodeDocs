@@ -373,8 +373,8 @@
                     // second rAF lets the first frame (with scopeBusy=true
                     // already committed and painted) land before the
                     // rebuild-triggering setScope below runs.
-                    await new Promise((r) => requestAnimationFrame(r));
-                    await new Promise((r) => requestAnimationFrame(r));
+                    await nextFrame();
+                    await nextFrame();
                     setScope(next);
                 })();
             };
@@ -568,8 +568,8 @@
 
             // Connect-time literal stash (item 4a): the moment a wire is
             // attached, the pre-existing literal on that input is destroyed
-            // (removeAttribute('value') at every connect site below) so the
-            // document doesn't carry both a wire AND a stale value.
+            // (mxRemoveAttr(point, 'value') at every connect site below) so
+            // the document doesn't carry both a wire AND a stale value.
             // Stashing it here lets severConnection (below) bring it
             // straight back when the wire is later removed, instead of
             // falling back to the nodedef default. Keyed by the input
@@ -726,12 +726,12 @@
                 setBusy(true);
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
-                    let xml = await map[path].text();
+                    const { raw, resolved } = await readMtlxText(map[path], path, map);
                     // Validate source-of-truth (noteDocXml, declared near
                     // docRev above): the RAW, as-opened text of the picked
-                    // file — captured BEFORE xi:include resolution splices
-                    // in other files' content below, and well before
-                    // parseMtlxDocument or any healing ever touches it.
+                    // file — NOT the xi:include-resolved text the parse
+                    // below consumes, and well before parseMtlxDocument or
+                    // any healing ever touches it.
                     // This is exactly what the VS Code extension's own
                     // tier-2 validator (vscode_extension/src/mtlxNode.js's
                     // validateSemantic) validates too — it readFromXmlString's
@@ -739,12 +739,8 @@
                     // so capturing the resolved/merged text here instead
                     // would let the graph's Validate button diverge from
                     // what VS Code shows for any document using includes.
-                    noteDocXml(xml);
-                    if (/<xi:include\b/.test(xml)) {
-                        const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
-                        xml = await resolveIncludes(xml, map, dir);
-                    }
-                    const p = await parseMtlxDocument(xml);
+                    noteDocXml(raw);
+                    const p = await parseMtlxDocument(resolved);
                     p.label = path;
                     setParsed(p);
                     setScope('');
@@ -918,22 +914,18 @@
 
                 let p;
                 try {
-                    let xml = await merged[pick].text();
+                    const { raw, resolved } = await readMtlxText(merged[pick], pick, merged);
                     // Validate source-of-truth (noteDocXml, declared near
-                    // docRev above): the raw external-edit text, captured
-                    // BEFORE xi:include resolution (parity with
-                    // loadDocument's raw-text capture) and critically
-                    // BEFORE either early return below — the parse-failure
+                    // docRev above): the raw external-edit text — not the
+                    // xi:include-resolved text (parity with loadDocument's
+                    // raw-text capture) — and critically noted BEFORE
+                    // either early return below: the parse-failure
                     // return (a mid-edit broken file should still turn the
                     // Validate button red with the parse error, exactly
                     // what VS Code's own Problems panel shows for it) and
                     // the sameAsCurrent return (see its own comment).
-                    noteDocXml(xml);
-                    if (/<xi:include\b/.test(xml)) {
-                        const dir = pick.indexOf('/') >= 0 ? pick.slice(0, pick.lastIndexOf('/')) : '';
-                        xml = await resolveIncludes(xml, merged, dir);
-                    }
-                    p = await parseMtlxDocument(xml);
+                    noteDocXml(raw);
+                    p = await parseMtlxDocument(resolved);
                 } catch (e) {
                     // The live session must survive a mid-edit broken file
                     // (e.g. the user is mid-keystroke on an unbalanced tag
@@ -1311,8 +1303,8 @@
                         if (!el) continue;
                         const x = Math.round((pos.x / 240) * 10000) / 10000;
                         const y = Math.round((pos.y / 240) * 10000) / 10000;
-                        mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
-                        mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                        mxSetAttr(el, 'xpos', String(x));
+                        mxSetAttr(el, 'ypos', String(y));
                         wrote = true;
                     }
                     if (wrote) markDirty();
@@ -1528,6 +1520,33 @@
                 return true; // continuous rAF shows it next frame
             };
 
+            // Resolve a flow id ('n:'/'g:' prefixed) to its document
+            // element — a real node looked up on `container`, a nodegraph
+            // instance looked up on `doc` regardless of scope. Shared by
+            // applyParamEdit and applyColorspace; connectionPoint's own
+            // n:/g:/o: resolution is richer (it also falls back to
+            // getChild) and stays separate.
+            const elForFlowId = (container, doc, id) => {
+                const name = id.slice(2);
+                if (id.indexOf('n:') === 0 && container) return mxSafe(() => container.getNode(name), null);
+                if (id.indexOf('g:') === 0) return mxSafe(() => doc.getNodeGraph(name), null);
+                return null;
+            };
+
+            // Shared repatch tail: re-derive a node's visible port list
+            // from an updated allInputs array — re-deriving (instead of
+            // caching `inputs`) is what makes a value landing back at its
+            // nodedef default drop the row out of "set inputs" mode.
+            const withPatchedInputs = (n, upd) => {
+                const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
+                return Object.assign({}, n, {
+                    data: Object.assign({}, n.data, {
+                        allInputs,
+                        inputs: visiblePortsFor(allInputs, n.data.portMode || 'authored'),
+                    }),
+                });
+            };
+
             // Write a new literal value onto an input — into the real MaterialX
             // document when the bindings allow it, and always into the on-screen
             // flow. The flow is patched IN PLACE (no rebuild) so layout, viewport
@@ -1547,9 +1566,7 @@
                     && fMeta.defValue !== undefined && newValue === fMeta.defValue;
                 if (parsed) {
                     const name = nodeId.slice(2);
-                    const container = scope
-                        ? mxSafe(() => parsed.doc.getNodeGraph(scope), null)
-                        : parsed.doc;
+                    const container = scopeContainer();
                     let wrote = false;
                     let fastType = '';
                     if (nodeId.indexOf('i:') === 0) {
@@ -1561,9 +1578,7 @@
                         wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, mxElType(target)); return true; }, false);
                         fastType = target ? mxSafe(() => mxElType(target), '') : '';
                     } else {
-                        let el = null;
-                        if (nodeId.indexOf('n:') === 0 && container) el = mxSafe(() => container.getNode(name), null);
-                        else if (nodeId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                        const el = elForFlowId(container, parsed.doc, nodeId);
                         if (revertsToDefault) {
                             // Drop the authored element (when there is one) —
                             // the nodedef default takes over again.
@@ -1602,15 +1617,7 @@
                         const upd = (i) => i.name === inputName
                             ? Object.assign({}, i, { value: newValue, authored: !revertsToDefault })
                             : i;
-                        const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
-                        return Object.assign({}, n, {
-                            data: Object.assign({}, n.data, {
-                                allInputs,
-                                // Re-derive the visible rows: a value back at
-                                // its default drops out of "set inputs" mode.
-                                inputs: visiblePortsFor(allInputs, n.data.portMode || 'authored'),
-                            }),
-                        });
+                        return withPatchedInputs(n, upd);
                     }),
                 }));
             };
@@ -1642,16 +1649,12 @@
                 if (!parsed) return;
                 const type = inputType || 'filename';
                 const name = nodeId.slice(2);
-                const container = scope
-                    ? mxSafe(() => parsed.doc.getNodeGraph(scope), null)
-                    : parsed.doc;
+                const container = scopeContainer();
                 let target = null;
                 if (nodeId.indexOf('i:') === 0) {
                     target = container ? mxSafe(() => container.getInput(name), null) : null;
                 } else {
-                    let el = null;
-                    if (nodeId.indexOf('n:') === 0 && container) el = mxSafe(() => container.getNode(name), null);
-                    else if (nodeId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                    const el = elForFlowId(container, parsed.doc, nodeId);
                     // The input must exist to carry the attribute (an empty
                     // value is valid); created with a guaranteed type.
                     if (el) target = ensureTypedInput(parsed.doc, el, inputName, type);
@@ -1661,17 +1664,13 @@
                     return;
                 }
                 if (cs) {
-                    mxSafe(() => {
-                        if (typeof target.setColorSpace === 'function') target.setColorSpace(cs);
-                        else target.setAttribute('colorspace', cs);
-                        return true;
-                    }, false);
+                    mxSetColorspace(target, cs);
                 } else {
-                    mxSafe(() => { target.removeAttribute('colorspace'); return true; }, false);
+                    mxRemoveAttr(target, 'colorspace');
                     // An input element now carrying NOTHING reverts outright
                     // (same rule as severConnection / value reverts).
-                    const bare = !mxSafe(() => target.getAttribute('value'), '')
-                        && !CONN_ATTRS.some((a) => mxSafe(() => target.getAttribute(a), ''));
+                    const bare = !mxElAttr(target, 'value')
+                        && !CONN_ATTRS.some((a) => mxElAttr(target, a));
                     if (bare && nodeId.indexOf('n:') === 0) {
                         const par = mxSafe(() => target.getParent(), null);
                         if (par) mxSafe(() => { par.removeChild(inputName); return true; }, false);
@@ -1690,13 +1689,7 @@
                                 authored: !!cs || i.connected
                                     || (i.defValue !== undefined && i.value !== i.defValue),
                             });
-                        const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
-                        return Object.assign({}, n, {
-                            data: Object.assign({}, n.data, {
-                                allInputs,
-                                inputs: visiblePortsFor(allInputs, n.data.portMode || 'authored'),
-                            }),
-                        });
+                        return withPatchedInputs(n, upd);
                     }),
                 }));
             };
@@ -1755,10 +1748,7 @@
                     setError('Send to Viewer failed: ' + error);
                     return;
                 }
-                const files = {};
-                Object.keys(fileMapRef.current || {}).forEach((k) => {
-                    if (!/\.mtlx$/i.test(k)) files[k] = fileMapRef.current[k];
-                });
+                const files = looseFilesFrom(fileMapRef.current);
                 openInViewer({ xml, name: defaultExportBase(), files });
             };
 
@@ -1806,11 +1796,7 @@
                         }
                     }
                 }
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = base + '.mtlx';
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                downloadBlob(blob, base + '.mtlx');
                 markSaved(); // the just-downloaded file matches the current document
                 return true;
             };
@@ -1855,11 +1841,7 @@
                     setError('Export failed: ' + String(e && e.message || e));
                     return false;
                 }
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = name + '.zip';
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                downloadBlob(blob, name + '.zip');
                 markSaved(); // the just-downloaded zip's document matches the current one
                 return true;
             };
@@ -1944,9 +1926,9 @@
             //  (1) xi:include: "look" files (e.g. "Brass (tiled look)")
             //      pull in a separate sibling .mtlx for the actual
             //      material — resolveIncludes (js/mtlx-engine.js:535,
-            //      invoked from loadDocument above) inlines those from
-            //      the SAME dropped-file map this preset flow builds, but
-            //      only if that sibling doc was actually fetched into it.
+            //      via loadDocument's readMtlxText above) inlines those
+            //      from the SAME dropped-file map this preset flow builds,
+            //      but only if that sibling doc was actually fetched into it.
             //  (2) filename refs that escape the preset's own directory
             //      via literal "../" segments in the authored value AND/OR
             //      an inheritable `fileprefix="..."` attribute (MaterialX
@@ -2248,20 +2230,21 @@
 
             const clearConnAttrs = (point) => {
                 for (const a of CONN_ATTRS) {
-                    if (!mxSafe(() => point.getAttribute(a), '')) continue;
-                    const ok = mxSafe(() => { point.removeAttribute(a); return true; }, false);
-                    if (!ok) mxSafe(() => { point.setAttribute(a, ''); return true; }, false);
+                    if (!mxElAttr(point, a)) continue;
+                    const ok = mxRemoveAttr(point, a);
+                    if (!ok) mxSetAttr(point, a, '');
                 }
             };
 
             // Stash a connection point's about-to-be-destroyed literal
-            // (item 4a) — called immediately before every removeAttribute
-            // ('value') below that runs as part of writing a NEW connection
-            // onto an input, so severConnection can bring it back later
-            // instead of falling back to the nodedef default. A no-op when
-            // the input carries no value, or its path can't be resolved.
+            // (item 4a) — called immediately before every mxRemoveAttr
+            // (…, 'value') below that runs as part of writing a NEW
+            // connection onto an input, so severConnection can bring it
+            // back later instead of falling back to the nodedef default. A
+            // no-op when the input carries no value, or its path can't be
+            // resolved.
             const stashValueBeforeRemoval = (point) => {
-                const val = mxSafe(() => point.getAttribute('value'), '');
+                const val = mxElAttr(point, 'value');
                 if (!val) return;
                 const key = mxSafe(() => point.getNamePath(), '');
                 if (!key) return;
@@ -2294,15 +2277,15 @@
                 const key = mxSafe(() => point.getNamePath(), '');
                 const stashed = key && stashedValuesRef.current[key];
                 if (stashed) {
-                    mxSafe(() => { point.setAttribute('value', stashed); return true; }, false);
+                    mxSetAttr(point, 'value', stashed);
                     delete stashedValuesRef.current[key];
                     return stashed;
                 }
                 const kind = String(targetId || '').slice(0, 2);
                 if (kind !== 'n:' && kind !== 'g:') return null;
-                const curVal = mxSafe(() => point.getAttribute('value'), '');
+                const curVal = mxElAttr(point, 'value');
                 if (curVal) return curVal;
-                if (mxSafe(() => point.getAttribute('colorspace'), '')) return null;
+                if (mxElAttr(point, 'colorspace')) return null;
                 const par = mxSafe(() => point.getParent(), null);
                 const nm = mxElName(point);
                 if (par && nm) {
@@ -2385,13 +2368,7 @@
                                 ? { connected: false, authored: false, keepRow: true,
                                     value: i.defValue !== undefined ? i.defValue : i.value }
                                 : { connected: false })));
-                const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
-                return Object.assign({}, n, {
-                    data: Object.assign({}, n.data, {
-                        allInputs,
-                        inputs: visiblePortsFor(allInputs, n.data.portMode || 'authored'),
-                    }),
-                });
+                return withPatchedInputs(n, upd);
             };
 
             // Switch the displayed node to another SIGNATURE (a distinct
@@ -2422,7 +2399,7 @@
 
                 // Raw attribute write first — the binding's setType has
                 // produced wrong types in this build (see ensureTypedInput).
-                mxSafe(() => { el.setAttribute('type', def.type); return true; }, false);
+                mxSetAttr(el, 'type', def.type);
                 if (mxElType(el) !== def.type) {
                     mxSafe(() => { el.setType(def.type); return true; }, false);
                 }
@@ -2430,9 +2407,9 @@
                 // Pin the exact nodedef when the output type alone is
                 // ambiguous; otherwise keep the document clean. Any version
                 // pinned to the OLD signature no longer applies.
-                if (group.ambiguous) mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
-                else mxSafe(() => { el.removeAttribute('nodedef'); return true; }, false);
-                mxSafe(() => { el.removeAttribute('version'); return true; }, false);
+                if (group.ambiguous) mxSetAttr(el, 'nodedef', def.name);
+                else mxRemoveAttr(el, 'nodedef');
+                mxRemoveAttr(el, 'version');
 
                 // Authored inputs: name+type matches survive UNLESS they're
                 // unconnected AND still equal the OLD default (untouched —
@@ -2527,8 +2504,8 @@
                 const c = scopeContainer();
                 const el = c && mxSafe(() => c.getNode(flowId.slice(2)), null);
                 if (!el) return;
-                if (versionDef.isDefaultVersion) mxSafe(() => { el.removeAttribute('version'); return true; }, false);
-                else mxSafe(() => { el.setAttribute('version', versionDef.version); return true; }, false);
+                if (versionDef.isDefaultVersion) mxRemoveAttr(el, 'version');
+                else mxSetAttr(el, 'version', versionDef.version);
                 setDocRev((r) => r + 1);
                 markDirty();
 
@@ -2555,6 +2532,32 @@
                 });
             };
 
+            // Write a connection SOURCE onto a connection point — shared by
+            // onConnect and both wirePendingConnection branches (item 9):
+            // clear any stale connection attrs, then set interfacename (a
+            // nodegraph interface-input source), nodegraph (a nodegraph-
+            // instance source) or nodename (a real node source); output=
+            // only when the source really declares several outputs — the
+            // synthesized single "out" handle must not leak into the
+            // document. A connected input takes its value from the wire —
+            // a literal alongside it would make the document invalid, so
+            // it's stashed first (item 4a, so disconnecting later can
+            // bring it straight back) then stripped.
+            const writeConnSource = (point, srcId, outName, srcOutputs) => {
+                clearConnAttrs(point);
+                const srcName = srcId.slice(2);
+                if (srcId.indexOf('i:') === 0) {
+                    mxSetAttr(point, 'interfacename', srcName);
+                } else {
+                    mxSetAttr(point, srcId.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
+                    if (outName && (srcOutputs || []).length > 1) {
+                        mxSetAttr(point, 'output', outName);
+                    }
+                }
+                stashValueBeforeRemoval(point);
+                mxRemoveAttr(point, 'value');
+            };
+
             // Drag-completed connection: write the connection attributes
             // onto the target input, replace any edge already feeding it
             // (an input has exactly one source), and add the new edge.
@@ -2572,30 +2575,8 @@
                 if (parsed) {
                     const point = connectionPoint(target, targetHandle, true);
                     if (point) {
-                        clearConnAttrs(point);
-                        const srcName = source.slice(2);
-                        if (source.indexOf('i:') === 0) {
-                            mxSafe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
-                        } else {
-                            mxSafe(() => {
-                                point.setAttribute(source.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
-                                return true;
-                            }, false);
-                            // output= only when the source really declares
-                            // several outputs — the synthesized single "out"
-                            // handle must not leak into the document.
-                            const srcNode = flow.nodes.find((n) => n.id === source);
-                            const outs = (srcNode && srcNode.data.outputs) || [];
-                            if (outName && outs.length > 1) {
-                                mxSafe(() => { point.setAttribute('output', outName); return true; }, false);
-                            }
-                        }
-                        // A connected input takes its value from the wire — a
-                        // literal alongside it would make the document invalid.
-                        // Stash it first (item 4a) so disconnecting later
-                        // can bring it straight back.
-                        stashValueBeforeRemoval(point);
-                        mxSafe(() => { point.removeAttribute('value'); return true; }, false);
+                        const srcNode = flow.nodes.find((n) => n.id === source);
+                        writeConnSource(point, source, outName, srcNode && srcNode.data.outputs);
                         setDocRev((r) => r + 1);
                         markDirty();
                     } else {
@@ -2959,12 +2940,12 @@
                 if (kind === 'n:' && c) {
                     // Referrers live in the SAME container as the node.
                     for (const p of connectables(c)) {
-                        if (mxElAttr(p, 'nodename') === oldName) mxSafe(() => { p.setAttribute('nodename', newName); return true; }, false);
+                        if (mxElAttr(p, 'nodename') === oldName) mxSetAttr(p, 'nodename', newName);
                     }
                 } else if (kind === 'g:') {
                     // Referrers to a nodegraph live at the DOC ROOT.
                     for (const p of connectables(parsed.doc)) {
-                        if (mxElAttr(p, 'nodegraph') === oldName) mxSafe(() => { p.setAttribute('nodegraph', newName); return true; }, false);
+                        if (mxElAttr(p, 'nodegraph') === oldName) mxSetAttr(p, 'nodegraph', newName);
                     }
                     if (parsed.nodegraphs) { // scope dropdown
                         parsed.nodegraphs = parsed.nodegraphs.map((g) => (g === oldName ? newName : g));
@@ -2973,7 +2954,7 @@
                 } else if (kind === 'i:' && c) {
                     // Interface input referrers live inside the SAME graph.
                     for (const p of connectables(c)) {
-                        if (mxElAttr(p, 'interfacename') === oldName) mxSafe(() => { p.setAttribute('interfacename', newName); return true; }, false);
+                        if (mxElAttr(p, 'interfacename') === oldName) mxSetAttr(p, 'interfacename', newName);
                     }
                 } else if (kind === 'o:' && scope !== '') {
                     // A nodegraph output — referenced from the doc root as
@@ -2982,7 +2963,7 @@
                     // the document, so there's nothing to rewrite there.
                     for (const p of connectables(parsed.doc)) {
                         if (mxElAttr(p, 'nodegraph') === scope && mxElAttr(p, 'output') === oldName) {
-                            mxSafe(() => { p.setAttribute('output', newName); return true; }, false);
+                            mxSetAttr(p, 'output', newName);
                         }
                     }
                 }
@@ -3117,8 +3098,8 @@
                         // Same double-rAF idiom as changeScope — lets the
                         // overlay actually paint before the deletion (and
                         // the preview regen it triggers) runs.
-                        await new Promise((r) => requestAnimationFrame(r));
-                        await new Promise((r) => requestAnimationFrame(r));
+                        await nextFrame();
+                        await nextFrame();
                         try {
                             targets.forEach((id) => deleteNode(id));
                         } finally {
@@ -3129,6 +3110,29 @@
                 }
                 targets.forEach((id) => deleteNode(id));
                 return true;
+            };
+
+            // A screen point (default: the panel's own center — "the
+            // current viewport center") converted to flow-space via the
+            // live RF instance, falling back to project() for older RF
+            // builds. Null when neither `inst` nor `host` is available (or
+            // RF exposes neither conversion method) — callers keep
+            // whatever default position they already had in that case.
+            const viewportCenterFlow = (inst, host, point) => {
+                if (!inst || !host) return null;
+                const r = host.getBoundingClientRect();
+                const p = point || { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                if (typeof inst.screenToFlowPosition === 'function') return inst.screenToFlowPosition(p);
+                if (typeof inst.project === 'function') return inst.project({ x: p.x - r.left, y: p.y - r.top });
+                return null;
+            };
+
+            // Write a flow-space (pixel) position as an element's xpos/
+            // ypos, converted to the MaterialX Graph Editor convention (1
+            // unit = 240px, rounded to 4 decimals — see layoutScope).
+            const writeFlowPos = (el, x, y) => {
+                mxSetAttr(el, 'xpos', String(Math.round((x / 240) * 10000) / 10000));
+                mxSetAttr(el, 'ypos', String(Math.round((y / 240) * 10000) / 10000));
             };
 
             // Add a stdlib node (picked in the Tab palette) to the CURRENT
@@ -3168,11 +3172,11 @@
                 if (pinNodedef && def) {
                     // A type hint was used to disambiguate — lock in that
                     // exact signature explicitly.
-                    mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                    mxSetAttr(el, 'nodedef', def.name);
                 } else if (def && def.ambiguous) {
                     // When several signatures share this output type, pin the
                     // exact one — otherwise MaterialX could resolve a sibling.
-                    mxSafe(() => { el.setAttribute('nodedef', def.name); return true; }, false);
+                    mxSetAttr(el, 'nodedef', def.name);
                 }
                 // Descriptor → flow node, exactly the shape toFlow builds.
                 const ports = collectPorts(el);
@@ -3261,14 +3265,8 @@
                 if (!placedAtDrop) {
                     // Drop it at the center of the current viewport.
                     const host = panelRef.current;
-                    if (inst && host) {
-                        const r = host.getBoundingClientRect();
-                        if (typeof inst.screenToFlowPosition === 'function') {
-                            pos = inst.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-                        } else if (typeof inst.project === 'function') {
-                            pos = inst.project({ x: r.width / 2, y: r.height / 2 });
-                        }
-                    }
+                    const centered = viewportCenterFlow(inst, host);
+                    if (centered) pos = centered;
                     pos = {
                         x: pos.x - NODE_W / 2,
                         y: pos.y - nodeHeight({ inputs: data.inputs, outputs: data.outputs }) / 2,
@@ -3276,8 +3274,7 @@
                 }
                 // Persist the drop position right away (same convention as
                 // onNodeDragStop), so a scope round-trip keeps it.
-                mxSafe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
-                mxSafe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
+                writeFlowPos(el, pos.x, pos.y);
                 setFlow((prev) => ({
                     edges: prev.edges,
                     nodes: prev.nodes.concat([{ id, type: 'mtlx', position: pos, data }]),
@@ -3295,9 +3292,9 @@
             // addNodeFromCatalog. `pending` is the info captured by
             // openPortAdd; `created` is addNodeFromCatalog's return value.
             // Writes the connection attributes exactly the way onConnect
-            // does (ensureTypedInput + nodename/output, output= only when
-            // the source declares several outputs), then applies the same
-            // setDocRev/markDirty/setFlow tail onConnect uses.
+            // does (ensureTypedInput + the shared writeConnSource), then
+            // applies the same setDocRev/markDirty/setFlow tail onConnect
+            // uses.
             const wirePendingConnection = (created, pending) => {
                 if (!created || !pending || !parsed) return;
                 const doc = parsed.doc;
@@ -3313,15 +3310,9 @@
                     if (!existingEl) return;
                     point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
                     if (!point) return;
-                    clearConnAttrs(point);
                     const outs = created.outputs || [];
                     const outMatch = outs.find((o) => o.type === pending.portType) || outs[0];
-                    mxSafe(() => { point.setAttribute('nodename', created.name); return true; }, false);
-                    if (outMatch && outMatch.name && outs.length > 1) {
-                        mxSafe(() => { point.setAttribute('output', outMatch.name); return true; }, false);
-                    }
-                    stashValueBeforeRemoval(point); // item 4a
-                    mxSafe(() => { point.removeAttribute('value'); return true; }, false);
+                    writeConnSource(point, created.id, outMatch && outMatch.name, outs);
                     targetFlowId = pending.nodeId;
                     targetInputName = pending.port;
                     srcId = created.id;
@@ -3334,28 +3325,11 @@
                     if (!inMatch) return;
                     point = ensureTypedInput(doc, created.el, inMatch.name, pending.portType);
                     if (!point) return;
-                    clearConnAttrs(point);
-                    const srcName = pending.nodeId.slice(2);
-                    if (pending.nodeId.indexOf('i:') === 0) {
-                        // A nodegraph interface input as source is a pin
-                        // reference, not a node — same distinction onConnect
-                        // makes.
-                        mxSafe(() => { point.setAttribute('interfacename', srcName); return true; }, false);
-                    } else {
-                        mxSafe(() => {
-                            point.setAttribute(pending.nodeId.indexOf('g:') === 0 ? 'nodegraph' : 'nodename', srcName);
-                            return true;
-                        }, false);
-                        // output= only when the source really declares
-                        // several outputs — same guard as onConnect.
-                        const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
-                        const srcOuts = (srcNode && srcNode.data.outputs) || [];
-                        if (pending.port && srcOuts.length > 1) {
-                            mxSafe(() => { point.setAttribute('output', pending.port); return true; }, false);
-                        }
-                    }
-                    stashValueBeforeRemoval(point); // item 4a
-                    mxSafe(() => { point.removeAttribute('value'); return true; }, false);
+                    // A nodegraph interface input as source is a pin
+                    // reference, not a node — same distinction onConnect
+                    // makes (writeConnSource above).
+                    const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
+                    writeConnSource(point, pending.nodeId, pending.port, srcNode && srcNode.data.outputs);
                     targetFlowId = created.id;
                     targetInputName = inMatch.name;
                     srcId = pending.nodeId;
@@ -3418,7 +3392,7 @@
                         else el.setAttribute('type', type);
                         return true;
                     }, false);
-                    if (mxElType(el) !== type) mxSafe(() => { el.setAttribute('type', type); return true; }, false);
+                    if (mxElType(el) !== type) mxSetAttr(el, 'type', type);
                 }
 
                 const id = (kind === 'iface-input' ? 'i:' : 'o:') + name;
@@ -3440,20 +3414,13 @@
                 let pos = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
                 const host = panelRef.current;
-                if (inst && host) {
-                    const r = host.getBoundingClientRect();
-                    if (typeof inst.screenToFlowPosition === 'function') {
-                        pos = inst.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-                    } else if (typeof inst.project === 'function') {
-                        pos = inst.project({ x: r.width / 2, y: r.height / 2 });
-                    }
-                }
+                const centered = viewportCenterFlow(inst, host);
+                if (centered) pos = centered;
                 pos = {
                     x: pos.x - NODE_W / 2,
                     y: pos.y - nodeHeight({ inputs: data.inputs, outputs: data.outputs }) / 2,
                 };
-                mxSafe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
-                mxSafe(() => { el.setAttribute('ypos', String(Math.round((pos.y / 240) * 10000) / 10000)); return true; }, false);
+                writeFlowPos(el, pos.x, pos.y);
 
                 setDocRev((r) => r + 1);
                 markDirty();
@@ -3600,8 +3567,8 @@
                     }
                     const el = mxSafe(() => container.addNode(entry.category, newName, entry.type), null);
                     if (!el) continue;
-                    if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
-                    if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
+                    if (entry.nodedef) mxSetAttr(el, 'nodedef', entry.nodedef);
+                    if (entry.version) mxSetAttr(el, 'version', entry.version);
                     nameMap[entry.name] = newName;
                     created.push({ el, entry, newName });
                 }
@@ -3617,26 +3584,22 @@
                         const target = ensureTypedInput(parsed.doc, el, inp.name, inp.type);
                         if (!target) continue;
                         if (inp.nodename && nameMap[inp.nodename]) {
-                            mxSafe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
-                            if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            mxSetAttr(target, 'nodename', nameMap[inp.nodename]);
+                            if (inp.output) mxSetAttr(target, 'output', inp.output);
                             // Item 9: ensureTypedInput above may have copied the
                             // nodedef default VALUE onto this freshly-created
                             // input — a connected input must not also carry one.
-                            mxSafe(() => { target.removeAttribute('value'); return true; }, false);
+                            mxRemoveAttr(target, 'value');
                         } else if (inp.nodegraph && nameMap[inp.nodegraph]) {
-                            mxSafe(() => { target.setAttribute('nodegraph', nameMap[inp.nodegraph]); return true; }, false);
-                            if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            mxSetAttr(target, 'nodegraph', nameMap[inp.nodegraph]);
+                            if (inp.output) mxSetAttr(target, 'output', inp.output);
                             // Item 9: same as the nodename branch above.
-                            mxSafe(() => { target.removeAttribute('value'); return true; }, false);
+                            mxRemoveAttr(target, 'value');
                         } else if (inp.value !== '') {
                             mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                         }
                         if (inp.colorspace) {
-                            mxSafe(() => {
-                                if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
-                                else target.setAttribute('colorspace', inp.colorspace);
-                                return true;
-                            }, false);
+                            mxSetColorspace(target, inp.colorspace);
                         }
                     }
                 }
@@ -3649,25 +3612,13 @@
                 let center = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
                 const host = panelRef.current;
-                if (inst && host) {
-                    const r = host.getBoundingClientRect();
-                    if (typeof inst.screenToFlowPosition === 'function') {
-                        center = inst.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-                    } else if (typeof inst.project === 'function') {
-                        center = inst.project({ x: r.width / 2, y: r.height / 2 });
-                    }
-                }
+                const centered = viewportCenterFlow(inst, host);
+                if (centered) center = centered;
                 for (const { el, entry } of created) {
-                    const x = center.x + (entry.pos.x - cx);
-                    const y = center.y + (entry.pos.y - cy);
-                    mxSafe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
-                    mxSafe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
+                    writeFlowPos(el, center.x + (entry.pos.x - cx), center.y + (entry.pos.y - cy));
                 }
                 for (const { el, entry } of createdGraphs) {
-                    const x = center.x + (entry.pos.x - cx);
-                    const y = center.y + (entry.pos.y - cy);
-                    mxSafe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
-                    mxSafe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
+                    writeFlowPos(el, center.x + (entry.pos.x - cx), center.y + (entry.pos.y - cy));
                 }
                 setDocRev((r) => r + 1);
                 markDirty();
@@ -3725,8 +3676,8 @@
                 const nameSet = new Set(names);
                 setActionBusy('Grouping' + '\u2026');
                 (async () => {
-                    await new Promise((r) => requestAnimationFrame(r));
-                    await new Promise((r) => requestAnimationFrame(r));
+                    await nextFrame();
+                    await nextFrame();
                     // [mtlx-perf] timing (item 2) — off unless MTLX_PERF_LOG.
                     const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                     try {
@@ -3764,10 +3715,10 @@
                     for (const entry of entries) {
                         const el = mxSafe(() => g.addNode(entry.category, entry.name, entry.type), null);
                         if (!el) continue;
-                        if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
-                        if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
-                        mxSafe(() => { el.setAttribute('xpos', String(entry.pos.x)); return true; }, false);
-                        mxSafe(() => { el.setAttribute('ypos', String(entry.pos.y)); return true; }, false);
+                        if (entry.nodedef) mxSetAttr(el, 'nodedef', entry.nodedef);
+                        if (entry.version) mxSetAttr(el, 'version', entry.version);
+                        mxSetAttr(el, 'xpos', String(entry.pos.x));
+                        mxSetAttr(el, 'ypos', String(entry.pos.y));
                         inner[entry.name] = el;
                     }
 
@@ -3782,13 +3733,13 @@
                             if (internalSrc) {
                                 const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                 if (!target) continue;
-                                mxSafe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
-                                if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                mxSetAttr(target, 'nodename', inp.nodename);
+                                if (inp.output) mxSetAttr(target, 'output', inp.output);
                                 // Item 9: ensureTypedInput may have copied the
                                 // nodedef default VALUE onto this input — strip
                                 // it now that it's connected (matches the
                                 // external branch below, which already does this).
-                                mxSafe(() => { target.removeAttribute('value'); return true; }, false);
+                                mxRemoveAttr(target, 'value');
                                 continue;
                             }
                             const external = inp.nodename || inp.nodegraph || inp.interfacename;
@@ -3803,16 +3754,16 @@
                                         else gin.setAttribute('type', inp.type);
                                         return true;
                                     }, false);
-                                    if (mxElType(gin) !== inp.type) mxSafe(() => { gin.setAttribute('type', inp.type); return true; }, false);
+                                    if (mxElType(gin) !== inp.type) mxSetAttr(gin, 'type', inp.type);
                                 }
-                                if (inp.nodename) mxSafe(() => { gin.setAttribute('nodename', inp.nodename); return true; }, false);
-                                if (inp.nodegraph) mxSafe(() => { gin.setAttribute('nodegraph', inp.nodegraph); return true; }, false);
-                                if (inp.output) mxSafe(() => { gin.setAttribute('output', inp.output); return true; }, false);
+                                if (inp.nodename) mxSetAttr(gin, 'nodename', inp.nodename);
+                                if (inp.nodegraph) mxSetAttr(gin, 'nodegraph', inp.nodegraph);
+                                if (inp.output) mxSetAttr(gin, 'output', inp.output);
 
                                 const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                 if (!target) continue;
-                                mxSafe(() => { target.removeAttribute('value'); return true; }, false);
-                                mxSafe(() => { target.setAttribute('interfacename', pinName); return true; }, false);
+                                mxRemoveAttr(target, 'value');
+                                mxSetAttr(target, 'interfacename', pinName);
                                 continue;
                             }
                             if (inp.value !== '' && inp.value != null) {
@@ -3820,11 +3771,7 @@
                                 if (!target) continue;
                                 mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                                 if (inp.colorspace) {
-                                    mxSafe(() => {
-                                        if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
-                                        else target.setAttribute('colorspace', inp.colorspace);
-                                        return true;
-                                    }, false);
+                                    mxSetColorspace(target, inp.colorspace);
                                 }
                             }
                         }
@@ -3869,10 +3816,10 @@
                                             else gout.setAttribute('type', type);
                                             return true;
                                         }, false);
-                                        if (mxElType(gout) !== type) mxSafe(() => { gout.setAttribute('type', type); return true; }, false);
+                                        if (mxElType(gout) !== type) mxSetAttr(gout, 'type', type);
                                     }
-                                    mxSafe(() => { gout.setAttribute('nodename', srcName); return true; }, false);
-                                    if (outName && outs.length > 1) mxSafe(() => { gout.setAttribute('output', outName); return true; }, false);
+                                    mxSetAttr(gout, 'nodename', srcName);
+                                    if (outName && outs.length > 1) mxSetAttr(gout, 'output', outName);
                                     outPin = newPin;
                                     outPins[key] = outPin;
                                 }
@@ -3882,10 +3829,10 @@
                         const point = connectionPoint(e.target, e.targetHandle, true);
                         if (!point) continue;
                         clearConnAttrs(point);
-                        mxSafe(() => { point.setAttribute('nodegraph', gName); return true; }, false);
-                        mxSafe(() => { point.setAttribute('output', outPin); return true; }, false);
+                        mxSetAttr(point, 'nodegraph', gName);
+                        mxSetAttr(point, 'output', outPin);
                         stashValueBeforeRemoval(point); // item 4a
-                        mxSafe(() => { point.removeAttribute('value'); return true; }, false);
+                        mxRemoveAttr(point, 'value');
                     }
 
                     // 7: remove the original root nodes WITHOUT severing the
@@ -3900,8 +3847,8 @@
                     const xs = entries.map((en) => en.pos.x), ys = entries.map((en) => en.pos.y);
                     const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
                     const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
-                    mxSafe(() => { g.setAttribute('xpos', String(cx)); return true; }, false);
-                    mxSafe(() => { g.setAttribute('ypos', String(cy)); return true; }, false);
+                    mxSetAttr(g, 'xpos', String(cx));
+                    mxSetAttr(g, 'ypos', String(cy));
 
                     setDocRev((r) => r + 1);
                     markDirty();
@@ -3964,8 +3911,8 @@
                 if (mxElAttr(g, 'nodedef')) return;
                 setActionBusy('Ungrouping' + '\u2026');
                 (async () => {
-                    await new Promise((r) => requestAnimationFrame(r));
-                    await new Promise((r) => requestAnimationFrame(r));
+                    await nextFrame();
+                    await nextFrame();
                     // [mtlx-perf] timing — off unless MTLX_PERF_LOG.
                     const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                     let __nodeCount = 0;
@@ -3975,7 +3922,7 @@
                         // and step 6 below removes g.
                         const pinsSnapshot = vecToArray(mxSafe(() => g.getInputs(), [])).map((p) => ({
                             name: mxElName(p), type: mxElType(p),
-                            value: mxSafe(() => p.getAttribute('value'), ''),
+                            value: mxElAttr(p, 'value'),
                             colorspace: mxElAttr(p, 'colorspace'),
                             nodename: mxElAttr(p, 'nodename'),
                             nodegraph: mxElAttr(p, 'nodegraph'),
@@ -4053,13 +4000,13 @@
                         for (const entry of entries) {
                             const el = mxSafe(() => doc.addNode(entry.category, nameMap[entry.name], entry.type), null);
                             if (!el) continue;
-                            if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
-                            if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
+                            if (entry.nodedef) mxSetAttr(el, 'nodedef', entry.nodedef);
+                            if (entry.version) mxSetAttr(el, 'version', entry.version);
                             if (entry.pos) {
                                 const x = entry.pos.x + (graphPos.x - centroid.x);
                                 const y = entry.pos.y + (graphPos.y - centroid.y);
-                                mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
-                                mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                                mxSetAttr(el, 'xpos', String(x));
+                                mxSetAttr(el, 'ypos', String(y));
                             }
                             created[entry.name] = el;
                         }
@@ -4075,17 +4022,13 @@
                         const applyPinSource = (point, pin) => {
                             clearConnAttrs(point);
                             if (pin.nodename || pin.nodegraph) {
-                                if (pin.nodename) mxSafe(() => { point.setAttribute('nodename', pin.nodename); return true; }, false);
-                                if (pin.nodegraph) mxSafe(() => { point.setAttribute('nodegraph', pin.nodegraph); return true; }, false);
-                                if (pin.output) mxSafe(() => { point.setAttribute('output', pin.output); return true; }, false);
+                                if (pin.nodename) mxSetAttr(point, 'nodename', pin.nodename);
+                                if (pin.nodegraph) mxSetAttr(point, 'nodegraph', pin.nodegraph);
+                                if (pin.output) mxSetAttr(point, 'output', pin.output);
                             } else if (pin.value !== '' && pin.value != null) {
                                 mxSafe(() => { mxWriteValue(point, pin.value, pin.type); return true; }, false);
                                 if (pin.colorspace) {
-                                    mxSafe(() => {
-                                        if (typeof point.setColorSpace === 'function') point.setColorSpace(pin.colorspace);
-                                        else point.setAttribute('colorspace', pin.colorspace);
-                                        return true;
-                                    }, false);
+                                    mxSetColorspace(point, pin.colorspace);
                                 }
                             }
                             // else: the pin itself carried neither — leave
@@ -4117,8 +4060,8 @@
                                     const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                     if (!target) continue;
                                     clearConnAttrs(target);
-                                    mxSafe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
-                                    if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                    mxSetAttr(target, 'nodename', nameMap[inp.nodename]);
+                                    if (inp.output) mxSetAttr(target, 'output', inp.output);
                                     continue;
                                 }
                                 if (inp.nodegraph) {
@@ -4134,9 +4077,9 @@
                                     const target = ensureTypedInput(doc, el, inp.name, inp.type);
                                     if (!target) continue;
                                     clearConnAttrs(target);
-                                    mxSafe(() => { target.setAttribute('nodegraph', inp.nodegraph); return true; }, false);
-                                    if (inp.nodename) mxSafe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
-                                    if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                    mxSetAttr(target, 'nodegraph', inp.nodegraph);
+                                    if (inp.nodename) mxSetAttr(target, 'nodename', inp.nodename);
+                                    if (inp.output) mxSetAttr(target, 'output', inp.output);
                                     continue;
                                 }
                                 if (inp.value !== '' && inp.value != null) {
@@ -4144,11 +4087,7 @@
                                     if (!target) continue;
                                     mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                                     if (inp.colorspace) {
-                                        mxSafe(() => {
-                                            if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
-                                            else target.setAttribute('colorspace', inp.colorspace);
-                                            return true;
-                                        }, false);
+                                        mxSetColorspace(target, inp.colorspace);
                                     }
                                 }
                             }
@@ -4210,7 +4149,7 @@
                                 const newName = nameMap[outSnap.nodename];
                                 if (!newName) continue;
                                 clearConnAttrs(point);
-                                mxSafe(() => { point.setAttribute('nodename', newName); return true; }, false);
+                                mxSetAttr(point, 'nodename', newName);
                                 // output= whenever the ORIGINAL graph output
                                 // snapshot explicitly named a port — even if
                                 // the recreated source's own outputsCount
@@ -4219,7 +4158,7 @@
                                 // multi-output; only omit output= when the
                                 // original never had one to disambiguate.
                                 if (outSnap.output) {
-                                    mxSafe(() => { point.setAttribute('output', outSnap.output); return true; }, false);
+                                    mxSetAttr(point, 'output', outSnap.output);
                                 }
                             } else if (outSnap.interfacename) {
                                 // Pass-through output: the graph's <output>
@@ -4521,8 +4460,8 @@
                     if (!el) continue;
                     const x = Math.round((n.position.x / 240) * 10000) / 10000;
                     const y = Math.round((n.position.y / 240) * 10000) / 10000;
-                    mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
-                    mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                    mxSetAttr(el, 'xpos', String(x));
+                    mxSetAttr(el, 'ypos', String(y));
                     wrote = true;
                 }
                 if (wrote) markDirty();
@@ -4855,7 +4794,7 @@
             // that nodedef belongs to.
             const currentDefName = React.useMemo(() => {
                 if (!panelSigGroups) return '';
-                const c = scope ? mxSafe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc;
+                const c = scopeContainer();
                 const el = c && mxSafe(() => c.getNode(displayNode.id.slice(2)), null);
                 if (!el) return '';
                 const def = resolveVersionedNodeDef(el, parsed.doc);
@@ -5206,7 +5145,7 @@
                                         const v = e.target.value;
                                         setDocColorspace(v);
                                         if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
-                                        else mxSafe(() => { parsed.doc.removeAttribute('colorspace'); return true; }, false);
+                                        else mxRemoveAttr(parsed.doc, 'colorspace');
                                         setDocRev((r) => r + 1);
                                         markDirty();
                                         e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */

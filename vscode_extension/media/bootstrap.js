@@ -318,107 +318,106 @@
     var lastDocName = null;
     var lastBlobMap = null;
 
-    // NOTE: this is NOT the only postMessage traffic this page can see —
-    // the site's own graph-editor docs dialog embeds
-    // index.html?embed=1#/... in an <iframe>, and code under js/docs/
-    // posts messages for that iframe's own close/resize signaling. Those
-    // have a different shape (no `.type === 'mtlx-open'`) and target the
-    // iframe's parent window rather than this top-level webview document
-    // — but the type check below is kept regardless, both as
-    // defense-in-depth and because a future site change could add other
-    // message shapes at this level.
-    window.addEventListener('message', function (event) {
-        var msg = event.data;
-        if (!msg) return;
+    // One function per window 'message' type this webview handles; the
+    // listener registered below (after these declarations) is reduced to
+    // a dispatch over them. Split out of what was previously one large
+    // inline handler purely for readability — every closure capture
+    // (pendingFetches, pendingSave, lastDocName/lastBlobMap, vscodeApi,
+    // ...) and every early-return guard is unchanged from before the
+    // split.
 
-        // 'mtlx-fetch-result': the extension host answering an
-        // 'mtlx-fetch' posted by the fetch() bridge above. Settle and
-        // forget the pending entry; unknown/duplicate ids are ignored.
-        if (msg.type === 'mtlx-fetch-result') {
-            var pending = pendingFetches[msg.id];
-            if (!pending) return;
-            delete pendingFetches[msg.id];
-            if (msg.ok && msg.bytesB64) {
-                pending.resolve(new Response(base64ToUint8(msg.bytesB64), {
-                    status: 200,
-                    headers: {
-                        'Content-Type': /\.wasm$/.test(pending.path)
-                            ? 'application/wasm'
-                            : 'application/octet-stream',
-                    },
-                }));
-            } else {
-                pending.fallback();
-            }
-            return;
+    // 'mtlx-fetch-result': the extension host answering an 'mtlx-fetch'
+    // posted by the fetch() bridge above. Settle and forget the pending
+    // entry; unknown/duplicate ids are ignored.
+    function handleFetchResult(msg) {
+        var pending = pendingFetches[msg.id];
+        if (!pending) return;
+        delete pendingFetches[msg.id];
+        if (msg.ok && msg.bytesB64) {
+            pending.resolve(new Response(base64ToUint8(msg.bytesB64), {
+                status: 200,
+                headers: {
+                    'Content-Type': /\.wasm$/.test(pending.path)
+                        ? 'application/wasm'
+                        : 'application/octet-stream',
+                },
+            }));
+        } else {
+            pending.fallback();
         }
+    }
 
-        // 'mtlx-save-result': the extension host answering an 'mtlx-save'
-        // posted by the Ctrl/Cmd+S handler below. Settle the one in-flight
-        // save (there is never more than one outstanding — the keydown
-        // handler doesn't post a new 'mtlx-save' until the previous one
-        // settles) and forget it; a stray/duplicate reply with nothing
-        // pending is ignored.
-        if (msg.type === 'mtlx-save-result') {
-            if (!pendingSave) return;
-            var settleSave = pendingSave;
-            pendingSave = null;
-            if (msg.ok) settleSave.resolve();
-            else settleSave.reject(new Error(msg.error || 'save failed'));
-            return;
-        }
+    // 'mtlx-save-result': the extension host answering an 'mtlx-save'
+    // posted by the Ctrl/Cmd+S handler below. Settle the one in-flight
+    // save (there is never more than one outstanding — the keydown
+    // handler doesn't post a new 'mtlx-save' until the previous one
+    // settles) and forget it; a stray/duplicate reply with nothing
+    // pending is ignored.
+    function handleSaveResult(msg) {
+        if (!pendingSave) return;
+        var settleSave = pendingSave;
+        pendingSave = null;
+        if (msg.ok) settleSave.resolve();
+        else settleSave.reject(new Error(msg.error || 'save failed'));
+    }
 
-        // 'mtlx-request-save': the extension host asking this webview to
-        // save, posted by editorProvider.js's saveActiveGraph() in
-        // response to the materialxPlayground.saveGraph command (the
-        // contributed Ctrl+S keybinding — see the comment above
-        // requestGraphSave() for why that's the primary path now).
-        // Reuses the exact same function the in-page keydown fallback
-        // calls, guard and all.
-        if (msg.type === 'mtlx-request-save') {
-            requestGraphSave();
-            return;
-        }
+    // 'mtlx-request-save': the extension host asking this webview to
+    // save, posted by editorProvider.js's saveActiveGraph() in response
+    // to the materialxPlayground.saveGraph command (the contributed
+    // Ctrl+S keybinding — see the comment above requestGraphSave() for
+    // why that's the primary path now). Reuses the exact same function
+    // the in-page keydown fallback calls, guard and all.
+    function handleRequestSave() {
+        requestGraphSave();
+    }
 
-        // 'mtlx-request-undo' / 'mtlx-request-redo': the extension host
-        // asking this webview to undo/redo, posted by editorProvider.js's
-        // undoActiveGraph()/redoActiveGraph() in response to the
-        // materialxPlayground.undoGraph/redoGraph commands (the contributed
-        // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y keybindings). Same primary-path
-        // rationale as Ctrl+S above — the workbench keybinding service, not
-        // this page, is the reliable responder for a chord VS Code also
-        // wants — but these keybindings additionally SHADOW VS Code's own
-        // text-document undo/redo while our editor is active. Undo/redo now
-        // defer to VS Code's own NATIVE document undo/redo (requested via
-        // 'mtlx-native-undo'/'mtlx-native-redo', handled host-side in
-        // editorProvider.js) rather than a separate JS-side graph undo
-        // stack: the document buffer is kept continuously in sync via
-        // window.__mtlxNotifyEdit ('mtlx-sync', see above), so the native
-        // stack already reflects every graph edit. The guards below (graph
-        // view visible, not focused in a text field) still matter because
-        // the contributed keybinding fires unconditionally regardless of
-        // webview-internal DOM focus.
-        if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') {
-            // No-op unless the Graph view is the visible/mounted one —
-            // same guard requestGraphSave() uses.
-            if (location.hash.indexOf('#!graph') !== 0) return;
-            var isUndo = msg.type === 'mtlx-request-undo';
-            // No-op when focus is in an editable element: a text field's
-            // native undo already handled the chord in-page (e.g. a label
-            // being typed into), so this contributed keybinding firing on
-            // top of it must not ALSO undo a graph edit.
-            var active = document.activeElement;
-            var isEditable = active && (
-                active.isContentEditable
-                || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '')
-            );
-            if (isEditable) return;
-            vscodeApi.postMessage({ type: isUndo ? 'mtlx-native-undo' : 'mtlx-native-redo' });
-            return;
-        }
+    // 'mtlx-request-undo' / 'mtlx-request-redo': the extension host
+    // asking this webview to undo/redo, posted by editorProvider.js's
+    // undoActiveGraph()/redoActiveGraph() in response to the
+    // materialxPlayground.undoGraph/redoGraph commands (the contributed
+    // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y keybindings). Same primary-path
+    // rationale as Ctrl+S above — the workbench keybinding service, not
+    // this page, is the reliable responder for a chord VS Code also
+    // wants — but these keybindings additionally SHADOW VS Code's own
+    // text-document undo/redo while our editor is active. Undo/redo now
+    // defer to VS Code's own NATIVE document undo/redo (requested via
+    // 'mtlx-native-undo'/'mtlx-native-redo', handled host-side in
+    // editorProvider.js) rather than a separate JS-side graph undo
+    // stack: the document buffer is kept continuously in sync via
+    // window.__mtlxNotifyEdit ('mtlx-sync', see above), so the native
+    // stack already reflects every graph edit. The guards below (graph
+    // view visible, not focused in a text field) still matter because
+    // the contributed keybinding fires unconditionally regardless of
+    // webview-internal DOM focus.
+    function handleRequestUndoRedo(msg) {
+        // No-op unless the Graph view is the visible/mounted one —
+        // same guard requestGraphSave() uses.
+        if (location.hash.indexOf('#!graph') !== 0) return;
+        var isUndo = msg.type === 'mtlx-request-undo';
+        // No-op when focus is in an editable element: a text field's
+        // native undo already handled the chord in-page (e.g. a label
+        // being typed into), so this contributed keybinding firing on
+        // top of it must not ALSO undo a graph edit.
+        var active = document.activeElement;
+        var isEditable = active && (
+            active.isContentEditable
+            || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '')
+        );
+        if (isEditable) return;
+        vscodeApi.postMessage({ type: isUndo ? 'mtlx-native-undo' : 'mtlx-native-redo' });
+    }
 
-        if (msg.type !== 'mtlx-open') return;
-
+    // 'mtlx-open': editorProvider.js posts { type: 'mtlx-open', mode,
+    // name, xml, filesB64 } (resolveCustomTextEditor's sendUpdate()) once
+    // on initial load and again on every debounced text-document change
+    // (live reload), or { type: 'mtlx-open', mode: 'docs', hash } for a
+    // docs-panel (re)navigation. lastDocName/lastBlobMap are remembered
+    // here (module-scoped, not function-local) so the hashchange listener
+    // further down (Graph -> Viewer sync on view switch) can hand the
+    // Viewer the same name/texture-blob context the Graph editor itself
+    // was loaded with, even though that sync fires long after this
+    // function returns and the original payload is out of scope.
+    function handleOpen(msg) {
         var mode = msg.mode;
         var name = msg.name;
         var xml = msg.xml;
@@ -486,11 +485,39 @@
         } else if (mode === 'docs') {
             // No document payload contract for the docs view (it has no
             // per-file state to import) — just make sure the hash agrees.
-            // A reused docs panel (the materialxPlayground.openDocs command's
-            // singleton) is re-navigated this way; msg.hash is always
-            // '#!docs' in practice today (the command only ever sends that).
+            // A reused docs panel (the materialxPlayground.openDocs
+            // command's singleton) is re-navigated this way. msg.hash is
+            // NOT always '#!docs' in practice: the hover "Open
+            // Interactive Documentation" deep link (extension.js builds
+            // the hash, editorProvider.js's openDocsPanel forwards it as
+            // this same 'mtlx-open'/mode:'docs' message) routinely sends
+            // '#/<category>?sig=…' through this exact path — the
+            // '#!docs' fallback below only fires when msg.hash itself is
+            // falsy (a no-arg/category-less open: Command Palette,
+            // explorer context menu, or a reused panel with nothing more
+            // specific to show).
             location.hash = msg.hash || '#!docs';
         }
+    }
+
+    // NOTE: this is NOT the only postMessage traffic this page can see —
+    // the site's own graph-editor docs dialog embeds
+    // index.html?embed=1#/... in an <iframe>, and code under js/docs/
+    // posts messages for that iframe's own close/resize signaling. Those
+    // have a different shape (no `.type === 'mtlx-open'`) and target the
+    // iframe's parent window rather than this top-level webview document
+    // — but the type check below is kept regardless, both as
+    // defense-in-depth and because a future site change could add other
+    // message shapes at this level.
+    window.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg) return;
+        if (msg.type === 'mtlx-fetch-result') { handleFetchResult(msg); return; }
+        if (msg.type === 'mtlx-save-result') { handleSaveResult(msg); return; }
+        if (msg.type === 'mtlx-request-save') { handleRequestSave(msg); return; }
+        if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') { handleRequestUndoRedo(msg); return; }
+        if (msg.type !== 'mtlx-open') return;
+        handleOpen(msg);
     }, false);
 
     // ------------------------------------------------------------------

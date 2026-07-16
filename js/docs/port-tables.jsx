@@ -24,20 +24,31 @@
             return [];
         };
 
+        // def.getActiveInputs()/getActiveOutputs(), falling back to
+        // getInputs()/getOutputs() on older bindings that don't expose the
+        // Active variants — the vecToArray-wrapped pattern repeated at
+        // every nodedef-walking helper below.
+        const defInputs = (def) => vecToArray(def.getActiveInputs ? def.getActiveInputs()
+            : (def.getInputs ? def.getInputs() : null));
+        const defOutputs = (def) => vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
+            : (def.getOutputs ? def.getOutputs() : null));
+        // An input/output element's type, or '' if the wasm binding throws
+        // (e.g. a detached/invalid element) — used wherever a type is only
+        // needed for a display/signature string and a thrown exception
+        // shouldn't abort the whole computation.
+        const safeType = (el) => { try { return el.getType(); } catch (e) { return ''; } };
+
         // A TYPE-SIGNATURE key for a WASM nodedef — the ordered input types
         // plus the resolved output type, independent of version. Two
         // nodedefs sharing this key are the SAME signature at different
         // VERSIONS (standard_surface 1.0.1 / 1.0.0: identical ports, only
         // defaults differ) — see dedupeDefsBySignature.
         const nodeDefSigKey = (def) => {
-            const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
-                : (def.getInputs ? def.getInputs() : null));
-            const inTypes = inputs.map((inp) => { try { return inp.getType(); } catch (e) { return ''; } }).join(',');
+            const inTypes = defInputs(def).map(safeType).join(',');
             let outType = '';
             try { outType = def.getType(); } catch (e) { /* none */ }
-            const outs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
-                : (def.getOutputs ? def.getOutputs() : null));
-            if (outs.length) outType = outs.map((o) => { try { return o.getType(); } catch (e) { return ''; } }).join('+');
+            const outs = defOutputs(def);
+            if (outs.length) outType = outs.map(safeType).join('+');
             return outType + '|' + inTypes;
         };
 
@@ -72,8 +83,7 @@
                 try { isDefaultVersion = !!(def.getDefaultVersion && def.getDefaultVersion()); } catch (e) { /* none */ }
                 const defaults = {};
                 const inputTypes = {};
-                const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
-                    : (def.getInputs ? def.getInputs() : null));
+                const inputs = defInputs(def);
                 for (const inp of inputs) {
                     let nm = '', dv = '';
                     try { nm = inp.getName(); } catch (e) { /* skip */ }
@@ -83,8 +93,7 @@
                     try { inputTypes[nm] = inp.getType(); } catch (e) { /* none */ }
                 }
                 const outputTypes = {};
-                const outputs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
-                    : (def.getOutputs ? def.getOutputs() : null));
+                const outputs = defOutputs(def);
                 if (outputs.length) {
                     for (const out of outputs) {
                         let nm = '';
@@ -161,8 +170,7 @@
             for (const def of defs) {
                 const ports = {};
                 let anyEnum = false;
-                const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
-                    : (def.getInputs ? def.getInputs() : null));
+                const inputs = defInputs(def);
                 for (const inp of inputs) {
                     let dv = '', enumv = '';
                     try { dv = (inp.getValueString && inp.getValueString()) || ''; } catch (e) { /* none */ }
@@ -171,8 +179,7 @@
                     if (enumv) { row.accepted_values = enumv; anyEnum = true; }
                     ports[inp.getName()] = row;
                 }
-                const outs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
-                    : (def.getOutputs ? def.getOutputs() : null));
+                const outs = defOutputs(def);
                 if (outs.length === 0) {
                     let t = 'output';
                     try { t = def.getType(); } catch (e) { /* keep */ }
@@ -279,7 +286,8 @@
 
         const signatureLabel = (table) => {
             const ports = table.ports || {};
-            const names = Object.keys(ports);            const inTypes = uniqTypeTokens(names
+            const names = Object.keys(ports);
+            const inTypes = uniqTypeTokens(names
                 .filter(n => !isOutputPort(n, ports[n]))
                 .map(n => resolveType(ports, n)));
             const outTypes = uniqTypeTokens(names
@@ -502,6 +510,7 @@
 
         // ---- public API ----
         // headerLabel, the column-layout consts (CANONICAL_ORDER etc.),
+        // the nodedef-walking helpers (defInputs, defOutputs, safeType),
         // and the signature-label helper cluster (SAME_AS_RE, resolveType,
         // isOutputPort, uniqTypeTokens, signatureLabel, SIG_CONCRETE_TOKEN,
         // SIG_PREVIEW_PREFERENCE, SIG_FAMILY_EXPANSIONS, expandSigToken)
