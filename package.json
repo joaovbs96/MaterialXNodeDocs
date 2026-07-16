@@ -67,7 +67,8 @@
     "commands": [
       {
         "command": "materialxPlayground.open",
-        "title": "MaterialX Playground: Open MaterialX Document"
+        "title": "MaterialX Playground: Open MaterialX Document",
+        "enablement": "resourceExtname == .mtlx"
       },
       {
         "command": "materialxPlayground.openDocs",
@@ -112,9 +113,23 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx"
+        },
+        {
+          "command": "materialxPlayground.openDocs"
+        }
+      ],
       "explorer/context": [
         {
           "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
         }
@@ -122,6 +137,11 @@
       "editor/title/context": [
         {
           "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
         }
@@ -138,6 +158,24 @@
           ],
           "default": "viewer",
           "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible — use the header nav to switch to the other."
+        },
+        "materialx.openBehavior": {
+          "type": "string",
+          "enum": [
+            "splitRight",
+            "sameGroup"
+          ],
+          "default": "splitRight",
+          "enumDescriptions": [
+            "Open the playground beside the text editor for the same file, reusing an existing right-hand editor group on repeat opens instead of splitting again every time.",
+            "Open the playground in the active editor group (the previous behavior)."
+          ],
+          "description": "Where the MaterialX Playground opens when a text editor for the same .mtlx file is visible: \"splitRight\" opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; \"sameGroup\" opens it in the active editor group, replacing (or reusing) whatever tab is already there — the previous behavior."
+        },
+        "materialx.autoOpenPlayground": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open — closing the playground won't re-trigger it until the file itself is closed and reopened."
         }
       }
     }

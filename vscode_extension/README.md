@@ -32,15 +32,42 @@ dependencies — it runs directly out of a checkout of this repo.
 - **Open With…**: right-click a `.mtlx` file (in the editor tab or the
   Explorer) -> *Open With…* -> **MaterialX Playground**. Opens with the
   configured default view visible first (see Settings below).
-- **Explorer context menu / Command Palette**: right-click a `.mtlx` file
-  in the Explorer, or run from the Command Palette (`Ctrl+Shift+P`) with
-  a `.mtlx` file active:
+- **Explorer context menu / editor tab context menu / Command Palette**:
+  right-click a `.mtlx` file (in the Explorer or an editor tab), or run
+  from the Command Palette (`Ctrl+Shift+P`):
   - `Send to MaterialX Playground` — loads the file into both the
     Material Viewer and the Node Graph Editor at once; `materialx.defaultView`
     picks which one is shown first, and the header nav switches to the
-    other, already-loaded view.
+    other, already-loaded view. Only available for `.mtlx` files — the
+    Command Palette entry is hidden entirely unless a `.mtlx` file is
+    active, and the command itself is disabled outside that context. See
+    "Opening the playground" below for *where* it opens.
   - `MaterialX: Open Node Documentation` — opens the node-library docs
-    view on its own, with no file involved.
+    view on its own, with no file involved. Available from the Command
+    Palette at any time (no `.mtlx` file needed), and also from the
+    Explorer/editor-tab context menu on a `.mtlx` file, right alongside
+    `Send to MaterialX Playground`.
+
+### Opening the playground
+
+- **Placement** (`materialx.openBehavior`, default `"splitRight"`): when
+  a text editor for the same `.mtlx` file is already open and visible,
+  the playground opens **beside it**, reusing an existing right-hand
+  editor group on repeat opens instead of creating a fresh split every
+  time. Set this to `"sameGroup"` to instead always open in the active
+  editor group (the previous behavior). If there's no open text editor
+  for the file to split against (e.g. an Explorer right-click on a file
+  nothing has opened yet), or a playground tab for the file is already
+  open somewhere, the extension falls back sensibly — opening in the
+  active group, or revealing the existing playground tab, respectively —
+  regardless of this setting.
+- **Auto-open** (`materialx.autoOpenPlayground`, default `false`): when
+  enabled, opening (or switching to) a `.mtlx` file automatically opens
+  the playground beside it, without stealing keyboard focus from the text
+  editor. This fires once per file per "open": closing the playground tab
+  by hand does not pop it back open just by switching away from and back
+  to the same `.mtlx` editor — only closing and reopening the `.mtlx`
+  file itself re-arms it.
 
 ### Node Graph Editor: saving
 
@@ -184,6 +211,18 @@ editor.
   `.mtlx` file is opened. The document is loaded into both views either
   way; this only picks the initially visible one — use the header nav to
   switch to the other.
+- `materialx.openBehavior` (`"splitRight"` | `"sameGroup"`, default
+  `"splitRight"`) — where the playground opens when a text editor for the
+  same `.mtlx` file is visible: `"splitRight"` opens it beside that
+  editor, reusing an existing right-hand editor group instead of
+  splitting again on every open; `"sameGroup"` opens it in the active
+  editor group instead (the previous behavior). See "Opening the
+  playground" under Usage above for the fallback behavior when there's
+  nothing to split against.
+- `materialx.autoOpenPlayground` (boolean, default `false`) —
+  automatically open the playground beside the text editor whenever a
+  `.mtlx` file is opened. See "Opening the playground" under Usage above
+  for exactly when this re-triggers.
 
 ## Requirements
 
