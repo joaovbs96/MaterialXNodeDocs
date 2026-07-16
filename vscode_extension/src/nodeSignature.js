@@ -287,38 +287,74 @@ function buildSigToken(ctx) {
 }
 
 // ---------------------------------------------------------------------
-// renderPortsMarkdown — a per-port DEFINITION LIST rendering of one port
-// TABLE ({headers, ports: {name: {type, default, description, ...}}}),
-// sized for a hover tooltip rather than the full docs page. This
-// replaces an earlier GFM pipe-table rendering: VS Code's hover CSS
-// renders pipe tables WITHOUT visible cell borders and stretches columns
-// unreadably (verified — `supportHtml` doesn't help either, since the
-// markdown sanitizer strips style attributes and the same CSS still
-// applies to the resulting plain <table>). A definition list with
-// code-span "chips" for name/type/default reads far better in that same
-// hover CSS: one block per port (name/type/default chips on one line,
-// description on the next), preceded by a "**Signature:**" line (see
-// signatureLabel above). `accepted_values` is dropped entirely (the
-// interactive docs page is the source of truth for enum lists), footnote
-// references are stripped (a hover has no References section to resolve
-// them against), long descriptions are truncated on a word boundary, and
+// renderPortsMarkdown — a MONOSPACE, box-drawing-aligned table rendering
+// of one port TABLE ({headers, ports: {name: {type, default,
+// description, ...}}}) inside a fenced code block, sized for a hover
+// tooltip rather than the full docs page. Two prior renderings were
+// rejected: a GFM pipe table (VS Code's hover CSS renders pipe tables
+// WITHOUT visible cell borders and stretches columns unreadably —
+// verified; `supportHtml` doesn't help either, since the markdown
+// sanitizer strips style attributes and the same CSS still applies to
+// the resulting plain <table>) and a per-port definition list (readable
+// but "not a table"). A fenced code block is the one RELIABLE way to
+// show an aligned table with visible lines in a hover: hovers render
+// code blocks in the monospace editor font with a themed background, so
+// space-padded columns and box-drawing rules (│ ─ ┼) line up exactly.
+//
+// Layout: the "**Signature:**" markdown line first (see signatureLabel
+// above), then the ```text block — header row, a ─/┼ separator row,
+// then one data row per port (word-wrapped to per-column width caps,
+// row height = tallest cell) — then the "…and N more ports" italic
+// markdown line AFTER the block when the port cap kicked in. Columns
+// (Port | Type | Default | Description, in that order) are included
+// only when at least one port actually has content for them.
+// `accepted_values` is dropped entirely (the interactive docs page is
+// the source of truth for enum lists), footnote references are stripped
+// (a hover has no References section to resolve them against), long
+// descriptions are truncated on a word boundary BEFORE wrapping, and
 // the port count is capped so one giant node (e.g. a closure with 20+
 // inputs) can't produce an unreadable wall of hover text.
 const FOOTNOTE_REF_RE = /\[\^[^\]\s]+\]/g;
 const DESCRIPTION_MAX_LEN = 120;
 const MAX_TABLE_ROWS = 14;
+const COLUMN_LABELS = { port: 'Port', type: 'Type', default: 'Default', description: 'Description' };
+
+// Per-column width caps (chars), chosen so even a worst-case table
+// (every column present and maxed out) stays under MAX_TABLE_WIDTH and
+// the hover never scrolls horizontally — the Description column is
+// additionally shrunk at render time when the OTHER columns' actual
+// widths would push the total past MAX_TABLE_WIDTH.
+const COL_WIDTH_CAPS = { port: 14, type: 26, default: 12, description: 44 };
+const MAX_TABLE_WIDTH = 95;
+// U+2502 (│) between cells; the separator row mirrors it with U+2500/
+// U+253C (─┼─) so the joints line up column-for-column in a monospace
+// font.
+const CELL_SEPARATOR = ' │ ';
 
 function stripFootnoteRefs(s) {
     return s.replace(FOOTNOTE_REF_RE, '');
 }
 
-// Text placed INSIDE a `code span` (port name/type/default) must not
-// carry a backtick (would terminate the span early) or a pipe (harmless
-// in a definition list, but stripped anyway per the same "keep chip text
-// clean" rule) — never applied to the free-text description paragraph,
-// which isn't wrapped in a code span.
+// Text placed INSIDE a `code span` (the Signature line) must not carry
+// a backtick (would terminate the span early) or a pipe (stripped per
+// the same "keep chip text clean" rule).
 function sanitizeChip(s) {
     return s.replace(/[`|]/g, '');
+}
+
+// Cell text destined for the fenced code block: collapse ALL internal
+// whitespace/newlines to single spaces (a cell must be one logical line
+// before wrapping), neutralize any ``` run (would terminate the fence
+// early), and swap the table's own box-drawing chars for their ASCII
+// lookalikes so crafted spec text can't fake a column boundary.
+function sanitizeCodeCell(s) {
+    return s
+        .replace(/\s+/g, ' ')
+        .replace(/`{3,}/g, '``')
+        .replace(/│/g, '|')
+        .replace(/─/g, '-')
+        .replace(/┼/g, '+')
+        .trim();
 }
 
 // Truncates on a word boundary (never mid-word) and appends an ellipsis;
@@ -335,9 +371,46 @@ function truncateDescription(s) {
 function cellText(raw, isDescription) {
     let s = raw == null ? '' : String(raw).trim();
     if (!s) return '';
-    s = stripFootnoteRefs(s);
+    s = sanitizeCodeCell(stripFootnoteRefs(s));
     if (isDescription) s = truncateDescription(s);
     return s;
+}
+
+// Greedy word-wrap of one (already whitespace-collapsed) cell to `width`
+// chars. A word longer than the width is split — preferring a break
+// AFTER each ',' (so a long comma-separated type union breaks between
+// member types, never mid-name; the fragments then rejoin with a normal
+// space when they share a line, which reads fine for a type union) —
+// then hard-chunked to the width as a last resort (a single very long
+// unbreakable token). Always returns at least one (possibly empty) line,
+// every line <= width.
+function wrapCell(text, width) {
+    if (!text) return [''];
+    const words = [];
+    for (const word of text.split(' ')) {
+        if (word.length <= width) { words.push(word); continue; }
+        const segs = word.split(',');
+        for (let i = 0; i < segs.length; i++) {
+            const seg = i < segs.length - 1 ? segs[i] + ',' : segs[i];
+            if (!seg) continue;
+            for (let at = 0; at < seg.length; at += width) {
+                words.push(seg.slice(at, at + width));
+            }
+        }
+    }
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+        if (!cur) cur = w;
+        else if (cur.length + 1 + w.length <= width) cur += ' ' + w;
+        else { lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines.length ? lines : [''];
+}
+
+function padCell(s, width) {
+    return s + ' '.repeat(Math.max(0, width - s.length));
 }
 
 function renderPortsMarkdown(table) {
@@ -346,45 +419,78 @@ function renderPortsMarkdown(table) {
         const portNames = Object.keys(table.ports);
         if (!portNames.length) return '';
 
-        const blocks = [];
+        const parts = [];
 
-        // Signature line first, e.g. "**Signature:** `boolean, integer,
-        // float, colorN, vectorN → surfaceshader`" — omitted entirely
-        // (rather than printed empty) when signatureLabel can't derive
-        // anything useful for this table.
+        // Signature line first (plain markdown, OUTSIDE the code block),
+        // e.g. "**Signature:** `boolean, integer, float, colorN, vectorN
+        // → surfaceshader`" — omitted entirely (rather than printed
+        // empty) when signatureLabel can't derive anything useful for
+        // this table.
         const sigLabel = signatureLabel(table);
         if (sigLabel) {
-            blocks.push('**Signature:** `' + sanitizeChip(sigLabel) + '`');
+            parts.push('**Signature:** `' + sanitizeChip(sigLabel) + '`');
         }
 
         const shown = portNames.slice(0, MAX_TABLE_ROWS);
-        for (const pn of shown) {
+
+        // A column is included only when at least one port row has real
+        // content for it — a table whose spec entry never carries a
+        // "Default" column (for instance) shouldn't render an all-empty
+        // Default column in the hover.
+        const CANDIDATE_COLS = ['type', 'default', 'description'];
+        const presentCols = CANDIDATE_COLS.filter((col) =>
+            portNames.some((pn) => {
+                const v = table.ports[pn] && table.ports[pn][col];
+                return v != null && String(v).trim() !== '';
+            })
+        );
+        const cols = ['port'].concat(presentCols);
+
+        // Sanitized/truncated cell text per shown row, in column order.
+        const rows = shown.map((pn) => {
             const row = table.ports[pn] || {};
-            const name = sanitizeChip(stripFootnoteRefs(String(pn || '').trim()));
-            if (!name) continue;
-            const type = sanitizeChip(cellText(row.type, false));
-            const def = sanitizeChip(cellText(row.default, false));
+            return cols.map((c) => (c === 'port' ? cellText(pn, false) : cellText(row[c], c === 'description')));
+        });
 
-            // "**`name`** `type` — default `value`", trailing two spaces
-            // for a markdown hard line break so the description (when
-            // present) starts on its own line within the SAME block —
-            // omit the "— default ..." segment entirely when there's no
-            // default value to show.
-            let head = '**`' + name + '`**';
-            if (type) head += ' `' + type + '`';
-            if (def) head += ' — default `' + def + '`';
-            head += '  ';
-
-            const desc = cellText(row.description, true);
-            blocks.push(desc ? head + '\n' + desc : head);
+        // Column widths: fit the content (and never narrower than the
+        // header label), capped per column.
+        const widths = cols.map((c, i) => {
+            const longest = rows.reduce((mx, r) => Math.max(mx, r[i].length), 0);
+            return Math.min(COL_WIDTH_CAPS[c], Math.max(COLUMN_LABELS[c].length, longest));
+        });
+        // Description (always the last column when present) additionally
+        // yields width when the other columns' ACTUAL widths would push
+        // the total past MAX_TABLE_WIDTH — with every cap maxed out this
+        // still leaves >= 34 chars, so the label-length floor below is
+        // purely defensive.
+        const descIdx = cols.indexOf('description');
+        if (descIdx !== -1) {
+            const othersTotal = widths.reduce((sum, w, i) => (i === descIdx ? sum : sum + w), 0);
+            const room = MAX_TABLE_WIDTH - othersTotal - CELL_SEPARATOR.length * (cols.length - 1);
+            widths[descIdx] = Math.max(COLUMN_LABELS.description.length, Math.min(widths[descIdx], room));
         }
 
-        let md = blocks.join('\n\n');
+        // Header, ─/┼ separator, then data rows. A row's height is its
+        // tallest wrapped cell; shorter cells pad with blank lines, and
+        // every rendered line right-trims (padding on the LAST column is
+        // invisible, so don't emit it).
+        const tableLines = [];
+        tableLines.push(cols.map((c, i) => padCell(COLUMN_LABELS[c], widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
+        tableLines.push(widths.map((w) => '─'.repeat(w)).join('─┼─'));
+        for (const r of rows) {
+            const wrapped = r.map((cell, i) => wrapCell(cell, widths[i]));
+            const height = Math.max.apply(null, wrapped.map((ls) => ls.length));
+            for (let li = 0; li < height; li++) {
+                tableLines.push(wrapped.map((ls, i) => padCell(ls[li] || '', widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
+            }
+        }
+        parts.push('```text\n' + tableLines.join('\n') + '\n```');
+
         const remaining = portNames.length - shown.length;
         if (remaining > 0) {
-            md += '\n\n_…and ' + remaining + ' more ports — open the full documentation below._';
+            parts.push('_…and ' + remaining + ' more ports — open the full documentation below._');
         }
-        return md;
+        return parts.join('\n\n');
     } catch (e) {
         return '';
     }

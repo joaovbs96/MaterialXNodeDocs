@@ -252,21 +252,36 @@
             const [docRev, setDocRev] = React.useState(0);
             // Validate source-of-truth: the exact XML TEXT the Validate
             // button/dialog checks — deliberately NOT `parsed`/parsedRef.
-            // Written in exactly two places: the raw as-opened text at
-            // ingest (loadDocument below), and the canonical serialized
-            // XML flushUndoSnapshot (above the undo stack further down)
-            // just handed to window.__mtlxNotifyEdit. Never the live doc
-            // itself, because serializeDocXml heals connected-input
-            // faults IN PLACE on every snapshot — validating parsed.doc
-            // would silently mask exactly the faults this feature exists
-            // to surface (see validateMtlxXml, js/graph/model.jsx). `rev`
-            // is a cheap monotonic counter so an in-flight background
-            // validation that's since been superseded by a newer edit can
-            // detect it's stale and drop its result instead of clobbering
-            // a fresher one; docXmlRev is its render-triggering twin (a
+            // Written via noteDocXml (below) at EVERY path that changes
+            // the effective document text: the raw as-opened text at
+            // ingest (loadDocument), the fresh-session literal
+            // (newDocument), the VS Code external-edit soft reload
+            // (externalReload), browser-side undo/redo (restoreSnapshot),
+            // and the canonical serialized XML flushUndoSnapshot (above
+            // the undo stack further down) just handed to
+            // window.__mtlxNotifyEdit. Never the live doc itself, because
+            // serializeDocXml heals connected-input faults IN PLACE on
+            // every snapshot — validating parsed.doc would silently mask
+            // exactly the faults this feature exists to surface (see
+            // validateMtlxXml, js/graph/model.jsx). `rev` is a cheap
+            // monotonic counter so an in-flight background validation
+            // that's since been superseded by a newer edit can detect
+            // it's stale and drop its result instead of clobbering a
+            // fresher one; docXmlRev is its render-triggering twin (a
             // plain ref write doesn't cause an effect to re-run).
             const docXmlRef = React.useRef({ xml: null, rev: 0 });
             const [docXmlRev, setDocXmlRev] = React.useState(0);
+            // The ONE write path for docXmlRef — every document-text
+            // change goes through here so no path can bump the ref
+            // without also waking the docXmlRev-gated validation effect
+            // (or vice versa). Cheap by contract: callers hand in text
+            // they already have (raw file text, an undo snapshot's xml,
+            // the serialize flushUndoSnapshot just did) — never a
+            // serialization of this helper's own.
+            const noteDocXml = (xml) => {
+                docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
+                setDocXmlRev((r) => r + 1);
+            };
             // Unsaved-changes tracking, deliberately SEPARATE from docRev:
             // docRev only bumps for edits that need a preview recompile, but
             // a dragged node's xpos/ypos or a freshly-added-but-unconnected
@@ -418,15 +433,13 @@
                 // reusing this function's existing debounce/coalescing
                 // instead of re-implementing it on the extension side.
                 if (typeof window.__mtlxNotifyEdit === 'function') window.__mtlxNotifyEdit(xml);
-                // Keep the Validate source-of-truth (docXmlRef, declared
+                // Keep the Validate source-of-truth (noteDocXml, declared
                 // above near docRev) in lockstep with whatever XML just
                 // got handed to the VS Code bridge (or would have, in the
                 // standalone browser) — same `xml` value, so it's cheap
                 // (no serialization of our own; serializeDocXml already
-                // ran above). This is the second of the two write sites —
-                // see docXmlRef's comment for the first (loadDocument).
-                docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
-                setDocXmlRev((r) => r + 1);
+                // ran above).
+                noteDocXml(xml);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
                 if (u.savedIndex > u.index) u.savedIndex = -1;
@@ -472,6 +485,15 @@
                     setParsed(p);
                     setScope(nextScope);
                     setDocRev((r) => r + 1);
+                    // Validate source-of-truth (noteDocXml, declared near
+                    // docRev above): browser-side undo/redo swaps the
+                    // effective document text WITHOUT any flushUndoSnapshot
+                    // firing (restoringRef above suppresses snapshots for
+                    // exactly this restore), so hand the snapshot's own
+                    // xml over here. In VS Code this path is moot — the
+                    // extension defers to native text undo/redo, which
+                    // arrives via externalReload (covered there).
+                    noteDocXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
                     else setDirtyRev((r) => r + 1);
@@ -705,21 +727,19 @@
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
                     let xml = await map[path].text();
-                    // Validate source-of-truth write site #1 (see
-                    // docXmlRef's declaration near docRev above): the RAW,
-                    // as-opened text of the picked file — captured BEFORE
-                    // xi:include resolution splices in other files'
-                    // content below, and well before parseMtlxDocument or
-                    // any healing ever touches it. This is exactly what
-                    // the VS Code extension's own tier-2 validator
-                    // (vscode_extension/src/mtlxNode.js's
+                    // Validate source-of-truth (noteDocXml, declared near
+                    // docRev above): the RAW, as-opened text of the picked
+                    // file — captured BEFORE xi:include resolution splices
+                    // in other files' content below, and well before
+                    // parseMtlxDocument or any healing ever touches it.
+                    // This is exactly what the VS Code extension's own
+                    // tier-2 validator (vscode_extension/src/mtlxNode.js's
                     // validateSemantic) validates too — it readFromXmlString's
                     // the raw buffer text verbatim, xi:include and all —
                     // so capturing the resolved/merged text here instead
                     // would let the graph's Validate button diverge from
                     // what VS Code shows for any document using includes.
-                    docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
-                    setDocXmlRev((r) => r + 1);
+                    noteDocXml(xml);
                     if (/<xi:include\b/.test(xml)) {
                         const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
                         xml = await resolveIncludes(xml, map, dir);
@@ -754,6 +774,11 @@
                 setStatus('Creating new document ' + '\u2026');
                 try {
                     const xml = '<?xml version="1.0"?>\n<materialx version="1.39">\n</materialx>\n';
+                    // Validate source-of-truth (noteDocXml, declared near
+                    // docRev above): a brand-new empty session should
+                    // validate this fresh literal (and show green), not
+                    // keep wearing the previous file's status.
+                    noteDocXml(xml);
                     const p = await parseMtlxDocument(xml);
                     p.label = 'untitled.mtlx';
                     fileMapRef.current = {};
@@ -894,6 +919,16 @@
                 let p;
                 try {
                     let xml = await merged[pick].text();
+                    // Validate source-of-truth (noteDocXml, declared near
+                    // docRev above): the raw external-edit text, captured
+                    // BEFORE xi:include resolution (parity with
+                    // loadDocument's raw-text capture) and critically
+                    // BEFORE either early return below — the parse-failure
+                    // return (a mid-edit broken file should still turn the
+                    // Validate button red with the parse error, exactly
+                    // what VS Code's own Problems panel shows for it) and
+                    // the sameAsCurrent return (see its own comment).
+                    noteDocXml(xml);
                     if (/<xi:include\b/.test(xml)) {
                         const dir = pick.indexOf('/') >= 0 ? pick.slice(0, pick.lastIndexOf('/')) : '';
                         xml = await resolveIncludes(xml, merged, dir);
@@ -923,6 +958,17 @@
                     sameAsCurrent = curXml != null && curXml === newXml;
                 } catch (e) { /* serializing the new doc failed — fall through to the full swap */ }
                 if (sameAsCurrent) {
+                    // NOTE: the noteDocXml(raw text) call up top must stay
+                    // BEFORE this return. "Canonically identical" is
+                    // measured AFTER serializeDocXml's healing pass, so it
+                    // is exactly what happens when the user fixes, in
+                    // their text editor, the very fault the healing
+                    // auto-fixes (e.g. removes a stale value="" from a
+                    // connected input): the fixed file serializes to the
+                    // same canonical XML as the live doc, this branch
+                    // returns early — and without that earlier write the
+                    // Validate button would stay red forever even though
+                    // the file is now clean.
                     markSaved(); // the file map above is already merged/updated
                     return;
                 }
