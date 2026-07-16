@@ -362,6 +362,12 @@
                     value: mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
                     defValue: dIn ? mxSafe(() => (dIn.getValueString ? dIn.getValueString() : ''), '') : undefined,
                     authored: true,
+                    // Live wasm element, not just its snapshotted fields — lets
+                    // callers that need to clone this exact input (encapsulate/
+                    // ungroup, via copyContentFrom) reach it without a second
+                    // lookup. Existing callers that only read the plain fields
+                    // above are unaffected.
+                    el: inp,
                     colorspace: mxElAttr(inp, 'colorspace'),
                     nodename: mxElAttr(inp, 'nodename'),
                     nodegraph: mxElAttr(inp, 'nodegraph'),

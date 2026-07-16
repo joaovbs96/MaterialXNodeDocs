@@ -3647,6 +3647,28 @@
                 setParamsOpen(true);
             };
 
+            // Create input `name` on `container` (always a just-created node/
+            // nodegraph with no pre-existing inputs, in every caller below)
+            // and clone `srcEl` — a LIVE original <input> element, from
+            // collectPorts' new `el` field — onto it wholesale: type, value,
+            // colorspace, unit/unittype/channels/uniform/doc, connection
+            // attrs, anything else, present or future. Used by encapsulate/
+            // ungroup instead of hand-picking fields, so any authored
+            // attribute round-trips losslessly. No separate type-guessing
+            // needed here (unlike ensureTypedInput) — copyContentFrom crosses
+            // the type through C++ same as it does when ensureTypedInput
+            // seeds a bare input from a nodedef, sidestepping the
+            // addInput(name,type)/setType JS-boundary bugs documented there.
+            // Falls back to a raw type attribute if the copy itself fails
+            // (e.g. a stale/detached source element).
+            const cloneInput = (container, name, srcEl) => {
+                const target = mxSafe(() => container.addInput(name), null);
+                if (!target || !srcEl) return target;
+                const copied = mxSafe(() => { target.copyContentFrom(srcEl); return true; }, false);
+                if (!copied) mxSetAttr(target, 'type', mxElType(srcEl));
+                return target;
+            };
+
             // ---- Encapsulate (Ctrl/Cmd+G) -----------------------------------
             // Collapse the selected root-level nodes into a brand-new
             // nodegraph, preserving every wire: internal edges (both ends
@@ -3731,48 +3753,39 @@
                         for (const inp of entry.inputs) {
                             const internalSrc = inp.nodename && nameSet.has(inp.nodename);
                             if (internalSrc) {
-                                const target = ensureTypedInput(doc, el, inp.name, inp.type);
-                                if (!target) continue;
-                                mxSetAttr(target, 'nodename', inp.nodename);
-                                if (inp.output) mxSetAttr(target, 'output', inp.output);
-                                // Item 9: ensureTypedInput may have copied the
-                                // nodedef default VALUE onto this input — strip
-                                // it now that it's connected (matches the
-                                // external branch below, which already does this).
-                                mxRemoveAttr(target, 'value');
+                                // Inner nodes keep their original name inside
+                                // the new graph (step 3 above), so the clone's
+                                // nodename already points at the right
+                                // sibling — no overrides needed. (Any stray
+                                // value the clone might carry alongside it is
+                                // caught by the pre-export connected-input
+                                // sweep, same as everywhere else.)
+                                cloneInput(el, inp.name, inp.el);
                                 continue;
                             }
                             const external = inp.nodename || inp.nodegraph || inp.interfacename;
                             if (external) {
                                 const pinBase = entry.name + '_' + inp.name;
                                 const pinName = mxSafe(() => g.createValidChildName(pinBase), pinBase);
-                                const gin = mxSafe(() => g.addInput(pinName, inp.type), null);
+                                // Seed the new interface pin from the
+                                // connecting input itself (not hand-copied
+                                // fields), so any extra authored attribute on
+                                // it (unit, doc, ...) survives onto the pin.
+                                const gin = cloneInput(g, pinName, inp.el);
                                 if (!gin) continue;
-                                if (mxElType(gin) !== inp.type) {
-                                    mxSafe(() => {
-                                        if (typeof gin.setType === 'function') gin.setType(inp.type);
-                                        else gin.setAttribute('type', inp.type);
-                                        return true;
-                                    }, false);
-                                    if (mxElType(gin) !== inp.type) mxSetAttr(gin, 'type', inp.type);
-                                }
-                                if (inp.nodename) mxSetAttr(gin, 'nodename', inp.nodename);
-                                if (inp.nodegraph) mxSetAttr(gin, 'nodegraph', inp.nodegraph);
-                                if (inp.output) mxSetAttr(gin, 'output', inp.output);
 
-                                const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                // Clone brings the ORIGINAL's own connection
+                                // along too — replace it with a reference to
+                                // the new interface pin instead.
+                                const target = cloneInput(el, inp.name, inp.el);
                                 if (!target) continue;
+                                clearConnAttrs(target);
                                 mxRemoveAttr(target, 'value');
                                 mxSetAttr(target, 'interfacename', pinName);
                                 continue;
                             }
                             if (inp.value !== '' && inp.value != null) {
-                                const target = ensureTypedInput(doc, el, inp.name, inp.type);
-                                if (!target) continue;
-                                mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
-                                if (inp.colorspace) {
-                                    mxSetColorspace(target, inp.colorspace);
-                                }
+                                cloneInput(el, inp.name, inp.el);
                             }
                         }
                     }
@@ -4049,46 +4062,53 @@
                                     const hasSource = !!(pin.nodename || pin.nodegraph)
                                         || (pin.value !== '' && pin.value != null);
                                     if (!hasSource) continue; // pin had neither -> leave input unauthored
-                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    // Clone the original (carries
+                                    // interfacename=X plus any other
+                                    // locally-authored attributes), then
+                                    // replace the pin reference with whatever
+                                    // that pin itself resolved to.
+                                    const target = cloneInput(el, inp.name, inp.el);
                                     if (!target) continue;
+                                    clearConnAttrs(target);
+                                    // A nodegraph interface pin can legally
+                                    // carry defaultgeomprop; a node-instance
+                                    // input never can. This is the one branch
+                                    // that can turn the former into the
+                                    // latter via a full clone, so strip it
+                                    // explicitly — clearConnAttrs above
+                                    // doesn't, defaultgeomprop isn't a
+                                    // CONN_ATTRS member.
+                                    mxRemoveAttr(target, 'defaultgeomprop');
                                     applyPinSource(target, pin);
                                     continue;
                                 }
                                 if (!inp.nodegraph && inp.nodename && innerNameSet.has(inp.nodename)) {
-                                    // Sibling wire, kept verbatim under the
-                                    // sibling's new root-level name.
-                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    // Sibling wire, kept verbatim except the
+                                    // nodename remap: siblings get renamed at
+                                    // root (nameMap), unlike encapsulate's
+                                    // inner nodes which keep their name.
+                                    const target = cloneInput(el, inp.name, inp.el);
                                     if (!target) continue;
-                                    clearConnAttrs(target);
                                     mxSetAttr(target, 'nodename', nameMap[inp.nodename]);
-                                    if (inp.output) mxSetAttr(target, 'output', inp.output);
                                     continue;
                                 }
                                 if (inp.nodegraph) {
                                     // Interior input wired DIRECTLY to another
                                     // (sibling) nodegraph — outside the graph
                                     // being dissolved, so its name doesn't
-                                    // change; copy the reference verbatim, no
-                                    // nameMap remapping (mirrors applyPinSource
-                                    // above, which also writes nodename +
-                                    // nodegraph together — MaterialX allows
-                                    // nodegraph= with nodename= to select a
-                                    // node WITHIN that graph).
-                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
-                                    if (!target) continue;
-                                    clearConnAttrs(target);
-                                    mxSetAttr(target, 'nodegraph', inp.nodegraph);
-                                    if (inp.nodename) mxSetAttr(target, 'nodename', inp.nodename);
-                                    if (inp.output) mxSetAttr(target, 'output', inp.output);
+                                    // change; the clone already carries the
+                                    // nodegraph=/nodename=/output= reference
+                                    // verbatim, no nameMap remapping needed
+                                    // (mirrors applyPinSource above, which
+                                    // also writes nodename + nodegraph
+                                    // together — MaterialX allows nodegraph=
+                                    // with nodename= to select a node WITHIN
+                                    // that graph).
+                                    cloneInput(el, inp.name, inp.el);
                                     continue;
                                 }
                                 if (inp.value !== '' && inp.value != null) {
-                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
-                                    if (!target) continue;
-                                    mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
-                                    if (inp.colorspace) {
-                                        mxSetColorspace(target, inp.colorspace);
-                                    }
+                                    cloneInput(el, inp.name, inp.el);
                                 }
                             }
                         }

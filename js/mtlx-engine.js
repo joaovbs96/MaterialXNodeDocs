@@ -448,8 +448,13 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
                 how = 'copied-from-nodedef';
                 // The copy brings the nodedef's UI/doc metadata along —
                 // meaningless on an instance and noisy in exports.
+                // defaultgeomprop is worse than noisy: MaterialX's validator
+                // rejects it outright on a node-instance input ("Invalid
+                // defaultgeomprop on non-definition and non-nodegraph
+                // input") — it's only legal on the nodedef/nodegraph-
+                // interface input it was just copied FROM.
                 for (const attr of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
-                    'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
+                    'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues', 'defaultgeomprop']) {
                     mxRemoveAttr(inp, attr);
                 }
             }
@@ -479,20 +484,40 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
 
 // Belt-and-suspenders sweep run immediately before every writeToXmlString
 // call site (graph/model.jsx serializeDocXml, node-preview.jsx
-// buildExportXml, viewer-app.jsx send-to-editor): strips any leftover
-// `value` attribute from an <input> that ALSO carries a connection
-// (nodename/nodegraph/interfacename). MaterialX forbids an input binding
-// both a value and a connection — doc.validate() reports it as "Node input
-// has too many bindings" — and every consumer (shadergen, the graph UI)
-// reads the connection and ignores the value on a connected input anyway,
-// so removing it is semantics-preserving, never a behavior change to a
-// valid document. Root cause of the stale value is ensureTypedInput()
-// above copying the nodedef's default VALUE onto a freshly-created input;
-// callers are expected to strip it themselves right after wiring a
-// connection (see graph-app.jsx's stashValueBeforeRemoval call sites), but
-// this sweep also self-heals documents authored elsewhere or loaded from
-// disk before this fix existed — a later export cleans them up even
-// though nothing in THIS session wrote the bad attribute.
+// buildExportXml, viewer-app.jsx send-to-editor). Two independent checks on
+// every <input> found while walking the document, both fixing attributes
+// that are legal on SOME elements but not the one currently holding them:
+//
+// 1) A leftover `value` on an input that ALSO carries a connection
+//    (nodename/nodegraph/interfacename). MaterialX forbids an input binding
+//    both a value and a connection — doc.validate() reports it as "Node
+//    input has too many bindings" — and every consumer (shadergen, the
+//    graph UI) reads the connection and ignores the value on a connected
+//    input anyway, so removing it is semantics-preserving, never a
+//    behavior change to a valid document. Root cause of the stale value is
+//    ensureTypedInput() above copying the nodedef's default VALUE onto a
+//    freshly-created input; callers are expected to strip it themselves
+//    right after wiring a connection (see graph-app.jsx's
+//    stashValueBeforeRemoval call sites), but this sweep also self-heals
+//    documents authored elsewhere or loaded from disk before this fix
+//    existed.
+// 2) A `defaultgeomprop` on any input whose PARENT is not itself a
+//    <nodegraph> or <nodedef> — i.e. any node-INSTANCE input.
+//    defaultgeomprop is only legal on a nodedef's declared input or a
+//    nodegraph's own interface input; MaterialX's validator rejects it
+//    outright on a node instance ("Invalid defaultgeomprop on
+//    non-definition and non-nodegraph input"). Unlike check 1, this is NOT
+//    gated on "connected" — the rule applies regardless of connection
+//    state. Root cause is the same class of bug: ensureTypedInput's
+//    nodedef-copy path (fixed to strip it going forward) and encapsulate/
+//    ungroup's node-instance cloning (ditto) can each produce this, but
+//    this sweep also self-heals a document that already had the leak
+//    before those fixes existed — a later export cleans it up even though
+//    nothing in THIS session wrote the bad attribute.
+//
+// In both cases removal is semantics-preserving, never a behavior change to
+// an otherwise-valid document — it only ever deletes an attribute that
+// couldn't legally apply where it sits anyway.
 //
 // Recursive walk over doc.getChildren() (mxSafe-wrapped at every step, so
 // one hostile/unbound element can't abort the sweep); depth-capped at 10,
@@ -517,6 +542,15 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
                 // fallback can't tell "absent" from "present but empty".
                 if (connected && mxElHasAttr(child, 'value')) {
                     const removed = mxRemoveAttr(child, 'value');
+                    if (removed) stripped++;
+                }
+                // `el` (the loop's parent, already in scope) is this
+                // input's parent element — reused here instead of a
+                // second getParent() round trip.
+                const parentCat = mxElCat(el);
+                if (parentCat !== 'nodegraph' && parentCat !== 'nodedef'
+                    && mxElHasAttr(child, 'defaultgeomprop')) {
+                    const removed = mxRemoveAttr(child, 'defaultgeomprop');
                     if (removed) stripped++;
                 }
             }
