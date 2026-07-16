@@ -28,6 +28,7 @@
 'use strict';
 
 const vscode = require('vscode');
+const { errMsg } = require('./util');
 
 const MAX_DOCS = 12; // guard only, matches loadPreset's MAX_DOCS — xi:include chains in practice nest at most one deep
 const MAX_BYTES = 64 * 1024 * 1024; // total payload cap across all included docs + textures
@@ -59,6 +60,17 @@ function isUnsafeRef(ref) {
     return false;
 }
 
+// Double-quote-only `name="value"` attribute extraction, shared by the
+// three fileprefix/value lookups in extractFilenameRefs below. MUST stay
+// double-quote-only — a deliberate mirror of js/graph-app.jsx's own
+// extractFilenameRefs (see this file's banner), which never bothers with
+// single-quoted attributes for these particular fields. Returns the
+// captured value, or null if `tag` has no such (double-quoted) attribute.
+function attrDq(tag, name) {
+    const m = new RegExp('\\b' + name + '\\s*=\\s*"([^"]*)"').exec(tag);
+    return m ? m[1] : null;
+}
+
 // Port of js/graph-app.jsx's extractFilenameRefs (~line 1650): splits the
 // doc into "scopes" (each <nodegraph>'s body, plus everything outside any
 // nodegraph), each carrying its own accumulated fileprefix (root
@@ -67,14 +79,14 @@ function isUnsafeRef(ref) {
 // scope's <input type="filename" value="..."> tags.
 function extractFilenameRefs(xml) {
     const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
-    const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
+    const rootPrefix = attrDq(rootAttrs, 'fileprefix') || '';
     const scopes = [];
     let cursor = 0;
     const NG = /<nodegraph\b([^>]*)>([\s\S]*?)<\/nodegraph>/g;
     let ngm;
     while ((ngm = NG.exec(xml)) !== null) {
         scopes.push({ text: xml.slice(cursor, ngm.index), prefix: rootPrefix });
-        const ngPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(ngm[1]) || [])[1] || '';
+        const ngPrefix = attrDq(ngm[1], 'fileprefix') || '';
         scopes.push({ text: ngm[2], prefix: rootPrefix + ngPrefix });
         cursor = ngm.index + ngm[0].length;
     }
@@ -84,8 +96,7 @@ function extractFilenameRefs(xml) {
         const tags = scope.text.match(/<input\b[^>]*>/g) || [];
         for (const tag of tags) {
             if (!/\btype\s*=\s*"filename"/.test(tag)) continue;
-            const m = /\bvalue\s*=\s*"([^"]*)"/.exec(tag);
-            const raw = m && m[1];
+            const raw = attrDq(tag, 'value');
             if (!raw) continue;
             refs.push(scope.prefix + raw);
         }
@@ -137,7 +148,7 @@ async function scan(documentUri, xmlText) {
                 files[item.mapKey] = bytes;
                 xml = Buffer.from(bytes).toString('utf8');
             } catch (e) {
-                warnings.push('Could not read included document "' + item.mapKey + '": ' + (e && e.message ? e.message : String(e)));
+                warnings.push('Could not read included document "' + item.mapKey + '": ' + errMsg(e));
                 continue;
             }
         }
@@ -161,7 +172,7 @@ async function scan(documentUri, xmlText) {
             try {
                 incUri = vscode.Uri.joinPath(item.dirUri, href);
             } catch (e) {
-                warnings.push('Could not resolve xi:include href "' + href + '": ' + (e && e.message ? e.message : String(e)));
+                warnings.push('Could not resolve xi:include href "' + href + '": ' + errMsg(e));
                 continue;
             }
             const visitKey = incUri.toString();
@@ -202,7 +213,7 @@ async function scan(documentUri, xmlText) {
             try {
                 refUri = vscode.Uri.joinPath(dirUri, ref);
             } catch (e) {
-                warnings.push('Could not resolve texture ref "' + ref + '": ' + (e && e.message ? e.message : String(e)));
+                warnings.push('Could not resolve texture ref "' + ref + '": ' + errMsg(e));
                 continue;
             }
             try {
@@ -214,7 +225,7 @@ async function scan(documentUri, xmlText) {
                 }
                 files[ref] = bytes;
             } catch (e) {
-                warnings.push('Could not read texture "' + ref + '" (falls back to the checker in the viewer): ' + (e && e.message ? e.message : String(e)));
+                warnings.push('Could not read texture "' + ref + '" (falls back to the checker in the viewer): ' + errMsg(e));
             }
         }
     }

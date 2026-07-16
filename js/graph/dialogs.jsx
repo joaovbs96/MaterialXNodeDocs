@@ -8,6 +8,64 @@
 // file has NO top-level import/export — it self-exports via a single
 // Object.assign(window, {}) at the bottom.
 
+        // Shared chrome for all six dialogs below: a full-viewport backdrop
+        // (mousedown outside the panel closes it, unless
+        // `backdropCloseDisabled`), a centered panel, and a header bar with
+        // a title and a × close button (optionally preceded by
+        // `headerRight` extras — XmlDialog's Copy button, DocsDialog's
+        // open-in-new-tab link). Each dialog keeps its OWN useEscapeToClose
+        // call rather than the frame owning it — the `when` condition
+        // differs per dialog (e.g. ExportDialog/PresetsDialog additionally
+        // gate it on `!busy`), so the frame has no single answer for when a
+        // given dialog should stop listening for Esc.
+        // `keepMounted` (DocsDialog only): instead of unmounting while
+        // closed, the backdrop stays in the DOM with a `hidden` class
+        // toggled on it instead — keeps the embedded docs App warm across
+        // close/reopen. Every other dialog unmounts on close via its own
+        // `if (!open) return null` guard before ever reaching this
+        // component; this component's own `open` check is a harmless
+        // second guard for KeybindsHelp and DocsDialog, which don't
+        // pre-check it themselves (KeybindsHelp has no `open` prop at all —
+        // it's mounted/unmounted by its caller instead — so it always
+        // passes `open={true}` here).
+        // `closeDisabled`/`backdropCloseDisabled` (Export/Presets only):
+        // while a caller-supplied async action is in flight (`busy`), both
+        // the × button and backdrop-click-to-close are disabled so the
+        // dialog can't be dismissed mid-request. Left undefined by every
+        // other dialog, which reproduces their close button's ORIGINAL
+        // markup exactly (no `disabled` attribute, no `disabled:opacity-40`
+        // class — that class is only appended when a dialog actually wires
+        // up `closeDisabled`).
+        const DialogFrame = ({
+            open, title, titleClassName, panelClassName, onClose, children,
+            headerRight, closeDisabled, backdropCloseDisabled = false,
+            keepMounted = false,
+        }) => {
+            if (!open && !keepMounted) return null;
+            return (
+                <div
+                    className={'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70' + (keepMounted && !open ? ' hidden' : '')}
+                    onMouseDown={backdropCloseDisabled ? undefined : onClose}
+                >
+                    <div className={panelClassName} onMouseDown={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                            <span className={titleClassName || 'text-[13px] font-bold text-gray-100'}>{title}</span>
+                            <div className="flex items-center gap-2">
+                                {headerRight}
+                                <button
+                                    onClick={onClose}
+                                    disabled={closeDisabled}
+                                    title="Close"
+                                    className={'text-gray-400 hover:text-gray-200 leading-none text-lg px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
+                                >{'×'}</button>
+                            </div>
+                        </div>
+                        {children}
+                    </div>
+                </div>
+            );
+        };
+
         // Every keyboard shortcut and mouse interaction currently live in
         // the editor — kept as one list so it can't silently drift from
         // reality; update it alongside whatever handler it documents.
@@ -44,28 +102,26 @@
             const keybinds = IN_VSCODE ? KEYBINDS.filter((k) => k.keys !== 'Drag & drop files') : KEYBINDS;
             useEscapeToClose(onClose, active);
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <div className="text-sm font-bold text-gray-100">Keyboard shortcuts</div>
-                            <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-4 py-3">
-                            <table className="w-full text-[11px] font-mono">
-                                <tbody>
-                                    {keybinds.map((k) => (
-                                        <tr key={k.keys} className="align-top">
-                                            <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
-                                            <td className="py-1 text-gray-300">{k.desc}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                <DialogFrame
+                    open={true}
+                    title="Keyboard shortcuts"
+                    titleClassName="text-sm font-bold text-gray-100"
+                    onClose={onClose}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                >
+                    <div className="overflow-y-auto custom-scrollbar px-4 py-3">
+                        <table className="w-full text-[11px] font-mono">
+                            <tbody>
+                                {keybinds.map((k) => (
+                                    <tr key={k.keys} className="align-top">
+                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
+                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
-                </div>
+                </DialogFrame>
             );
         }
 
@@ -108,36 +164,32 @@
             useEscapeToClose(onClose, active && open);
 
             return (
-                <div className={'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70' + (open ? '' : ' hidden')}
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">{label}</span>
-                            <div className="flex items-center gap-2">
-                                {!IN_VSCODE && (
-                                <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
-                                    className="text-gray-400 hover:text-gray-200 leading-none text-sm px-1">{'↗'}</a>
-                                )}
-                                <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
+                <DialogFrame
+                    open={open}
+                    keepMounted
+                    title={label}
+                    onClose={onClose}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
+                    headerRight={!IN_VSCODE && (
+                        <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
+                            className="text-gray-400 hover:text-gray-200 leading-none text-sm px-1">{'↗'}</a>
+                    )}
+                >
+                    <div className="relative flex-1 min-h-0 overflow-y-auto">
+                        {loadError ? (
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
+                                {'Failed to load documentation — close and reopen this dialog to retry.'}
                             </div>
-                        </div>
-                        <div className="relative flex-1 min-h-0 overflow-y-auto">
-                            {loadError ? (
-                                <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
-                                    {'Failed to load documentation — close and reopen this dialog to retry.'}
-                                </div>
-                            ) : !docsReady ? (
-                                <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 animate-pulse">
-                                    {'Loading documentation…'}
-                                </div>
-                            ) : (() => {
-                                const DocsApp = window.App;
-                                return <DocsApp key={hash} inline initialHash={hash} active={open} />;
-                            })()}
-                        </div>
+                        ) : !docsReady ? (
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 animate-pulse">
+                                {'Loading documentation…'}
+                            </div>
+                        ) : (() => {
+                            const DocsApp = window.App;
+                            return <DocsApp key={hash} inline initialHash={hash} active={open} />;
+                        })()}
                     </div>
-                </div>
+                </DialogFrame>
             );
         }
 
@@ -145,8 +197,8 @@
         // current document exactly as Export would write it, without
         // triggering a download — a quick way to eyeball or copy the raw
         // MaterialX. `xml` is computed once by the caller when the dialog
-        // opens (not on every render). Same backdrop/Esc/stopPropagation
-        // contract as KeybindsHelp/DocsDialog above.
+        // opens (not on every render). Chrome comes from the shared
+        // DialogFrame (see above).
         function XmlDialog({ xml, open, onClose }) {
             const [copied, setCopied] = React.useState(false);
             const copyTimerRef = React.useRef(null);
@@ -202,34 +254,31 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Document</span>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={copyXml}
-                                    title="Copy the XML to the clipboard"
-                                    className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
-                                        + (copied
-                                            ? 'bg-green-600/70 border-green-500 text-white'
-                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
-                                >
-                                    <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
-                                    <span>{copied ? 'Copied' : 'Copy'}</span>
-                                </button>
-                                <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                            </div>
-                        </div>
-                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">
-                            {highlighted != null
-                                ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
-                                : xml}
-                        </pre>
-                    </div>
-                </div>
+                <DialogFrame
+                    open={open}
+                    title="Document"
+                    onClose={onClose}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+                    headerRight={
+                        <button
+                            onClick={copyXml}
+                            title="Copy the XML to the clipboard"
+                            className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
+                                + (copied
+                                    ? 'bg-green-600/70 border-green-500 text-white'
+                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                        >
+                            <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                            <span>{copied ? 'Copied' : 'Copy'}</span>
+                        </button>
+                    }
+                >
+                    <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">
+                        {highlighted != null
+                            ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+                            : xml}
+                    </pre>
+                </DialogFrame>
             );
         }
 
@@ -250,35 +299,32 @@
             useEscapeToClose(onClose, open);
             if (!open) return null;
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Validate</span>
-                            <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
-                            {!status && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
-                            {status && status.kind === 'valid' && (
-                                <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
-                            )}
-                            {status && status.kind === 'invalid' && (
-                                <div>
-                                    <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
-                                    {status.issues && status.issues.length > 0 && (
-                                        <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
-                                            {status.issues.map((s, i) => <li key={i}>{s}</li>)}
-                                        </ul>
-                                    )}
-                                </div>
-                            )}
-                            {status && status.kind === 'unavailable' && (
-                                <div className="text-gray-400">Validation is not available in this build.</div>
-                            )}
-                        </div>
+                <DialogFrame
+                    open={open}
+                    title="Validate"
+                    onClose={onClose}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                >
+                    <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
+                        {!status && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
+                        {status && status.kind === 'valid' && (
+                            <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
+                        )}
+                        {status && status.kind === 'invalid' && (
+                            <div>
+                                <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
+                                {status.issues && status.issues.length > 0 && (
+                                    <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
+                                        {status.issues.map((s, i) => <li key={i}>{s}</li>)}
+                                    </ul>
+                                )}
+                            </div>
+                        )}
+                        {status && status.kind === 'unavailable' && (
+                            <div className="text-gray-400">Validation is not available in this build.</div>
+                        )}
                     </div>
-                </div>
+                </DialogFrame>
             );
         }
 
@@ -342,74 +388,72 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={busy ? undefined : onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Export</span>
-                            <button onClick={onClose} disabled={busy} title="Close"
-                                className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1 disabled:opacity-40">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
-                            <label className="block space-y-1">
-                                <span className="text-gray-400">File name</span>
-                                <input
-                                    type="text"
-                                    value={name}
-                                    autoFocus
-                                    spellCheck={false}
-                                    onChange={(e) => setName(e.target.value)}
-                                    onKeyDown={(e) => { if (e.key === 'Enter' && trimmedName && !busy) doExport(); }}
-                                    className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200 font-mono"
-                                />
+                <DialogFrame
+                    open={open}
+                    title="Export"
+                    onClose={onClose}
+                    closeDisabled={busy}
+                    backdropCloseDisabled={busy}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                >
+                    <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
+                        <label className="block space-y-1">
+                            <span className="text-gray-400">File name</span>
+                            <input
+                                type="text"
+                                value={name}
+                                autoFocus
+                                spellCheck={false}
+                                onChange={(e) => setName(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && trimmedName && !busy) doExport(); }}
+                                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200 font-mono"
+                            />
+                        </label>
+                        <div className="space-y-1.5">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="export-format" checked={format === 'mtlx'}
+                                    onChange={() => setFormat('mtlx')} className="accent-blue-500" />
+                                <span className="text-gray-200">MaterialX document (.mtlx)</span>
                             </label>
-                            <div className="space-y-1.5">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input type="radio" name="export-format" checked={format === 'mtlx'}
-                                        onChange={() => setFormat('mtlx')} className="accent-blue-500" />
-                                    <span className="text-gray-200">MaterialX document (.mtlx)</span>
-                                </label>
-                                <label className={'flex items-center gap-2 ' + (resolved.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer')}
-                                    title={zipDisabledTitle}>
-                                    <input type="radio" name="export-format" checked={format === 'zip'}
-                                        disabled={resolved.length === 0}
-                                        onChange={() => setFormat('zip')} className="accent-blue-500" />
-                                    <span className={resolved.length === 0 ? 'text-gray-500' : 'text-gray-200'}>
-                                        ZIP with textures (.zip)
-                                    </span>
-                                </label>
+                            <label className={'flex items-center gap-2 ' + (resolved.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer')}
+                                title={zipDisabledTitle}>
+                                <input type="radio" name="export-format" checked={format === 'zip'}
+                                    disabled={resolved.length === 0}
+                                    onChange={() => setFormat('zip')} className="accent-blue-500" />
+                                <span className={resolved.length === 0 ? 'text-gray-500' : 'text-gray-200'}>
+                                    ZIP with textures (.zip)
+                                </span>
+                            </label>
+                        </div>
+                        {resolved.length > 0 && (
+                            <div className="text-gray-500 text-[11px]">
+                                {resolved.length} texture{resolved.length === 1 ? '' : 's'} will be packaged with the .zip.
                             </div>
-                            {resolved.length > 0 && (
-                                <div className="text-gray-500 text-[11px]">
-                                    {resolved.length} texture{resolved.length === 1 ? '' : 's'} will be packaged with the .zip.
+                        )}
+                        {unresolved.length > 0 && (
+                            <div className="rounded border border-amber-700/60 bg-amber-900/20 px-2.5 py-2 space-y-1">
+                                <div className="text-amber-400 font-bold text-[11px]">
+                                    Not found in this session, will not be packaged:
                                 </div>
-                            )}
-                            {unresolved.length > 0 && (
-                                <div className="rounded border border-amber-700/60 bg-amber-900/20 px-2.5 py-2 space-y-1">
-                                    <div className="text-amber-400 font-bold text-[11px]">
-                                        Not found in this session, will not be packaged:
-                                    </div>
-                                    <ul className="list-disc list-inside space-y-0.5 text-amber-200/90 font-mono text-[11px]">
-                                        {unresolved.map((ref, i) => <li key={i}>{ref}</li>)}
-                                    </ul>
-                                </div>
-                            )}
-                        </div>
-                        <div className="flex justify-end gap-2 px-4 py-2.5 border-t border-gray-700 bg-gray-900/70">
-                            <button
-                                onClick={onClose}
-                                disabled={busy}
-                                className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
-                            >Cancel</button>
-                            <button
-                                onClick={doExport}
-                                disabled={busy || !trimmedName}
-                                className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors disabled:opacity-40"
-                            >{busy ? 'Exporting…' : 'Export'}</button>
-                        </div>
+                                <ul className="list-disc list-inside space-y-0.5 text-amber-200/90 font-mono text-[11px]">
+                                    {unresolved.map((ref, i) => <li key={i}>{ref}</li>)}
+                                </ul>
+                            </div>
+                        )}
                     </div>
-                </div>
+                    <div className="flex justify-end gap-2 px-4 py-2.5 border-t border-gray-700 bg-gray-900/70">
+                        <button
+                            onClick={onClose}
+                            disabled={busy}
+                            className={BTN_SECONDARY + ' disabled:opacity-40'}
+                        >Cancel</button>
+                        <button
+                            onClick={doExport}
+                            disabled={busy || !trimmedName}
+                            className={BTN_PRIMARY + ' disabled:opacity-40'}
+                        >{busy ? 'Exporting…' : 'Export'}</button>
+                    </div>
+                </DialogFrame>
             );
         }
 
@@ -457,46 +501,44 @@
         // "caller does the async work" split. `busy` (driven by the
         // caller while it fetches) disables every row and shows a spinner
         // on whichever one triggered it (`busyPath`) so the user gets
-        // feedback without the dialog needing its own network code. Same
-        // backdrop/Esc/stopPropagation contract as the other dialogs.
+        // feedback without the dialog needing its own network code. Chrome
+        // comes from the shared DialogFrame (see above).
         function PresetsDialog({ open, onClose, onPick, busy, busyPath }) {
             useEscapeToClose(onClose, open && !busy);
             if (!open) return null;
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                    onMouseDown={busy ? undefined : onClose}>
-                    <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                        onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className="text-[13px] font-bold text-gray-100">Presets</span>
-                            <button onClick={onClose} disabled={busy} title="Close"
-                                className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1 disabled:opacity-40">{'×'}</button>
-                        </div>
-                        <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
-                            {MTLX_PRESETS.map((preset) => {
-                                const rowBusy = busy && busyPath === preset.path;
-                                return (
-                                    <button
-                                        key={preset.path}
-                                        onClick={() => onPick(preset)}
-                                        disabled={busy}
-                                        title={preset.path}
-                                        className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
-                                            + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
-                                    >
-                                        <span className="min-w-0">
-                                            <span className="block text-gray-100 font-medium truncate">{preset.label}</span>
-                                            <span className="block text-gray-400 text-[11px] truncate">{preset.desc}</span>
-                                        </span>
-                                        {rowBusy && (
-                                            <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
+                <DialogFrame
+                    open={open}
+                    title="Presets"
+                    onClose={onClose}
+                    closeDisabled={busy}
+                    backdropCloseDisabled={busy}
+                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                >
+                    <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
+                        {MTLX_PRESETS.map((preset) => {
+                            const rowBusy = busy && busyPath === preset.path;
+                            return (
+                                <button
+                                    key={preset.path}
+                                    onClick={() => onPick(preset)}
+                                    disabled={busy}
+                                    title={preset.path}
+                                    className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
+                                        + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
+                                >
+                                    <span className="min-w-0">
+                                        <span className="block text-gray-100 font-medium truncate">{preset.label}</span>
+                                        <span className="block text-gray-400 text-[11px] truncate">{preset.desc}</span>
+                                    </span>
+                                    {rowBusy && (
+                                        <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
+                                    )}
+                                </button>
+                            );
+                        })}
                     </div>
-                </div>
+                </DialogFrame>
             );
         }
 

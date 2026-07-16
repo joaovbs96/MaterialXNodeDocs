@@ -84,49 +84,40 @@
             React.useEffect(() => {
                 setOverrides((prev) => (Object.keys(prev).length ? {} : prev));
             }, [identKey]);
-            // Preview geometry (persisted): 'sphere' | 'cube' | 'shaderball'.
-            const [geom, setGeom] = React.useState(() => {
-                // Normalize: a stale persisted value that's no longer a valid
-                // option would render the geometry dropdown empty.
-                const valid = ['shaderball', 'sphere', 'cube'];
-                try {
-                    const g = localStorage.getItem('mtlx_preview_geom');
-                    return valid.indexOf(g) !== -1 ? g : 'sphere';
-                } catch (e) { return 'sphere'; }
-            });
-            const pickGeom = (g) => {
-                try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
-                setGeom(g);
-            };
             // Live render-view handle (turntable toggle, env background,
             // snapshot). Set by the preview effect, cleared on dispose.
             const viewRef = React.useRef(null);
-            // Auto-orbit rotation. OFF by default — the model starts still;
-            // the rotate button switches the camera turntable on/off, applied
-            // live via the render view (survives regens because creation
-            // options read the current value from a fresh effect closure).
-            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
-            const controlsRef = React.useRef(null);
             // Fullscreen: the viewport CONTAINER goes fullscreen so the
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
             const viewportRef = React.useRef(null);
-            const [isFullscreen, toggleFullscreenView] = useFullscreen(viewportRef);
-            // Environment map as visible background (mirrors the material
-            // viewer). Applied live via the view; regens re-apply it because
-            // the creation options read the current value (the effect re-runs
-            // with a fresh closure). Only offered when the view actually has
-            // an environment (lit previews) — see envAvail below.
-            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
-            const [envAvail, setEnvAvail] = React.useState(false);
-            const [viewEpoch, setViewEpoch] = React.useState(0);
-            // PNG snapshot named after the node + geometry.
+            // Preview geometry (persisted, shared 'mtlx_preview_geom' key —
+            // usePersistedGeom, js/shared/mtlx-ui.jsx) and the rest of the
+            // viewport-controls cluster (useViewportControls, same file):
+            // auto-orbit rotation OFF by default — the model starts still,
+            // the rotate button switches the camera turntable on/off;
+            // env-background toggle (mirrors the material viewer), only
+            // offered once envAvail flips true for a lit preview; the
+            // view-epoch bump ViewportControls' Environment dialog watches
+            // to re-apply rotation/exposure/session override onto a fresh
+            // view after a rebuild; and fullscreen. All applied live via
+            // the render view and re-read fresh at creation time so they
+            // survive a geometry/string/colorspace regen. Shared with
+            // viewer-app.jsx / graph/preview.jsx.
+            const [geom, pickGeom] = usePersistedGeom('sphere');
+            const {
+                rotating, toggleRotating,
+                envBg, toggleEnvBg,
+                envAvail, setEnvAvail,
+                viewEpoch, setViewEpoch,
+                isFullscreen, toggleFullscreen: toggleFullscreenView,
+                takeScreenshot: takeScreenshotRaw,
+            } = useViewportControls(viewRef, viewportRef, () => nodeName + '_' + geom);
+            // PNG snapshot named after the node + geometry — best-effort,
+            // same as before (the hook's takeScreenshot has no internal
+            // try/catch).
             const takeScreenshot = () => {
-                const view = viewRef.current;
-                if (!view || !view.snapshot) return;
-                try {
-                    downloadSnapshot(view, nodeName + '_' + geom);
-                } catch (e) { /* best-effort */ }
+                try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
@@ -521,13 +512,6 @@
                         let renderable;
                         let needsLighting = false;
 
-                        // Connect an input to the preview node, tapping a
-                        // specific output when the node is multi-output.
-                        const connectToPreview = (input, srcNode) => {
-                            input.setNodeName(srcNode);
-                            if (outputName) input.setAttribute('output', outputName);
-                        };
-
                         // findConvertChain(doc, fromType, toType) now lives in
                         // js/mtlx-engine.js (loaded before this script) and is
                         // used here as a window global.
@@ -560,8 +544,7 @@
                                         // exists (empty value is valid) and tag it;
                                         // the CMS bakes the transform at codegen.
                                         const inp = ensureTypedInput(doc, nodeInst, inputName, 'filename');
-                                        if (typeof inp.setColorSpace === 'function') inp.setColorSpace(String(value));
-                                        else inp.setAttribute('colorspace', String(value));
+                                        mxSetColorspace(inp, String(value));
                                         continue;
                                     }
                                     const inp = ensureTypedInput(doc, nodeInst, inputName, type || 'string');
@@ -580,6 +563,24 @@
                         // page's own inputs are always on the in-scope `doc`
                         // above, so `addTypedInput` is a thin alias binding it.
                         const addTypedInput = (node, name2, type2) => ensureTypedInput(doc, node, name2, type2);
+                        // Create/fetch a typed input and wire it: point it at
+                        // srcName (optionally tapping a specific output via
+                        // opts.output — for multi-output taps, e.g. a
+                        // preview_node's selected output), then strip
+                        // whatever value addTypedInput/ensureTypedInput may
+                        // have copied from the nodedef default onto the
+                        // fresh input — a connected input must never also
+                        // carry one. Folds the addTypedInput -> setNodeName
+                        // -> [setAttribute('output', ...)] -> strip-value
+                        // idiom that used to be repeated at every wiring
+                        // site below. Returns the input.
+                        const connectTypedInput = (node, name2, type2, srcName, opts) => {
+                            const inp = addTypedInput(node, name2, type2);
+                            inp.setNodeName(srcName);
+                            if (opts && opts.output) inp.setAttribute('output', opts.output);
+                            mxRemoveAttr(inp, 'value');
+                            return inp;
+                        };
 
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
@@ -594,12 +595,7 @@
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
-                            const bsdfInp = addTypedInput(renderable, 'bsdf', 'BSDF');
-                            bsdfInp.setNodeName('preview_bsdf');
-                            // Item 9: addTypedInput may have copied the
-                            // nodedef default VALUE onto this fresh input —
-                            // strip it now that it's connected.
-                            mxSafe(() => { bsdfInp.removeAttribute('value'); return true; }, false);
+                            connectTypedInput(renderable, 'bsdf', 'BSDF', 'preview_bsdf');
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'edf') {
@@ -608,12 +604,7 @@
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
-                            const edfInp = addTypedInput(renderable, 'edf', 'EDF');
-                            edfInp.setNodeName('preview_edf');
-                            // Item 9: addTypedInput may have copied the
-                            // nodedef default VALUE onto this fresh input —
-                            // strip it now that it's connected.
-                            mxSafe(() => { edfInp.removeAttribute('value'); return true; }, false);
+                            connectTypedInput(renderable, 'edf', 'EDF', 'preview_edf');
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'translation') {
@@ -635,21 +626,10 @@
                                 const iName = oName.slice(-4) === '_out' ? oName.slice(0, -4) : oName;
                                 const oT = out.getType ? out.getType() : 'color3';
                                 const oTypeStr = (oT && oT.getName) ? oT.getName() : String(oT);
-                                const inp = addTypedInput(renderable, iName, oTypeStr);
-                                inp.setNodeName('preview_node');
-                                inp.setAttribute('output', oName);
-                                // Item 9: addTypedInput (ensureTypedInput) may have
-                                // copied the nodedef default VALUE onto this fresh
-                                // input — a connected input must not also carry one.
-                                mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
+                                connectTypedInput(renderable, iName, oTypeStr, 'preview_node', { output: oName });
                             }
                             const mat = doc.addNode('surfacematerial', 'preview_material', 'material');
-                            const matInp = addTypedInput(mat, 'surfaceshader', 'surfaceshader');
-                            matInp.setNodeName('preview_surface');
-                            // Item 9: addTypedInput may have copied the
-                            // nodedef default VALUE onto this fresh input —
-                            // strip it now that it's connected.
-                            mxSafe(() => { matInp.removeAttribute('value'); return true; }, false);
+                            connectTypedInput(mat, 'surfaceshader', 'surfaceshader', 'preview_surface');
                             createdNodes.push(mat);
                             needsLighting = true;
                         } else if (kind === 'color') {
@@ -679,13 +659,11 @@
                                     // (which taps 'preview_surface' by name)
                                     // picks it up unchanged.
                                     const conv = doc.addNode('convert', isLast ? 'preview_surface' : 'preview_convert' + (i || ''), toType);
-                                    const inp = addTypedInput(conv, 'in', prevType);
-                                    if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
-                                    else inp.setNodeName(srcName);
-                                    // Item 9: addTypedInput may have copied the
-                                    // nodedef default VALUE onto `inp` — strip it
-                                    // now that it's connected, either branch above.
-                                    mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
+                                    // The first hop taps the preview node (and,
+                                    // for multi-output nodes, carries the
+                                    // `output` selection); later hops chain
+                                    // convert→convert.
+                                    connectTypedInput(conv, 'in', prevType, srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                                     createdNodes.push(conv);
                                     srcName = isLast ? 'preview_surface' : 'preview_convert' + (i || '');
                                     srcIsPreviewNode = false;
@@ -708,16 +686,10 @@
                                 let prevType = outType;
                                 chain.forEach((toType, i) => {
                                     const conv = doc.addNode('convert', 'preview_convert' + (i || ''), toType);
-                                    const inp = addTypedInput(conv, 'in', prevType);
                                     // The FIRST hop taps the preview node (and, for
                                     // multi-output nodes, carries the `output`
                                     // selection); later hops chain convert→convert.
-                                    if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
-                                    else inp.setNodeName(srcName);
-                                    // Item 9: addTypedInput may have copied the
-                                    // nodedef default VALUE onto `inp` — strip it
-                                    // now that it's connected, either branch above.
-                                    mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
+                                    connectTypedInput(conv, 'in', prevType, srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                                     createdNodes.push(conv);
                                     srcName = 'preview_convert' + (i || '');
                                     srcIsPreviewNode = false;
@@ -731,16 +703,10 @@
                                 // the nodedef's declared float, so NO nodedef matches
                                 // the node instance → "Could not find a nodedef for
                                 // node 'preview_surface'" for every color-kind node.
-                                const emiss = addTypedInput(renderable, 'emission_color', 'color3');
                                 // No convert chain: emission_color taps preview_node
                                 // directly and must carry the `output` selection
                                 // itself for multi-output color3 taps.
-                                if (srcIsPreviewNode) connectToPreview(emiss, 'preview_node');
-                                else emiss.setNodeName(srcName);
-                                // Item 9: addTypedInput may have copied the
-                                // nodedef default VALUE onto `emiss` — strip it
-                                // now that it's connected, either branch above.
-                                mxSafe(() => { emiss.removeAttribute('value'); return true; }, false);
+                                connectTypedInput(renderable, 'emission_color', 'color3', srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                             }
                         } else {
                             const shown = (types || []).join(', ') || 'unknown';
@@ -755,12 +721,7 @@
                         if (kind !== 'translation') {
                             try {
                                 const mat0 = doc.addNode('surfacematerial', 'preview_material', 'material');
-                                const mat0Inp = addTypedInput(mat0, 'surfaceshader', 'surfaceshader');
-                                mat0Inp.setNodeName('preview_surface');
-                                // Item 9: addTypedInput may have copied the
-                                // nodedef default VALUE onto this fresh input —
-                                // strip it now that it's connected.
-                                mxSafe(() => { mat0Inp.removeAttribute('value'); return true; }, false);
+                                connectTypedInput(mat0, 'surfaceshader', 'surfaceshader', 'preview_surface');
                                 createdNodes.push(mat0);
                             } catch (matErr) { /* export falls back to wrapper-less doc */ }
                         }
@@ -885,7 +846,6 @@
                         viewRef.current = view;
                         setViewEpoch((n) => n + 1);
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
-                        controlsRef.current = view.controls;
                         const { uniforms, introspected } = view;
 
                         // ---- Dynamic parameter UI ----
@@ -1175,7 +1135,6 @@
 
                 return () => {
                     mounted = false;
-                    controlsRef.current = null;
                     if (viewRef.current === viewHandle) viewRef.current = null;
                     if (viewHandle) viewHandle.dispose();
                 };
@@ -1535,12 +1494,6 @@
                 </div>
             );
         };
-
-        // Auto-generated port table for nodes with no spec documentation:
-        // reads inputs/outputs (name, type, default, enum) directly from the
-        // node's nodedefs in the loaded standard library. Clearly disclaimed
-        // as machine-generated, since it is NOT part of the official docs.
-
 
         // ---- public API ----
         Object.assign(window, { Node3DPreview });

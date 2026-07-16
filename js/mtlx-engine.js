@@ -350,6 +350,18 @@ const mxElType = (el) => mxSafe(() => String(el.getType()), '');
 const mxElName = (el) => mxSafe(() => el.getName(), '');
 const mxElAttr = (el, name) => mxSafe(() => el.getAttribute(name), '');
 const mxElHasAttr = (el, name) => mxSafe(() => el.hasAttribute(name), false);
+// Exception-safe single-attribute writes — the wasm binding can throw on
+// a detached/invalid element, which mxSafe swallows into a `false` return.
+const mxSetAttr = (el, name, value) => mxSafe(() => { el.setAttribute(name, value); return true; }, false);
+const mxRemoveAttr = (el, name) => mxSafe(() => { el.removeAttribute(name); return true; }, false);
+// Tag an element's colorspace, preferring the typed setColorSpace()
+// binding when present and falling back to the raw attribute otherwise —
+// not every element's wasm binding exposes the typed setter.
+const mxSetColorspace = (el, cs) => mxSafe(() => {
+    if (typeof el.setColorSpace === 'function') el.setColorSpace(cs);
+    else el.setAttribute('colorspace', cs);
+    return true;
+}, false);
 
 // Shortest chain of `convert` hops fromType->toType using ONLY the
 // conversions the loaded library actually defines. This matters because
@@ -438,7 +450,7 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
                 // meaningless on an instance and noisy in exports.
                 for (const attr of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
                     'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
-                    mxSafe(() => { inp.removeAttribute(attr); return true; }, false);
+                    mxRemoveAttr(inp, attr);
                 }
             }
         }
@@ -453,11 +465,11 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
             return true;
         }, false);
         if (mxElType(inp) !== wantedType) {
-            mxSafe(() => { inp.setAttribute('type', wantedType); return true; }, false);
+            mxSetAttr(inp, 'type', wantedType);
         }
         // A copied default VALUE is malformed for the corrected type —
         // drop it; callers connect or re-value anyway.
-        mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
+        mxRemoveAttr(inp, 'value');
     }
     if (inp && wantedType && mxElType(inp) !== wantedType) {
         console.warn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
@@ -504,7 +516,7 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
                 // bindings") as a non-empty one, and mxElAttr's ''
                 // fallback can't tell "absent" from "present but empty".
                 if (connected && mxElHasAttr(child, 'value')) {
-                    const removed = mxSafe(() => { child.removeAttribute('value'); return true; }, false);
+                    const removed = mxRemoveAttr(child, 'value');
                     if (removed) stripped++;
                 }
             }
@@ -514,6 +526,11 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
     walk(doc, 0);
     return stripped;
 };
+
+// Resolves on the next paint — callers awaiting this yield to the
+// browser instead of blocking it, letting a queued DOM/state update
+// actually paint before continuing.
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 
 // ------------------------------------------------------------------
 // Drag & drop ingestion pipeline — shared by node-graph.html and
@@ -631,6 +648,17 @@ const resolveIncludes = async (xml, fileMap, fromDir, visited) => {
     }
     parts.push(xml.slice(last));
     return parts.join('');
+};
+
+// Read a dropped file entry and resolve its xi:includes against the rest
+// of `map`. Callers need BOTH strings back: the graph editor validates the
+// RAW as-authored text (noteDocXml) while parsing consumes the RESOLVED
+// text, so this returns both rather than picking one.
+const readMtlxText = async (entry, path, map) => {
+    const raw = await entry.text();
+    const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
+    const resolved = /<xi:include\b/.test(raw) ? await resolveIncludes(raw, map, dir) : raw;
+    return { raw, resolved };
 };
 
 // Session-lifetime texture cache, keyed by file identity (not by
@@ -3441,8 +3469,9 @@ Object.assign(window, {
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
+    mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
-    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes,
+    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,

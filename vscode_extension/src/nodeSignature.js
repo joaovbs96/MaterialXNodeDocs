@@ -29,6 +29,8 @@
 //     compact hover-sized markdown rendering of a table's ports.
 'use strict';
 
+const { escapeRegExp } = require('./util');
+
 // ---------------------------------------------------------------------
 // Verbatim port of js/docs/port-tables.jsx's signature-label helper
 // cluster (~lines 247-356 there), trimmed of JSX/React context. See the
@@ -172,10 +174,6 @@ function extractAttrValue(tagText, attrName) {
     return m[2] !== undefined ? m[2] : m[3];
 }
 
-function escapeRegExpLiteral(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function extractElementContext(text, nameStartOffset, tagName) {
     const FAIL = { type: null, inputs: [] };
     try {
@@ -235,7 +233,7 @@ function extractElementContext(text, nameStartOffset, tagName) {
         // of a huge element are still found).
         const childStart = gt + 1;
         const region = text.slice(childStart, Math.min(text.length, childStart + CHILDREN_SCAN_CAP));
-        const escapedTag = escapeRegExpLiteral(tagName);
+        const escapedTag = escapeRegExp(tagName);
         const closeMatch = new RegExp('</' + escapedTag + '\\b').exec(region);
         const nestedMatch = new RegExp('<' + escapedTag + '[\\s/>]').exec(region);
         let regionEnd = region.length;
@@ -413,6 +411,50 @@ function padCell(s, width) {
     return s + ' '.repeat(Math.max(0, width - s.length));
 }
 
+// Column widths: fit the content (and never narrower than the header
+// label), capped per column. Extracted out of renderPortsMarkdown so the
+// width-computation step can be read (and, per the module's own
+// verification checks, byte-compared) independently of line assembly —
+// behavior/output unchanged.
+function computeColumnWidths(cols, rows) {
+    const widths = cols.map((c, i) => {
+        const longest = rows.reduce((mx, r) => Math.max(mx, r[i].length), 0);
+        return Math.min(COL_WIDTH_CAPS[c], Math.max(COLUMN_LABELS[c].length, longest));
+    });
+    // Description (always the last column when present) additionally
+    // yields width when the other columns' ACTUAL widths would push
+    // the total past MAX_TABLE_WIDTH — with every cap maxed out this
+    // still leaves >= 34 chars, so the label-length floor below is
+    // purely defensive.
+    const descIdx = cols.indexOf('description');
+    if (descIdx !== -1) {
+        const othersTotal = widths.reduce((sum, w, i) => (i === descIdx ? sum : sum + w), 0);
+        const room = MAX_TABLE_WIDTH - othersTotal - CELL_SEPARATOR.length * (cols.length - 1);
+        widths[descIdx] = Math.max(COLUMN_LABELS.description.length, Math.min(widths[descIdx], room));
+    }
+    return widths;
+}
+
+// Header, ─/┼ separator, then data rows. A row's height is its tallest
+// wrapped cell; shorter cells pad with blank lines, and every rendered
+// line right-trims (padding on the LAST column is invisible, so don't
+// emit it). Returns the array of (unjoined) lines for the fenced code
+// block. Extracted out of renderPortsMarkdown alongside
+// computeColumnWidths above — output unchanged.
+function buildTableLines(cols, rows, widths) {
+    const tableLines = [];
+    tableLines.push(cols.map((c, i) => padCell(COLUMN_LABELS[c], widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
+    tableLines.push(widths.map((w) => '─'.repeat(w)).join('─┼─'));
+    for (const r of rows) {
+        const wrapped = r.map((cell, i) => wrapCell(cell, widths[i]));
+        const height = Math.max.apply(null, wrapped.map((ls) => ls.length));
+        for (let li = 0; li < height; li++) {
+            tableLines.push(wrapped.map((ls, i) => padCell(ls[li] || '', widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
+        }
+    }
+    return tableLines;
+}
+
 function renderPortsMarkdown(table) {
     try {
         if (!table || !table.ports) return '';
@@ -452,38 +494,8 @@ function renderPortsMarkdown(table) {
             return cols.map((c) => (c === 'port' ? cellText(pn, false) : cellText(row[c], c === 'description')));
         });
 
-        // Column widths: fit the content (and never narrower than the
-        // header label), capped per column.
-        const widths = cols.map((c, i) => {
-            const longest = rows.reduce((mx, r) => Math.max(mx, r[i].length), 0);
-            return Math.min(COL_WIDTH_CAPS[c], Math.max(COLUMN_LABELS[c].length, longest));
-        });
-        // Description (always the last column when present) additionally
-        // yields width when the other columns' ACTUAL widths would push
-        // the total past MAX_TABLE_WIDTH — with every cap maxed out this
-        // still leaves >= 34 chars, so the label-length floor below is
-        // purely defensive.
-        const descIdx = cols.indexOf('description');
-        if (descIdx !== -1) {
-            const othersTotal = widths.reduce((sum, w, i) => (i === descIdx ? sum : sum + w), 0);
-            const room = MAX_TABLE_WIDTH - othersTotal - CELL_SEPARATOR.length * (cols.length - 1);
-            widths[descIdx] = Math.max(COLUMN_LABELS.description.length, Math.min(widths[descIdx], room));
-        }
-
-        // Header, ─/┼ separator, then data rows. A row's height is its
-        // tallest wrapped cell; shorter cells pad with blank lines, and
-        // every rendered line right-trims (padding on the LAST column is
-        // invisible, so don't emit it).
-        const tableLines = [];
-        tableLines.push(cols.map((c, i) => padCell(COLUMN_LABELS[c], widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
-        tableLines.push(widths.map((w) => '─'.repeat(w)).join('─┼─'));
-        for (const r of rows) {
-            const wrapped = r.map((cell, i) => wrapCell(cell, widths[i]));
-            const height = Math.max.apply(null, wrapped.map((ls) => ls.length));
-            for (let li = 0; li < height; li++) {
-                tableLines.push(wrapped.map((ls, i) => padCell(ls[li] || '', widths[i])).join(CELL_SEPARATOR).replace(/ +$/, ''));
-            }
-        }
+        const widths = computeColumnWidths(cols, rows);
+        const tableLines = buildTableLines(cols, rows, widths);
         parts.push('```text\n' + tableLines.join('\n') + '\n```');
 
         const remaining = portNames.length - shown.length;

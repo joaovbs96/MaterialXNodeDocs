@@ -390,32 +390,30 @@
             // one view carries over to the other. Falls back to 'shaderball'
             // (this preview's long-standing hardcoded default) rather than
             // node-preview.jsx's 'sphere' when nothing is stored yet.
-            const [geom, setGeom] = React.useState(() => {
-                const valid = ['shaderball', 'sphere', 'cube'];
-                try {
-                    const g = localStorage.getItem('mtlx_preview_geom');
-                    return valid.indexOf(g) !== -1 ? g : 'shaderball';
-                } catch (e) { return 'shaderball'; }
-            });
-            const pickGeom = (g) => {
-                try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
-                setGeom(g);
-            };
-            // Auto-orbit + env-background toggles, applied live via the view
-            // handle (the SAME ref the parent passes in and reads elsewhere
-            // — see previewViewRef in graph-app.jsx) and re-read fresh at
-            // creation time so they survive a geometry-triggered rebuild.
-            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
-            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
-            const [envAvail, setEnvAvail] = React.useState(false);
-            const [viewEpoch, setViewEpoch] = React.useState(0);
-            const [isFullscreen, toggleFullscreenView] = useFullscreen(viewportRef);
+            // Preview geometry (persisted, shared 'mtlx_preview_geom' key —
+            // usePersistedGeom, js/shared/mtlx-ui.jsx) since it's the
+            // identical setting in spirit as the docs previewer's — a
+            // value picked in one view carries over to the other — but
+            // falls back to 'shaderball' (this preview's long-standing
+            // hardcoded default) rather than node-preview.jsx's 'sphere'
+            // when nothing is stored yet. Auto-orbit + env-background
+            // toggles, the view-epoch bump, fullscreen and the screenshot
+            // action (useViewportControls, same file) are applied live via
+            // the view handle (the SAME ref the parent passes in and reads
+            // elsewhere — see previewViewRef in graph-app.jsx) and re-read
+            // fresh at creation time so they survive a geometry-triggered
+            // rebuild.
+            const [geom, pickGeom] = usePersistedGeom('shaderball');
+            const {
+                rotating, toggleRotating,
+                envBg, toggleEnvBg,
+                envAvail, setEnvAvail,
+                viewEpoch, setViewEpoch,
+                isFullscreen, toggleFullscreen: toggleFullscreenView,
+                takeScreenshot: takeScreenshotRaw,
+            } = useViewportControls(viewRef, viewportRef, () => label + '_' + geom);
             const takeScreenshot = () => {
-                const view = viewRef && viewRef.current;
-                if (!view || !view.snapshot) return;
-                try {
-                    downloadSnapshot(view, label + '_' + geom);
-                } catch (e) { /* best-effort */ }
+                try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
 
             // Component-lifetime handle to the CURRENTLY LIVE, GL-compiled
@@ -468,8 +466,8 @@
                         // very frame that node should first appear in. Same
                         // double-rAF-defer idiom as changeScope (graph-app.jsx)
                         // — the graph's commit paints first, the regen follows.
-                        await new Promise((r) => requestAnimationFrame(r));
-                        await new Promise((r) => requestAnimationFrame(r));
+                        await nextFrame();
+                        await nextFrame();
                         // Re-check staleness: another run may have started
                         // (and this effect's cleanup set mounted = false)
                         // while we were yielding across those two frames.
@@ -860,9 +858,10 @@
                             // running against the live view -- the OLD
                             // material keeps rendering/orbiting underneath,
                             // so this is a small corner badge rather than a
-                            // full overlay: there's no checker/blank flash
-                            // to paper over anymore (that was the old
-                            // lastFrame snapshot's job, deleted above).
+                            // full overlay: swapping materials on the SAME
+                            // live shell means there's no checker/blank
+                            // flash to paper over anymore, unlike the older
+                            // teardown-and-rebuild approach this replaced.
                             <div className="absolute top-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
                         )}
                         <LoadingOverlay

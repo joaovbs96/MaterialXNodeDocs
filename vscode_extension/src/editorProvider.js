@@ -11,6 +11,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const docScanner = require('./docScanner');
+const { errMsg } = require('./util');
 
 // How long to wait after the last keystroke before rescanning + resending
 // the document to the webview. Keeps a fast typist from triggering a
@@ -80,6 +81,15 @@ function getSharedOutputChannel() {
     return sharedOutputChannel;
 }
 
+// Shared by every timestamped OutputChannel line this extension writes
+// (the 'mtlx-error' forward below, sendUpdate's per-warning log further
+// down, and extension.js's tier-2-unavailable log, which imports this) —
+// prepends a '[ISO timestamp] ' prefix so entries can be correlated
+// against other logs.
+function logLine(channel, text) {
+    channel.appendLine('[' + new Date().toISOString() + '] ' + text);
+}
+
 // Handles the two message types every MaterialX webview can send,
 // regardless of which command created it:
 //   - 'mtlx-fetch'  { id, path }: media/bootstrap.js's fetch() bridge
@@ -124,11 +134,11 @@ function wireCommonWebviewMessages(webview, repoRootUri, outputChannel) {
                 // bootstrap.js falls back to its native fetch on
                 // { ok: false }, so a read failure here is never worse
                 // than not having the bridge at all.
-                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: false, error: err && err.message ? err.message : String(err) });
+                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: false, error: errMsg(err) });
             }
         } else if (msg.type === 'mtlx-error') {
             const channel = outputChannel || getSharedOutputChannel();
-            channel.appendLine('[' + new Date().toISOString() + '] ' + String(msg.text || ''));
+            logLine(channel, String(msg.text || ''));
         }
     });
 }
@@ -309,7 +319,7 @@ class MaterialXEditorProvider {
                         // devtools console, which most users never open.
                         const channel = getSharedOutputChannel();
                         for (const warning of warnings) {
-                            channel.appendLine('[' + new Date().toISOString() + '] ' + document.fileName + ': ' + warning);
+                            logLine(channel, document.fileName + ': ' + warning);
                         }
                     }
                     webviewPanel.webview.postMessage({
@@ -322,7 +332,7 @@ class MaterialXEditorProvider {
                 } catch (err) {
                     vscode.window.showErrorMessage(
                         'MaterialX Playground: failed to load "' + path.basename(document.fileName) + '" — '
-                        + (err && err.message ? err.message : String(err))
+                        + errMsg(err)
                     );
                 }
             };
@@ -396,7 +406,7 @@ class MaterialXEditorProvider {
                         await document.save();
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: true });
                     } catch (err) {
-                        const message = err && err.message ? err.message : String(err);
+                        const message = errMsg(err);
                         vscode.window.showErrorMessage(
                             'MaterialX Playground: failed to save "' + path.basename(document.fileName) + '" — ' + message
                         );
@@ -440,7 +450,7 @@ class MaterialXEditorProvider {
                     } catch (err) {
                         vscode.window.showErrorMessage(
                             'MaterialX Playground: failed to sync "' + path.basename(document.fileName) + '" — '
-                            + (err && err.message ? err.message : String(err))
+                            + errMsg(err)
                         );
                     }
                     return;
@@ -468,7 +478,7 @@ class MaterialXEditorProvider {
                     } catch (err) {
                         vscode.window.showErrorMessage(
                             'MaterialX Playground: ' + (msg.type === 'mtlx-native-undo' ? 'undo' : 'redo') + ' failed — '
-                            + (err && err.message ? err.message : String(err))
+                            + errMsg(err)
                         );
                     }
                 }
@@ -513,7 +523,7 @@ class MaterialXEditorProvider {
             });
         } catch (err) {
             vscode.window.showErrorMessage(
-                'MaterialX Playground: failed to open the editor — ' + (err && err.message ? err.message : String(err))
+                'MaterialX Playground: failed to open the editor — ' + errMsg(err)
             );
         }
     }
@@ -533,10 +543,15 @@ class MaterialXEditorProvider {
             panel.onDidDispose(() => commonSub.dispose());
         } catch (err) {
             vscode.window.showErrorMessage(
-                'MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err))
+                'MaterialX Playground: failed to open node documentation — ' + errMsg(err)
             );
         }
     }
 }
 
-module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel };
+// wireCommonWebviewMessages is intentionally NOT exported — internal-only,
+// called by resolveCustomTextEditor/renderStaticHtml within this file. Kept
+// as a module-scope function (rather than folded into either call site) so
+// both webview-creation paths share the exact same fetch-bridge/error-
+// forwarding wiring; nothing outside this file needs to call it directly.
+module.exports = { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine };

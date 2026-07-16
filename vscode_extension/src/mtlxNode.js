@@ -20,6 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { errMsg } = require('./util');
 
 // Expected byte size of js/JsMaterialXGenShader.data, the packed
 // emscripten virtual-FS archive carrying the MaterialX standard
@@ -165,7 +166,7 @@ function getMxEnv(repoRoot) {
         (env) => env,
         (e) => {
             failed = true;
-            pendingError = e && e.message ? e.message : String(e);
+            pendingError = errMsg(e);
             return null;
         }
     );

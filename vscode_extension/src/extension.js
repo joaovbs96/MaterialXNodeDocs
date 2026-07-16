@@ -10,9 +10,10 @@
 'use strict';
 
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine } = require('./editorProvider');
 const validator = require('./validator');
 const hoverProvider = require('./hoverProvider');
+const { errMsg } = require('./util');
 
 // Diagnostics + status bar are created once in activate() but read/
 // written from the module-scope helpers below (toVsDiagnostics,
@@ -69,15 +70,19 @@ async function runValidation(document) {
     diagnosticCollection.set(document.uri, toVsDiagnostics(items));
     const warning = validator.consumeTier2Warning();
     if (warning) {
-        getSharedOutputChannel().appendLine('[' + new Date().toISOString() + '] MaterialX semantic validation (tier 2) is unavailable: ' + warning);
+        logLine(getSharedOutputChannel(), 'MaterialX semantic validation (tier 2) is unavailable: ' + warning);
     }
     updateStatusBar();
 }
 
 // Debounced per-document so a fast typist doesn't re-run tier 1/2 on
 // every keystroke, and so multiple open .mtlx tabs don't share (and
-// clobber) a single timer. Mirrors editorProvider.js's
-// RELOAD_DEBOUNCE_MS naming/pattern.
+// clobber) a single timer. Naming mirrors editorProvider.js's
+// RELOAD_DEBOUNCE_MS, but not the pattern: that file debounces one
+// active panel/document with a single closure-scoped timer, while this
+// one debounces however many .mtlx documents are open at once, so it
+// needs a timer PER document (the debounceTimers Map below), keyed by
+// uri.toString().
 const VALIDATE_DEBOUNCE_MS = 400;
 const debounceTimers = new Map(); // uri.toString() -> NodeJS.Timeout
 
@@ -141,7 +146,7 @@ function activate(context) {
             }
             await vscode.commands.executeCommand('vscode.openWith', uri, 'materialxPlayground.editor');
         } catch (err) {
-            vscode.window.showErrorMessage('MaterialX Playground: failed to open — ' + (err && err.message ? err.message : String(err)));
+            vscode.window.showErrorMessage('MaterialX Playground: failed to open — ' + errMsg(err));
         }
     };
 
@@ -197,7 +202,7 @@ function activate(context) {
                     : '#!docs';
                 await openDocsPanel(context, hash, vscode.ViewColumn.Active);
             } catch (err) {
-                vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + (err && err.message ? err.message : String(err)));
+                vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
             }
         })
     );
