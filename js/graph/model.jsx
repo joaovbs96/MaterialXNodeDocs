@@ -24,10 +24,15 @@
 
         // Loaded automatically on page open — an official example whose
         // nodegraph (NG_marble1) makes a much better first graph than a
-        // single-node document.
+        // single-node document. Resolved through window.MtlxAssets
+        // (js/mtlx-assets.js) rather than a hardcoded raw.githubusercontent.com
+        // URL, so a future offline/packaged build serves it from the local
+        // vendor mirror instead — see mtlx-assets.js's header comment. Safe
+        // to call at module-load time here: this file only loads (as part
+        // of the graph view's babelScripts manifest) after js/shell.jsx's
+        // loadViewDeps has already awaited MtlxAssets.ready.
         const DEFAULT_GRAPH_URL =
-            'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/' +
-            'v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx';
+            window.MtlxAssets.repoUrl('resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx');
 
         // ---- Ingestion (same pipeline as material-viewer.html) -------------
         // normPath, readDroppedItems, expandZips, findFileForRef and

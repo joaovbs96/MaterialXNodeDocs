@@ -458,21 +458,22 @@
         }
 
         // Curated MaterialX example documents (item F3.2's "Presets"
-        // toolbar button), fetched straight from the official repo at the
-        // SAME tag/base URL the app already uses for its default startup
-        // document (js/graph/model.jsx's DEFAULT_GRAPH_URL) — so a preset
-        // pick behaves exactly like that first-load fetch, just chosen by
-        // the user instead of hardcoded. Every path below was verified to
-        // exist at this tag (HTTP 200 via GitHub's contents API and a
-        // direct raw.githubusercontent.com request) before being added;
-        // candidates that 404'd (e.g. StandardSurface's plain
+        // toolbar button), resolved through window.MtlxAssets
+        // (js/mtlx-assets.js) at the SAME base the app already uses for its
+        // default startup document (js/graph/model.jsx's DEFAULT_GRAPH_URL)
+        // — so a preset pick behaves exactly like that first-load fetch,
+        // just chosen by the user instead of hardcoded, and (in a future
+        // offline/packaged build) resolves against the local vendor mirror
+        // instead of GitHub with zero further code changes — see
+        // mtlx-assets.js's header comment. Every path below was verified to
+        // exist at the pinned spec tag (HTTP 200 via GitHub's contents API
+        // and a direct raw.githubusercontent.com request) before being
+        // added; candidates that 404'd (e.g. StandardSurface's plain
         // "standard_surface_brass_tiled.mtlx" — only the "_look_" variant
         // exists at this tag; OpenPbr's "open_pbr_glass_tinted.mtlx" and
         // "open_pbr_anisotropy.mtlx" — no such files at this tag) were
         // dropped rather than guessed at.
-        const MTLX_PRESETS_BASE =
-            'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/' +
-            'v1.39.5/resources/Materials/Examples/';
+        const MTLX_PRESETS_BASE = window.MtlxAssets.repoUrl('resources/Materials/Examples/');
         const MTLX_PRESETS = [
             { label: 'Marble (solid)', desc: 'Noise-driven solid marble veining', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
             { label: 'Jade', desc: 'Translucent jade stone with subsurface scattering', path: 'StandardSurface/standard_surface_jade.mtlx' },

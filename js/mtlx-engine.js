@@ -1109,13 +1109,23 @@ const normalizeGeometry = (geometry) => {
 // may contain several meshes (ball, base, ...) with node transforms —
 // bake each mesh's world matrix and concatenate into one non-indexed
 // BufferGeometry so it can share the single preview material.
-const SHADERBALL_URL = 'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/gh-pages/Geometry/shaderball.glb';
+//
+// The URL is resolved LAZILY, inside this function, via
+// window.MtlxAssets.ghPagesUrl() (js/mtlx-assets.js) rather than a
+// module-level const: this file is loaded EAGERLY (app.html's own
+// text/babel tag, before the shell ever runs), i.e. before
+// js/mtlx-assets.js's local-vs-remote probe (window.MtlxAssets.ready)
+// can possibly have settled. Deferring the resolution to first call
+// (which in practice only happens well after a view has mounted, long
+// after `ready` has resolved) keeps this correct in both modes without
+// this eagerly-loaded file needing to await anything at load time. See
+// mtlx-assets.js's header comment for the local/remote contract.
 let shaderballPromise = null;
 const getShaderballGeometry = () => {
     if (!shaderballPromise) {
         shaderballPromise = new Promise((resolve) => {
             if (!THREE.GLTFLoader) return resolve(null);
-            new THREE.GLTFLoader().load(SHADERBALL_URL, (gltf) => {
+            new THREE.GLTFLoader().load(window.MtlxAssets.ghPagesUrl('Geometry/shaderball.glb'), (gltf) => {
                 try {
                     const parts = [];
                     gltf.scene.updateMatrixWorld(true);

@@ -58,7 +58,7 @@ Build MaterialX node graphs visually.
 
 ## Getting started
 
-There is no build step. The app is plain static files plus CDN-hosted libraries, so you just need to serve the folder over HTTP (opening `index.html` directly via `file://` won't work, because the app fetches its `.jsx`, WASM, and library files). You'll need a WebGL2-capable browser, and internet access at runtime since the third-party libraries load from public CDNs.
+There is no build step. The app is plain static files, and the repo ships with the third-party libraries already vendored into the committed `vendor/` folder, so a fresh clone just needs to be served over HTTP (opening `index.html` directly via `file://` won't work, because the app fetches its `.jsx`, WASM, and library files). You'll need a WebGL2-capable browser.
 
 Any static file server works, for example:
 
@@ -66,11 +66,14 @@ Any static file server works, for example:
 # Python 3
 python -m http.server 8000
 
-# or Node
+# or Node (fetches the `serve` package from npm on first use, so that
+# first run needs network access — the Python command above doesn't)
 npx serve .
 ```
 
 Then open <http://localhost:8000/>.
+
+> **Maintainers:** `vendor/` only needs to be regenerated after changing a pinned version in `package.json` devDependencies: `npm install && npm run vendor`. For a fully offline build that also snapshots MaterialX spec/preset/texture content and the shaderball geometry into `vendor/materialx/` (gitignored, produced on demand), run `npm run vendor:offline` instead.
 
 ### URLs / routing
 
@@ -96,9 +99,11 @@ Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off aga
 
 ---
 
-### The standard library and spec data
+### The standard library, spec data, and WASM modules
 
 **`libraries/`** vendors the MaterialX standard library (`stdlib`, `pbrlib`, `bxdf`, `cmlib`, `lights`, `nprlib`, `targets`), which the WASM loads to resolve node definitions, implementations, and target inheritance.
+
+**`js/JsMaterialXCore*` and `js/JsMaterialXGenShader*`** (`.js`/`.wasm`/`.data`, v1.39.5) are the MaterialX WebAssembly modules themselves, obtained from the official MaterialX build and committed manually. They predate, and are not managed by, `scripts/vendor.mjs`.
 
 ---
 
@@ -108,10 +113,10 @@ Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off aga
 - [React 18](https://react.dev/) (UMD) + [Babel Standalone](https://babeljs.io/docs/babel-standalone) (in-browser JSX)
 - [three.js](https://threejs.org/) for the 3D previews
 - [React Flow](https://reactflow.dev/) for the node graph editor, with [dagre](https://github.com/dagrejs/dagre) for automatic layout
-- [Tailwind CSS](https://tailwindcss.com/) (CDN) for styling
+- [Tailwind CSS](https://tailwindcss.com/) (vendored Play build) for styling
 - [KaTeX](https://katex.org/) for math in the docs, [highlight.js](https://highlightjs.org/) for XML highlighting, [JSZip](https://stuk.github.io/jszip/) for zipped texture sets
 
-Currently, all third-party libraries, except MaterialX, are loaded from public CDNs at runtime.
+All third-party JS/CSS libraries are vendored: `npm run vendor` installs pinned versions from npm (see `package.json` devDependencies) and copies the needed dist files into a committed `vendor/` folder, served locally alongside the app — no CDN requests at runtime. The one direct download is the Tailwind Play build, fetched by URL and verified against a pinned sha256. MaterialX spec/template/example documents and the shaderball geometry are the one exception: the web app fetches them from `raw.githubusercontent.com` on demand unless a local `vendor/materialx/` snapshot is present, in which case they're read from disk instead and the app performs zero network access (see `js/mtlx-assets.js`). A packaged offline build ships that snapshot.
 
 ---
 

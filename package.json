@@ -11,6 +11,22 @@
   },
   "main": "vscode_extension/src/extension.js",
   "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXNodeDocs" },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "vendor:offline": "node scripts/vendor.mjs --with-materialx"
+  },
+  "devDependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@babel/standalone": "7.26.10",
+    "three": "0.128.0",
+    "three-147": "npm:three@0.147.0",
+    "katex": "0.16.11",
+    "jszip": "3.10.1",
+    "reactflow": "11.11.4",
+    "dagre": "0.8.5",
+    "@highlightjs/cdn-assets": "11.9.0"
+  },
   "categories": [
     "Visualization"
   ],

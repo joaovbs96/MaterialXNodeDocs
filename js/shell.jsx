@@ -6,8 +6,8 @@
 // (#!viewer, #!graph; anything else — including empty and legacy
 // #/lib/group/name docs permalinks — means docs).
 //
-// Each view's CDN + local script/CSS dependencies are fetched only the
-// first time that view becomes active, then the view is kept mounted
+// Each view's vendored + local script/CSS dependencies are fetched only
+// the first time that view becomes active, then the view is kept mounted
 // (hidden via CSS `display: none`, not unmounted) so switching back is
 // instant and preserves state. Each top-level view component
 // (App / MaterialViewerApp / NodeGraphApp, and Node3DPreview inside
@@ -112,15 +112,17 @@ async function loadJsxApp(src) {
 __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 
 // ------------------------------------------------------------------
-// Per-view dependency manifests (CDN + local scripts, IN ORDER — copied
-// exactly from the <head>/<body> script tags of index.html,
-// material-viewer.html and node-graph.html).
+// Per-view dependency manifests (vendored + local scripts, IN ORDER —
+// copied exactly from the <head>/<body> script tags of index.html,
+// material-viewer.html and node-graph.html; the CDN URLs those tags once
+// pointed at now resolve to pinned copies under vendor/ instead — see
+// scripts/vendor.mjs).
 //
 // Every entry is split into `scripts` (plain JS, no Babel — loaded via
 // loadScript) and `babelScripts` (type="text/babel" JSX/ESNext files —
 // loaded via loadJsxApp, which fetches + Babel.transform()s + injects
 // them). This split is deliberate rather than inferring the loader from
-// the file extension: e.g. the JSZip and React Flow CDN bundles are
+// the file extension: e.g. the JSZip and React Flow vendored bundles are
 // plain pre-built UMD/JS with a .js URL, so they belong in `scripts`,
 // while local JSX-adjacent/ESNext sources belong in `babelScripts`.
 //
@@ -141,9 +143,9 @@ const VIEW_DEPS = {
         globalName: 'HomeApp',
     },
     docs: {
-        css: ['https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'],
+        css: ['vendor/katex/katex.min.css'],
         scripts: [
-            'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js',
+            'vendor/katex/katex.min.js',
             'js/spec-parser.js',
         ],
         babelScripts: [
@@ -161,7 +163,7 @@ const VIEW_DEPS = {
     viewer: {
         css: [],
         scripts: [
-            'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+            'vendor/jszip/jszip.min.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -171,19 +173,19 @@ const VIEW_DEPS = {
     },
     graph: {
         css: [
-            'https://unpkg.com/reactflow@11.11.4/dist/style.css',
+            'vendor/reactflow/style.css',
         ],
         scripts: [
-            'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-            'https://unpkg.com/reactflow@11.11.4/dist/umd/index.js',
-            'https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js',
+            'vendor/jszip/jszip.min.js',
+            'vendor/reactflow/index.js',
+            'vendor/dagre/dagre.min.js',
             // Lazy-loaded only because the "Document" dialog (XmlDialog in
             // js/graph-app.jsx) wants XML syntax highlighting — not needed
             // for the rest of the graph view. Core bundle + the xml language
-            // pack explicitly, so highlighting works even if a given CDN
-            // build's "common languages" set ever drops markup/xml.
-            'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
-            'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js',
+            // pack explicitly, so highlighting works even if a given
+            // vendored build's "common languages" set ever drops markup/xml.
+            'vendor/highlightjs/highlight.min.js',
+            'vendor/highlightjs/xml.min.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -214,6 +216,16 @@ async function loadViewDeps(viewName) {
     if (__viewDepsPromises.has(viewName)) return __viewDepsPromises.get(viewName);
     const dep = VIEW_DEPS[viewName];
     const p = (async () => {
+        // js/mtlx-assets.js starts its local-vs-remote probe at parse
+        // time (before this shell even mounts), but resolves it
+        // asynchronously (a fetch). Awaiting it here, once, before any
+        // view's deps load, is what lets every lazily-loaded view below
+        // (docs/viewer/graph, and everything they in turn load) treat
+        // window.MtlxAssets's isLocal()/repoUrl()/ghPagesUrl()/
+        // resourcesRoot() as a plain SYNCHRONOUS API instead of each
+        // having to await readiness itself — this is the single choke
+        // point all lazy view loading passes through.
+        await window.MtlxAssets.ready;
         for (const href of dep.css) await loadCss(href);
         for (const src of dep.scripts) await loadScript(src);
         for (const src of dep.babelScripts) await loadJsxApp(src);

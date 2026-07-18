@@ -1,11 +1,13 @@
 // spec-parser.js — in-browser port of spec_parser.py.
 //
 // Builds the node-documentation database ON THE FLY: fetches the MaterialX
-// specification markdown files straight from GitHub (pinned tag below),
-// parses them with the same state machine as the Python script, and joins
-// them against the nodedefs reported by the MaterialX WASM runtime
-// (getMxEnv from mtlx-engine.js). The result is byte-for-byte the same
-// JSON shape spec_parser.py wrote to nodes.json:
+// specification markdown files (pinned tag below) through the shared
+// local-first resolver (window.MtlxAssets, js/mtlx-assets.js — GitHub
+// today, a vendored local mirror once a future offline build populates
+// vendor/materialx/), parses them with the same state machine as the
+// Python script, and joins them against the nodedefs reported by the
+// MaterialX WASM runtime (getMxEnv from mtlx-engine.js). The result is
+// byte-for-byte the same JSON shape spec_parser.py wrote to nodes.json:
 //
 //   { library: { nodegroup: { nodename: {
 //       description, notes, section, references: [{key,text,url}],
@@ -14,10 +16,13 @@
 //
 // Self-contained plain script (no Babel/JSX/react): everything is inside
 // one IIFE and the public API is exported onto window.MtlxSpecParser.
-// The only external dependency is window.getMxEnv (mtlx-engine.js) —
-// and only at buildNodeDatabase() call time; parseMdDocs/cleanText/... are
-// usable standalone. Requires network access to raw.githubusercontent.com
-// (which sends Access-Control-Allow-Origin: *).
+// The only external dependencies are window.getMxEnv (mtlx-engine.js) —
+// and only at buildNodeDatabase() call time — and window.MtlxAssets
+// (js/mtlx-assets.js, loaded before this script), used by RAW_BASE below;
+// parseMdDocs/cleanText/... are usable standalone. In remote mode this
+// requires network access to raw.githubusercontent.com (which sends
+// Access-Control-Allow-Origin: *); BLOB_BASE (human-facing links) always
+// points at github.com regardless of mode.
 //
 // Usage:
 //   <script src="js/spec-parser.js"></script>
@@ -35,8 +40,14 @@
     const SPEC_TAG = 'v1.39.5';
     const REPO = 'AcademySoftwareFoundation/MaterialX';
     const SPEC_DIR = 'documents/Specification/';
-    // Raw file content (CORS-enabled by GitHub).
-    const RAW_BASE = () => `https://raw.githubusercontent.com/${REPO}/${MtlxSpecParser.SPEC_TAG}/${SPEC_DIR}`;
+    // Raw file content. Resolved through window.MtlxAssets (js/mtlx-assets.js,
+    // loaded before this script) instead of hardcoding
+    // raw.githubusercontent.com directly, so a future offline/packaged
+    // build (vendor/materialx/ populated) transparently serves these spec
+    // .md files from the local vendor mirror instead — see mtlx-assets.js's
+    // header comment for the local/remote contract. MtlxSpecParser.SPEC_TAG
+    // is passed through but ignored in local mode (single fixed snapshot).
+    const RAW_BASE = () => window.MtlxAssets.repoUrl(SPEC_DIR, MtlxSpecParser.SPEC_TAG);
     // Human-facing pages (spec_url, resolved relative links).
     const BLOB_BASE = () => `https://github.com/${REPO}/blob/${MtlxSpecParser.SPEC_TAG}/${SPEC_DIR}`;
 

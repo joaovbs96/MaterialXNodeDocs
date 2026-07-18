@@ -2000,10 +2000,10 @@
             // expected limit. Texture fetches stay best-effort (warn +
             // skip on failure — a skipped ref just shows the UV checker
             // like any unresolved texture). A SAFETY GUARD only ever
-            // fetches URLs under this tag's resources/ root (derived from
-            // MTLX_PRESETS_BASE, not hardcoded a second time); refs that
-            // are absolute URLs (scheme://) or resolve outside that root
-            // are skipped.
+            // fetches URLs under the active mode's resources/ root
+            // (window.MtlxAssets.resourcesRoot(), not hardcoded a second
+            // time); refs that are absolute URLs (scheme://) or resolve
+            // outside that root are skipped.
             //
             // Blobs for included docs are keyed the same way
             // mtlx-engine.js's resolveIncludes composes its own lookup
@@ -2025,8 +2025,13 @@
             // see the included docs' .mtlx keys too and stop to ask the
             // user which one to load — wrong for a preset, which always
             // knows its own root doc.
-            const MTLX_RESOURCES_ROOT = MTLX_PRESETS_BASE.slice(
-                0, MTLX_PRESETS_BASE.indexOf('resources/') + 'resources/'.length);
+            // window.MtlxAssets.resourcesRoot() (js/mtlx-assets.js) returns
+            // the resources/ root for whichever mode (local vendor mirror
+            // vs. GitHub) is active this session — using it here instead of
+            // string-slicing it back out of MTLX_PRESETS_BASE keeps this
+            // guard correct in both modes without re-deriving the same
+            // value two different ways.
+            const MTLX_RESOURCES_ROOT = window.MtlxAssets.resourcesRoot();
             const isSafePresetUrl = (url) => url.indexOf(MTLX_RESOURCES_ROOT) === 0;
             const isSchemeOrRootedRef = (ref) =>
                 /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');

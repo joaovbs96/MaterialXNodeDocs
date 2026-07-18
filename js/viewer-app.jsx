@@ -16,10 +16,16 @@
 
         // Loaded automatically on page open (like the official viewer's
         // default selection) — the official OpenPBR default material from
-        // the MaterialX repository.
+        // the MaterialX repository. Resolved through window.MtlxAssets
+        // (js/mtlx-assets.js) rather than a hardcoded raw.githubusercontent.com
+        // URL, so a future offline/packaged build serves it from the local
+        // vendor mirror instead — see mtlx-assets.js's header comment. Safe
+        // to call at module-load time (not deferred/lazy): this view's
+        // babelScripts manifest only loads after js/shell.jsx's
+        // loadViewDeps has already awaited MtlxAssets.ready, so the probe
+        // has settled by the time this line executes.
         const DEFAULT_MATERIAL_URL =
-            'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/' +
-            'v1.39.5/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx';
+            window.MtlxAssets.repoUrl('resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx');
 
         // normPath, readDroppedItems, expandZips, findFileForRef,
         // resolveIncludes and readMtlxText now live in js/mtlx-engine.js

@@ -25,26 +25,30 @@
         .embed-mode #site-header, .embed-mode #site-footer { display: none; }
     </style>
 
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="vendor/tailwind/tailwind-play.min.js"></script>
+    <script src="vendor/react/react.production.min.js"></script>
+    <script src="vendor/react/react-dom.production.min.js"></script>
+    <script src="vendor/babel/babel.min.js"></script>
 
     <!-- three.js r128 + add-ons: loaded eagerly (shared by the viewer and
-         graph views, and cheap enough not to gate on lazy view selection). -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
+         graph views, and cheap enough not to gate on lazy view selection).
+         Vendored locally (see vendor/vendor-manifest.json for exact
+         provenance/hashes) via `npm install && npm run vendor`, which pins
+         versions in this repo's package.json devDependencies. -->
+    <script src="vendor/three/three.min.js"></script>
+    <script src="vendor/three/RGBELoader.js"></script>
     <!-- EXRLoader: self-hosted, patched copy at js/vendor/EXRLoader.js
          (see the provenance header in that file for full detail). It starts
          from three@0.147.0's examples/js UMD build — pinned newer than the
-         r128 core because that's the newest version unpkg still serves
-         under examples/js (0.148.0+ 404s; the legacy non-module bundle was
-         discontinued around r147/r148) — verified source-compatible with
-         the r128 THREE core: 0.147.0's EXRLoader.js only touches
-         THREE.DataTextureLoader, THREE.FloatType/HalfFloatType,
-         THREE.RGBAFormat/RedFormat, THREE.LinearEncoding, THREE.LinearFilter
-         and THREE.DataUtils.toHalfFloat — all present with matching
-         signatures in three@0.128.0/build/three.js.
+         r128 core because that's the newest version whose examples/js still
+         carries the legacy non-module bundle (0.148.0+ dropped it; the
+         legacy non-module bundle was discontinued around r147/r148) —
+         verified source-compatible with the r128 THREE core: 0.147.0's
+         EXRLoader.js only touches THREE.DataTextureLoader,
+         THREE.FloatType/HalfFloatType, THREE.RGBAFormat/RedFormat,
+         THREE.LinearEncoding, THREE.LinearFilter and
+         THREE.DataUtils.toHalfFloat — all present with matching signatures
+         in three@0.128.0/build/three.js.
          On top of that base, the DWA decode path is back-ported from three's
          current examples/jsm/loaders/EXRLoader.js (mrdoob/three.js PRs
          #27982/#30709/#33216) to fix "Cannot read properties of undefined
@@ -55,14 +59,17 @@
          unconditionally.
          fflate: EXRLoader needs the global `fflate` (its ZIP/DWA-compressed
          decode paths call fflate.unzlibSync) — must load before
-         js/vendor/EXRLoader.js. 0.147.0's libs/fflate.min.js is
-         byte-identical to 0.128.0's (still fflate 0.6.9, same exports);
-         kept on the 0.147.0 CDN tag purely so the version tag matches what
-         js/vendor/EXRLoader.js was forked from. -->
-    <script src="https://unpkg.com/three@0.147.0/examples/js/libs/fflate.min.js"></script>
+         js/vendor/EXRLoader.js. scripts/vendor.mjs pulls this file from the
+         "three-147" alias (npm:three@0.147.0) in package.json, whose
+         examples/js/libs/fflate.min.js is byte-identical to 0.128.0's (still
+         fflate 0.6.9, same exports); sourced from the 0.147.0 package purely
+         so the version tag matches what js/vendor/EXRLoader.js was forked
+         from. -->
+    <script src="vendor/three/fflate.min.js"></script>
     <script src="js/vendor/EXRLoader.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="vendor/three/GLTFLoader.js"></script>
+    <script src="vendor/three/OrbitControls.js"></script>
+    <script src="js/mtlx-assets.js"></script>
 
 
 </head>
@@ -89,10 +96,19 @@
     <!-- Shared engine + shell (must load after #root exists). The per-view
          CDN/local dependencies (KaTeX, JSZip, React Flow, dagre, doc-ui.jsx,
          node-preview.jsx, docs-app.jsx/viewer-app.jsx/graph-app.jsx) are
-         lazy-loaded by shell.jsx on first activation of each view. -->
-    <script type="text/babel" src="js/mtlx-engine.js"></script>
-    <script type="text/babel" src="js/shell.jsx"></script>
-    <script type="text/babel">
+         lazy-loaded by shell.jsx on first activation of each view.
+
+         data-presets="react": babel-standalone's default presets for a
+         bare text/babel tag are ["react","env"] — preset-env lowers
+         js/mtlx-engine.js's WASM loader (a dynamic import()) to CommonJS
+         require(), which doesn't exist in the browser and throws
+         "require is not defined" the first time getMxEnv() runs. An
+         explicit react-only preset matches loadJsxApp's own Babel config
+         in js/shell.jsx (presets [['react', {runtime: 'classic'}]]) and
+         leaves import() native. -->
+    <script type="text/babel" data-presets="react" src="js/mtlx-engine.js"></script>
+    <script type="text/babel" data-presets="react" src="js/shell.jsx"></script>
+    <script type="text/babel" data-presets="react">
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<Shell />);
     </script>
