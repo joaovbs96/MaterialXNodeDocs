@@ -232,10 +232,10 @@ editor.
   JSZip, React Flow, dagre — lazy-loaded per view), but all of them are
   vendored into a committed `vendor/` folder at pinned versions and served
   locally — no network access needed to run the webview itself. The one
-  exception is MaterialX spec/template/example documents and the
-  shaderball geometry: these are fetched from `raw.githubusercontent.com`
-  on demand unless a local `vendor/materialx/` snapshot is present, in
-  which case they're read from disk instead. A packaged offline build
+  exception is MaterialX spec/template/example documents: these are
+  fetched from `raw.githubusercontent.com` on demand unless a local
+  `vendor/materialx/` snapshot is present, in which case they're read
+  from disk instead. A packaged offline build
   ships that snapshot and performs zero network access. Run `npm run
   vendor:offline` to populate that snapshot yourself.
 

@@ -285,7 +285,17 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass 
 // uses this for its fullscreen-only material <select>); `trailingChildren`
 // renders extra elements just before the fullscreen button (viewer-app
 // uses this for its "send to editor" button, which node-preview doesn't
-// have).
+// have). `showGeomSelect`/`showRotate` (both default true) hide the
+// geometry dropdown and turntable-rotate button respectively — the graph
+// editor's fixed-scene preview (an authored, non-interactive camera with
+// no geometry choice) turns both off; the two existing callers pass
+// neither prop and keep rendering both controls unchanged.
+// `showBackgroundToggle` (default true) hides the Environment popover's
+// "Background" On/Off row — the graph preview's full GLB scene has an
+// opaque backdrop box that fully occludes the engine's env-background
+// sky sphere, so the toggle would be a no-op there; it passes false.
+// The material viewer and docs preview don't pass it, so the toggle
+// keeps showing exactly as today.
 // Anchored popover for the "Environment" button (replaces the old plain
 // show/hide toggle). Portaled to document.body — same containing-block
 // rationale as ColorSwatch above (this app's panels use backdrop-blur,
@@ -300,6 +310,7 @@ const ENV_DIALOG_W = 224, ENV_DIALOG_H = 240; // approx footprint, used for edge
 const EnvDialog = ({
     anchorRef, open, onClose,
     envBg, onToggleEnvBg,
+    showBackgroundToggle = true,
     rotation, onRotationChange,
     exposure, onExposureChange,
     onImportFile, onReset,
@@ -372,18 +383,20 @@ const EnvDialog = ({
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
         >
-            <div className="flex items-center justify-between">
-                <span>Background</span>
-                <button
-                    onClick={onToggleEnvBg}
-                    title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
-                    className={`h-5 px-2 rounded border transition-colors ${
-                        envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
-                    }`}
-                >
-                    {envBg ? 'On' : 'Off'}
-                </button>
-            </div>
+            {showBackgroundToggle && (
+                <div className="flex items-center justify-between">
+                    <span>Background</span>
+                    <button
+                        onClick={onToggleEnvBg}
+                        title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
+                        className={`h-5 px-2 rounded border transition-colors ${
+                            envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                        }`}
+                    >
+                        {envBg ? 'On' : 'Off'}
+                    </button>
+                </div>
+            )}
             <div>
                 <div className="flex items-center justify-between mb-0.5">
                     <span>Rotation</span>
@@ -444,8 +457,11 @@ const EnvDialog = ({
 const ViewportControls = ({
     geomList = ['shaderball', 'sphere', 'cube'],
     geom, onGeomChange,
+    showGeomSelect = true,
     rotating, onToggleRotating,
+    showRotate = true,
     envBg, onToggleEnvBg, envAvail = true,
+    showBackgroundToggle = true,
     viewRef, viewEpoch,
     onScreenshot,
     isFullscreen, onToggleFullscreen,
@@ -529,21 +545,25 @@ const ViewportControls = ({
     return (
     <div ref={panelEdgeRef} className={containerClassName}>
         {children}
-        <select
-            value={geom}
-            onChange={(e) => onGeomChange(e.target.value)}
-            title="Preview geometry"
-            className={selectClassName}
-        >
-            {geomList.map((g) => <option key={g} value={g}>{g}</option>)}
-        </select>
-        <button
-            onClick={onToggleRotating}
-            title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
-            className={buttonClassName(rotating)}
-        >
-            <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
-        </button>
+        {showGeomSelect && (
+            <select
+                value={geom}
+                onChange={(e) => onGeomChange(e.target.value)}
+                title="Preview geometry"
+                className={selectClassName}
+            >
+                {geomList.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+        )}
+        {showRotate && (
+            <button
+                onClick={onToggleRotating}
+                title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
+                className={buttonClassName(rotating)}
+            >
+                <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
+            </button>
+        )}
         {envAvail && (
             <React.Fragment>
                 <button
@@ -563,6 +583,7 @@ const ViewportControls = ({
                         placement={envDialogPlacement}
                         envBg={envBg}
                         onToggleEnvBg={onToggleEnvBg}
+                        showBackgroundToggle={showBackgroundToggle}
                         rotation={envRotation}
                         onRotationChange={(deg) => {
                             setEnvRotation(deg);

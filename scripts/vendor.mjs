@@ -27,9 +27,8 @@
 //                                populates vendor/materialx/ with a snapshot
 //                                of the MaterialX repo content the app needs
 //                                (spec .md files, presets under
-//                                resources/Materials/Examples/, textures
-//                                under resources/Images/, and the gh-pages
-//                                shaderball.glb). Its mere presence
+//                                resources/Materials/Examples/, and textures
+//                                under resources/Images/). Its mere presence
 //                                (vendor/materialx/manifest.json) flips
 //                                js/mtlx-assets.js to strict-local mode at
 //                                runtime, so this is meant for building a
@@ -54,10 +53,7 @@
 //     (repos/.../git/trees/<tag>?recursive=1) enumerates every blob in the
 //     tag with its path + git blob sha1; blobs under the three prefixes
 //     above are downloaded from raw.githubusercontent.com via a small
-//     concurrency pool with retries. The shaderball.glb is a separate,
-//     single download from the gh-pages branch (namespaced under
-//     vendor/materialx/gh-pages/ so tag-content path math can never collide
-//     with it).
+//     concurrency pool with retries.
 //   - Idempotency: a local file whose git-blob-sha1 (sha1 of
 //     "blob <byteLength>\0" + content — the same hash git itself uses,
 //     computed here with zero git dependency) matches the tree's recorded
@@ -104,8 +100,6 @@ const MTLX_TAG = "v1.39.5";
 const MTLX_REPO = "AcademySoftwareFoundation/MaterialX";
 const MTLX_TREE_API_URL = `https://api.github.com/repos/${MTLX_REPO}/git/trees/${MTLX_TAG}?recursive=1`;
 const MTLX_RAW_BASE = `https://raw.githubusercontent.com/${MTLX_REPO}/${MTLX_TAG}/`;
-const MTLX_SHADERBALL_URL = `https://raw.githubusercontent.com/${MTLX_REPO}/gh-pages/Geometry/shaderball.glb`;
-const MTLX_SHADERBALL_DEST = "gh-pages/Geometry/shaderball.glb";
 // Directory prefixes (git-tree paths, always POSIX) selected from the
 // recursive tree. Whole directories are taken rather than just the files a
 // consumer literally reads today, because the app's preset crawler resolves
@@ -504,38 +498,6 @@ async function downloadAllMaterialxBlobs(blobs) {
   return { results, errors };
 }
 
-/** Download the gh-pages shaderball.glb (not part of the tag's git tree, so it has no tree-provided
- * sha to resume against; a cheap HEAD-vs-local-size check gives fast resume anyway). */
-async function downloadShaderball() {
-  const destAbs = path.join(MATERIALX_ROOT, MTLX_SHADERBALL_DEST.split("/").join(path.sep));
-
-  if (existsSync(destAbs)) {
-    try {
-      const headRes = await fetch(MTLX_SHADERBALL_URL, { method: "HEAD" });
-      if (headRes.ok) {
-        const remoteLen = Number(headRes.headers.get("content-length"));
-        const localSize = (await stat(destAbs)).size;
-        if (remoteLen && remoteLen === localSize) {
-          const data = await readFile(destAbs);
-          return { path: MTLX_SHADERBALL_DEST, bytes: data.length, sha: gitBlobSha1(data), skipped: true };
-        }
-      }
-    } catch {
-      // HEAD failed for any reason — fall through and just (re-)download via GET below.
-    }
-  }
-
-  log(`downloading ${MTLX_SHADERBALL_URL} ...`);
-  const data = await withRetries(async () => {
-    const res = await fetch(MTLX_SHADERBALL_URL);
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    return Buffer.from(await res.arrayBuffer());
-  });
-  await mkdir(path.dirname(destAbs), { recursive: true });
-  await writeFile(destAbs, data);
-  return { path: MTLX_SHADERBALL_DEST, bytes: data.length, sha: gitBlobSha1(data), skipped: false };
-}
-
 async function runMaterialx() {
   log("");
   log(`--with-materialx: vendoring MaterialX repo content @ ${MTLX_TAG} into vendor/materialx/ ...`);
@@ -554,15 +516,7 @@ async function runMaterialx() {
 
   const { results: blobResults, errors: blobErrors } = await downloadAllMaterialxBlobs(blobs);
 
-  let shaderballResult = null;
-  const shaderballErrors = [];
-  try {
-    shaderballResult = await downloadShaderball();
-  } catch (err) {
-    shaderballErrors.push(`  - ${MTLX_SHADERBALL_DEST}: ${err.message}`);
-  }
-
-  const allErrors = [...blobErrors, ...shaderballErrors];
+  const allErrors = [...blobErrors];
   if (allErrors.length > 0) {
     fail(
       [
@@ -574,7 +528,7 @@ async function runMaterialx() {
     );
   }
 
-  const allResults = [...blobResults, shaderballResult];
+  const allResults = [...blobResults];
   const skippedCount = allResults.filter((r) => r.skipped).length;
   log(`downloaded ${allResults.length - skippedCount} file(s), skipped ${skippedCount} already-up-to-date file(s).`);
 
@@ -584,7 +538,6 @@ async function runMaterialx() {
   const manifest = {
     tag: MTLX_TAG,
     generatedAt: new Date().toISOString(),
-    shaderballSource: "gh-pages",
     fileCount: files.length,
     totalBytes,
     files,

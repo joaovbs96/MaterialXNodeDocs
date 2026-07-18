@@ -46,20 +46,44 @@ const getMxEnv = () => {
                 const gen = mx.EsslShaderGenerator.create();
                 const genContext = new mx.GenContext(gen);
                 const stdlib = mx.loadStandardLibraries(genContext);
-                // OFFICIAL PARITY: the viewer sets hwSrgbEncodeOutput so
-                // MaterialX itself emits the linear→sRGB encode in the
-                // pixel shader — it uses NO tone mapping at all. (If this
-                // build ignores the option, a fallback encode is injected
-                // at generation time — see the /srgb/ test there.)
-                try { genContext.getOptions().hwSrgbEncodeOutput = true; } catch (e) { /* option absent */ }
+                // TONE MAPPING (user decision, 2026-07-18): this app
+                // deliberately DIVERGES from the official MaterialX
+                // viewer here. The official viewer sets
+                // hwSrgbEncodeOutput so MaterialX itself emits the
+                // linear->sRGB encode with NO tone mapping at all. This
+                // app instead asks MaterialX for RAW LINEAR output
+                // (hwSrgbEncodeOutput = false) and applies ACES filmic
+                // tone mapping, then sRGB, itself — unconditionally, in
+                // encodeDisplay() below (see that function's header
+                // comment for the exact GLSL and where it was sourced
+                // from). WHY: three.js's own renderer already tone-maps
+                // every BUILT-IN material in the scene via ACES — the
+                // glTF neutral shaderball parts, backdrop, and grid (see
+                // renderer.toneMapping = THREE.ACESFilmicToneMapping,
+                // set where the WebGLRenderer is constructed below).
+                // Leaving the generated MaterialX surface un-tone-mapped
+                // (official-viewer-style) made it visibly diverge —
+                // overblown, un-rolled-off highlights — from its own
+                // neighboring geometry in the SAME scene. In-scene
+                // consistency was judged more valuable than
+                // official-viewer parity for this app.
+                try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
 
                 // Direct light, exactly like the official viewer's
                 // registerLights(): bind the directional_light nodedef to
                 // light-type id 1 and pass the light values as the
-                // u_lightData struct array. Values come from a local
-                // ./light_rig.mtlx when present (copy the official
-                // viewer's Lights/san_giuseppe_bridge_split.mtlx there
-                // for exact parity), else a neutral default.
+                // u_lightData struct array. Values come exclusively from
+                // any <directional_light> blocks authored in
+                // ./environment_map.mtlx. NO HARDCODED FALLBACK (2026-07-18
+                // decision): the app's default environment is now a studio
+                // HDRI (env_maps/studio_kontrast_04_1k.exr) whose IBL
+                // already supplies key/fill; a synthetic full-strength
+                // white directional stacked on top of that washed the
+                // preview out. A rig that defines no lights now yields
+                // rigLights = [] → pure image-based lighting, zero active
+                // direct light sources. A future rig file CAN still add
+                // real lights — the <directional_light> parsing below is
+                // unchanged and fully supports it.
                 return fetch('./environment_map.mtlx')
                     .then((r) => (r.ok ? r.text() : null))
                     .catch(() => null)
@@ -96,9 +120,23 @@ const getMxEnv = () => {
                                         });
                                     }
                                 }
-                                if (!rigLights.length) {
-                                    rigLights.push({ direction: [0.35, -0.85, -0.4], color: [1, 1, 1], intensity: 1.0 });
-                                }
+                                // NO FALLBACK LIGHT (2026-07-18 decision):
+                                // previously, an empty rigLights (no
+                                // <directional_light> in environment_map.mtlx)
+                                // pushed a hardcoded full-strength white
+                                // directional here. Removed by design — the
+                                // studio-HDRI environment now in use already
+                                // provides key/fill via IBL, and the
+                                // additive directional washed the preview
+                                // out on top of it. An empty rig is now left
+                                // empty: lightData below stays [], nLights
+                                // is 0 at the uniform-binding site (see
+                                // "Direct light rig" below), and
+                                // u_numActiveLightSources=0 makes the
+                                // generated shader's light loop a no-op —
+                                // pure image-based lighting, safely. See the
+                                // header comment above this block for the
+                                // full rationale.
                                 // Official rotates light directions by the
                                 // same +90° Y it applies to the env map.
                                 const rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
@@ -263,26 +301,93 @@ const patchUnlitLightingRefs = (src) => {
 // Inject a display transform at the end of the generated PIXEL shader.
 // three.js's renderer.outputEncoding / toneMapping only affect BUILT-IN
 // materials (they're shader-chunk features) — RawShaderMaterial output
-// is written to the sRGB display completely raw, so MaterialX's linear
-// radiance looks much too dark (mid-tones roughly halved). We find the
-// shader's `out vec4` variable and append a linear→sRGB encode just
-// before main()'s closing brace (MaterialX emits main last, so the
-// file's last '}' closes it).
+// bypasses both entirely, so without this injection MaterialX's raw
+// linear radiance would be written straight to the sRGB display buffer:
+// too dark on its own (mid-tones roughly halved by the missing sRGB
+// encode) AND missing the ACES highlight rolloff every other object in
+// the scene gets from renderer.toneMapping. We find the shader's
+// `out vec4` variable and append, just before main()'s closing brace
+// (MaterialX emits main last, so the file's last '}' closes it):
+//   1. ACES filmic tone mapping (Stephen Hill's fit, i.e. the
+//      RRTAndODTFit approximation), applied to the raw LINEAR radiance,
+//      then
+//   2. the piecewise IEC 61966-2-1 sRGB OETF, applied to the
+//      now-tone-mapped result.
+//
+// TONE MAPPING (user decision, 2026-07-18 — divergence from the official
+// MaterialX viewer; see hwSrgbEncodeOutput's comment above in the
+// genContext setup for the "why", this comment has the "what"): the
+// official viewer applies NO tone mapping, just a bare linear->sRGB
+// encode. This app instead matches the EXACT ACES curve three.js's OWN
+// renderer applies to every neighboring BUILT-IN material in the same
+// scene (renderer.toneMapping = THREE.ACESFilmicToneMapping, set where
+// the WebGLRenderer is constructed below) — without this, the generated
+// MaterialX surface visibly diverges (overblown, un-rolled-off
+// highlights) from the glTF shaderball parts sitting right next to it.
+// In-scene consistency was judged more valuable than official-viewer
+// parity for this app.
+//
+// The ACES constants below are copied VERBATIM from three r128's own
+// tonemapping shader chunk — extracted straight from the vendored build
+// at vendor/three/three.min.js (search for "RRTAndODTFit"; lives in the
+// `tonemapping_pars_fragment` shader-chunk string) — so the
+// RawShaderMaterial ball matches, bit-for-bit algorithm and not just "an
+// ACES curve", what THREE.WebGLRenderer applies to everything else:
+//
+//   vec3 RRTAndODTFit( vec3 v ) {
+//       vec3 a = v * ( v + 0.0245786 ) - 0.000090537;
+//       vec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;
+//       return a / b;
+//   }
+//   vec3 ACESFilmicToneMapping( vec3 color ) {
+//       const mat3 ACESInputMat = mat3(
+//           vec3( 0.59719, 0.07600, 0.02840 ), vec3( 0.35458, 0.90834, 0.13383 ),
+//           vec3( 0.04823, 0.01566, 0.83777 )
+//       );
+//       const mat3 ACESOutputMat = mat3(
+//           vec3(  1.60475, -0.10208, -0.00327 ), vec3( -0.53108,  1.10813, -0.07276 ),
+//           vec3( -0.07367, -0.00605,  1.07602 )
+//       );
+//       color *= toneMappingExposure / 0.6;
+//       color = ACESInputMat * color;
+//       color = RRTAndODTFit( color );
+//       color = ACESOutputMat * color;
+//       return saturate( color );
+//   }
+//
+// toneMappingExposure is hardcoded to 1.0 below (matching
+// renderer.toneMappingExposure = 1.0, set right alongside
+// renderer.toneMapping — see that assignment's comment further down)
+// rather than plumbed through as a live uniform: this app exposes no
+// exposure control today, so a constant avoids threading an unused
+// uniform through every generated shader. If an exposure control is
+// ever added, this MUST become a uniform kept in sync with
+// renderer.toneMappingExposure, or the RawShaderMaterial ball will
+// drift from the rest of the scene again.
 const encodeDisplay = (src) => {
     const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (!m) return src;
     const v = m[1];
     const idx = src.lastIndexOf('}');
     if (idx === -1) return src;
-    // FALLBACK ONLY (when hwSrgbEncodeOutput isn't honored): the
-    // OFFICIAL viewer applies NO tone mapping — just MaterialX's own
-    // linear→sRGB encode. Match its piecewise IEC 61966-2-1 curve
-    // exactly; an ACES (or any) tone map here makes highlights and
-    // overall response visibly diverge from the reference.
     const inject =
-        '\n    // Injected by previewer: linear -> sRGB (official-parity, no tonemap).\n' +
+        '\n    // Injected by previewer: ACES filmic tone map (three r128\'s Hill fit — see encodeDisplay()\'s header comment) then sRGB.\n' +
         '    {\n' +
         '        vec3 _c = max(' + v + '.rgb, vec3(0.0));\n' +
+        '        const mat3 _acesIn = mat3(\n' +
+        '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
+        '            vec3(0.04823, 0.01566, 0.83777)\n' +
+        '        );\n' +
+        '        const mat3 _acesOut = mat3(\n' +
+        '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
+        '            vec3(-0.07367, -0.00605,  1.07602)\n' +
+        '        );\n' +
+        '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
+        '        _c = _acesIn * _c;\n' +
+        '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
+        '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
+        '        _c = _acesOut * (_aces_a / _aces_b);\n' +
+        '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
         '        vec3 _lo = _c * 12.92;\n' +
         '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
         '        ' + v + ' = vec4(mix(_hi, _lo, step(_c, vec3(0.0031308))), ' + v + '.a);\n' +
@@ -747,10 +852,10 @@ const loadExrTexture = async (blob) => {
 };
 
 // Parse a dropped .hdr Blob via the already-loaded THREE.RGBELoader.
-// r128's DataTextureLoader family exposes a synchronous .parse(buffer)
-// alongside the async .load(url, ...) used for the built-in environment
-// (loadHDR below) — same class, just called directly instead of via the
-// FileLoader roundtrip. Explicitly set to FloatType (not the default
+// r128's DataTextureLoader family exposes a synchronous .parse(buffer),
+// which is also how the built-in environment is parsed now (see
+// parseEnvBuffer below — a fetch()'d ArrayBuffer through that same
+// synchronous .parse() call). Explicitly set to FloatType (not the default
 // UnsignedByteType/RGBE byte packing) so the plain MaterialX sampler
 // shader — which has no RGBE decode step — reads linear values
 // directly; that yields RGBFormat (3-channel) data per RGBELoader's
@@ -1105,86 +1210,168 @@ const normalizeGeometry = (geometry) => {
     return geometry;
 };
 
-// The official MaterialX shaderball, fetched once and cached. The GLB
-// may contain several meshes (ball, base, ...) with node transforms —
-// bake each mesh's world matrix and concatenate into one non-indexed
-// BufferGeometry so it can share the single preview material.
+// The MaterialX shaderball: two user-authored GLBs shipped locally
+// under models/ (ASWF standard-shader-ball layout) — shaderball.glb
+// (full scene: backdrop box, grid, emitter backplanes, neutral ball
+// parts, an embedded camera) and shaderball_simple.glb (ball only, no
+// camera). Both replace the old remote gh-pages fetch entirely: the
+// URL is resolved via `new URL(..., document.baseURI).href` — the SAME
+// document.baseURI idiom js/mtlx-assets.js's own local-mode URLs use —
+// so this resolves correctly against the plain website's origin AND
+// the VS Code webview's `<base href>`, with no asset-resolver probe (or
+// any other async gate) to await first.
 //
-// The URL is resolved LAZILY, inside this function, via
-// window.MtlxAssets.ghPagesUrl() (js/mtlx-assets.js) rather than a
-// module-level const: this file is loaded EAGERLY (app.html's own
-// text/babel tag, before the shell ever runs), i.e. before
-// js/mtlx-assets.js's local-vs-remote probe (window.MtlxAssets.ready)
-// can possibly have settled. Deferring the resolution to first call
-// (which in practice only happens well after a view has mounted, long
-// after `ready` has resolved) keeps this correct in both modes without
-// this eagerly-loaded file needing to await anything at load time. See
-// mtlx-assets.js's header comment for the local/remote contract.
-let shaderballPromise = null;
-const getShaderballGeometry = () => {
-    if (!shaderballPromise) {
-        shaderballPromise = new Promise((resolve) => {
-            if (!THREE.GLTFLoader) return resolve(null);
-            new THREE.GLTFLoader().load(window.MtlxAssets.ghPagesUrl('Geometry/shaderball.glb'), (gltf) => {
-                try {
-                    const parts = [];
-                    gltf.scene.updateMatrixWorld(true);
-                    gltf.scene.traverse((obj) => {
-                        if (obj.isMesh && obj.geometry) {
-                            const g = obj.geometry.clone().toNonIndexed();
-                            g.applyMatrix4(obj.matrixWorld);
-                            parts.push(g);
-                        }
-                    });
-                    if (!parts.length) return resolve(null);
-                    // Manual attribute concat (BufferGeometryUtils isn't loaded).
-                    const total = parts.reduce((n, g) => n + g.getAttribute('position').count, 0);
-                    const pos = new Float32Array(total * 3);
-                    const nrm = new Float32Array(total * 3);
-                    const uv = new Float32Array(total * 2);
-                    let off = 0;
-                    for (const g of parts) {
-                        const p = g.getAttribute('position');
-                        const n = g.getAttribute('normal');
-                        const u = g.getAttribute('uv');
-                        pos.set(p.array, off * 3);
-                        if (n) nrm.set(n.array, off * 3);
-                        if (u) uv.set(u.array, off * 2);
-                        off += p.count;
-                    }
-                    const merged = new THREE.BufferGeometry();
-                    merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-                    merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-                    merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-                    // computeTangents REQUIRES an index; the merge is
-                    // non-indexed, so give it a trivial sequential one —
-                    // real tangents instead of the constant fallback.
-                    const idx = new Uint32Array(total);
-                    for (let ii = 0; ii < total; ii++) idx[ii] = ii;
-                    merged.setIndex(new THREE.BufferAttribute(idx, 1));
-                    resolve(normalizeGeometry(merged));
-                } catch (e) {
-                    console.warn('shaderball merge failed:', e);
-                    resolve(null);
-                }
-            }, undefined, (e) => {
-                console.warn('shaderball load failed:', e);
+// CACHE-OWNERSHIP POLICY: glbSceneCache holds the RAW GLTFLoader result
+// (gltf.scene straight off the loader — geometries/materials as
+// GLTFLoader built them, not yet cloned) keyed by absolute URL, fetched
+// once and reused for the rest of the page's life. Every consumer
+// (instantiateShaderballScene below) takes what it needs via
+// OBJECT3D.clone() + selective material clone()s (see there) rather
+// than mutating the cached scene in place, and NOTHING in this file
+// ever calls .dispose() on a cached entry's geometries/materials — the
+// SAME never-dispose-the-shared-cache policy createMtlxRenderView's own
+// disposePartial() already applies to envRadiance/envIrradiance (see
+// its comments below) and js/mtlx-assets.js applies to its own fetched
+// MaterialX documents. A cache miss (missing/corrupt models/,
+// GLTFLoader script not loaded) resolves to null rather than
+// rejecting, so a failed load degrades to the sphere fallback below
+// instead of throwing out of createMtlxRenderView.
+const glbSceneCache = new Map();
+const loadGlbScene = (url) => {
+    if (!glbSceneCache.has(url)) {
+        glbSceneCache.set(url, new Promise((resolve) => {
+            if (!THREE.GLTFLoader) { resolve(null); return; }
+            new THREE.GLTFLoader().load(url, (gltf) => resolve(gltf), undefined, (e) => {
+                console.warn('shaderball scene load failed:', url, e);
                 resolve(null);
             });
-        });
+        }));
     }
-    return shaderballPromise;
+    return glbSceneCache.get(url);
 };
 
-// Build the selected preview geometry; shaderball falls back to the
-// sphere when the GLB can't be fetched.
+// Instantiate a PER-VIEW copy of the shaderball scene from the shared
+// cache above. mode: 'full' (shaderball.glb, graph preview only — the
+// embedded camera + every backdrop/emitter mesh) or 'simple'
+// (shaderball_simple.glb, viewer/docs — ball only, framed like the
+// sphere/cube presets). Returns null when the GLB failed to load OR
+// (defensively) doesn't contain a mesh named 'material_surface' — the
+// node both authored GLBs reserve as the slot for the generated
+// MaterialX material; createMtlxRenderView treats either case exactly
+// like today's "shaderball fetch failed" contract: fall back to the
+// plain sphere.
+const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
+    const url = new URL(
+        mode === 'full' ? 'models/shaderball.glb' : 'models/shaderball_simple.glb',
+        document.baseURI
+    ).href;
+    const gltf = await loadGlbScene(url);
+    if (!gltf) return null;
+
+    // Object3D.clone(true) deep-clones the NODE hierarchy but only
+    // shallow-copies each mesh's geometry/material (shared by
+    // reference with the cached original) — so two concurrently-live
+    // views (e.g. the graph's inline docs dialog open over a live
+    // graph preview) instantiating from the SAME cache entry don't
+    // silently share mutable per-view state until the traverse below
+    // fixes that up.
+    const group = gltf.scene.clone(true);
+    let glbCamera = null;
+    let surfaceMesh = null;
+    const ownedMaterials = [];
+    group.traverse((obj) => {
+        if (mode === 'full' && obj.isCamera && !glbCamera) {
+            glbCamera = obj;
+            return;
+        }
+        if (!obj.isMesh) return;
+        if (obj.name === 'material_surface') {
+            // The generated MaterialX material lands here — leave
+            // whatever glTF gave it (both GLBs author this primitive
+            // with a NULL material) untouched; createMtlxRenderView
+            // pre-assigns this mesh onto its shell `mesh` var so
+            // applyMaterialInternal's `mesh.material = material`
+            // branch does the actual assignment.
+            surfaceMesh = obj;
+            return;
+        }
+        if (/^backplane/.test(obj.name)) {
+            // Emitter panels (backplane / backplane.001): NULL glTF
+            // material + a baked vertex COLOR_0, no UVs — self-lit
+            // "light card" look. toneMapped:true (changed from false,
+            // user-approved, 2026-07-18): now that the generated
+            // MaterialX surface ALSO gets ACES applied (see
+            // encodeDisplay's header comment), running these panels'
+            // baked brightness through the SAME ACES curve keeps every
+            // light-emitting/bright element in the scene consistent —
+            // leaving them un-tone-mapped would make the panels the one
+            // remaining outlier that doesn't roll off like everything
+            // else.
+            const m = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true });
+            obj.material = m;
+            ownedMaterials.push(m);
+            return;
+        }
+        if (obj.material) {
+            // Every other glTF-materialed mesh (backdrop box, grid,
+            // neutral ball parts): clone() so this view OWNS its
+            // material instance instead of sharing the cached
+            // original's — without this, setEnvExposure's
+            // envMapIntensity mutation (see the handle below) would
+            // leak into every other live/future view instantiated
+            // from the same cache entry.
+            const wasArray = Array.isArray(obj.material);
+            const clones = (wasArray ? obj.material : [obj.material]).map((m) => m.clone());
+            obj.material = wasArray ? clones : clones[0];
+            ownedMaterials.push(...clones);
+        }
+    });
+    if (!surfaceMesh) return null;
+
+    // Per-view geometry clone: prepGeometry MUTATES the geometry
+    // (adds i_position/i_normal/i_texcoord_0/i_tangent attribute
+    // aliases) — clone first so the cache's original geometry (shared
+    // with every other view's clone of this same node) stays pristine.
+    surfaceMesh.geometry = prepGeometry(surfaceMesh.geometry.clone());
+
+    if (mode === 'simple') {
+        // Whole-scene analog of normalizeGeometry (above): both GLBs
+        // bake a 0.01 scale into an internal root node, and the ball's
+        // actual authored size doesn't line up with the sphere/cube
+        // presets' radius-1 convention — center the assembly's
+        // bounding sphere at the origin and scale it to radius 1 so
+        // this preset frames identically under the SAME cameraDistance
+        // (3.6 / 2.55) and OrbitControls min/maxDistance the sphere/
+        // cube presets already assume. Applied as a WRAPPING group
+        // transform (rather than baking it into every descendant's
+        // geometry, the way normalizeGeometry does for a single
+        // BufferGeometry) since this scene's meshes have their own
+        // internal node transforms that must stay intact.
+        const bs = new THREE.Box3().setFromObject(group).getBoundingSphere(new THREE.Sphere());
+        const outer = new THREE.Group();
+        outer.add(group);
+        if (bs.radius > 0) {
+            const s = 1 / bs.radius;
+            outer.scale.setScalar(s);
+            outer.position.copy(bs.center).multiplyScalar(-s);
+        }
+        return { group: outer, surfaceMesh, glbCamera: null, ownedMaterials };
+    }
+
+    return { group, surfaceMesh, glbCamera, ownedMaterials };
+};
+
+// Build the selected preview geometry: cube/sphere only — the
+// shaderball presets are full GLB SCENES, handled separately by
+// instantiateShaderballScene() and createMtlxRenderView's scene-mode
+// dispatch (see `sceneMode`/`sceneInst` near the top of that function
+// and the geometry-step dispatch further down). Any unrecognized
+// `which` (including a scene-mode name arriving here because scene
+// instantiation itself failed) falls back to the sphere — today's
+// exact fallback contract.
 const buildPreviewGeometry = async (which) => {
     if (which === 'cube') {
         return normalizeGeometry(new THREE.BoxGeometry(1.3, 1.3, 1.3));
-    }
-    if (which === 'shaderball') {
-        const g = await getShaderballGeometry();
-        if (g) return g.clone();
     }
     return new THREE.SphereGeometry(1, 64, 64);
 };
@@ -1336,11 +1523,19 @@ const makeEnvTexture = (w, h, blurred) => {
     return tex;
 };
 
-// Path to a user-supplied equirectangular (lat-long) environment map.
-// Drop a file next to the page and point this at it. .hdr is loaded via
-// RGBELoader (true HDR lighting); .jpg/.png/.exr* load via TextureLoader.
-// Leave as-is / remove the file to fall back to the synthesized sky.
-const ENV_MAP_URL = './san_giuseppe_bridge.hdr';
+// Path to the app's default equirectangular (lat-long) environment map:
+// a studio EXR (studio_kontrast_04_1k.exr) — parsed via EXRLoader
+// (see parseEnvBuffer below) and routed through the same
+// prepareEnv/padToRGBA pipeline an .hdr would use (EXRLoader always
+// emits RGBA data, so padToRGBA's RGB->RGBA repack is a no-op
+// passthrough for this file). There is no paired
+// "<name>_irradiance.exr": diffuse irradiance is always SYNTHESIZED via
+// true SH cosine convolution (shIrradianceFromEquirect, below) rather
+// than loaded from an authored prefiltered map — see
+// buildEnvFromParsedTexture. Leave as-is / remove the file to fall back
+// to the synthesized sky (getEnvironment() resolves null on any
+// fetch/parse failure, same contract as before).
+const ENV_MAP_URL = './env_maps/studio_kontrast_04_1k.exr';
 
 // Load the environment ONCE and reuse across previews. Resolves to
 // { radiance, irradiance, mips } or null if no file is present, in
@@ -1463,57 +1658,20 @@ const halfToFloat = (h) => {
     if (exp === 31) return frac ? NaN : sign * Infinity;
     return sign * (1 + frac / 1024) * Math.pow(2, exp - 15);
 };
-// Fallback when no prefiltered irradiance file exists: box-average the
-// radiance down to 64x32. Not a true cosine convolution, but close
-// enough that diffuse stops mirroring the environment.
-const downsampleIrradiance = (tex) => {
-    try {
-        const img = tex.image;
-        const W = 64, H = 32;
-        const stride = img.data.length / (img.width * img.height); // 3 or 4
-        const isHalf = img.data.constructor === Uint16Array;
-        const out = new Uint16Array(W * H * 4);
-        const bx = Math.max(1, Math.floor(img.width / W));
-        const by = Math.max(1, Math.floor(img.height / H));
-        for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-                let r = 0, g = 0, b = 0, cnt = 0;
-                for (let sy = 0; sy < by; sy++) {
-                    for (let sx = 0; sx < bx; sx++) {
-                        const px = ((y * by + sy) * img.width + (x * bx + sx)) * stride;
-                        r += isHalf ? halfToFloat(img.data[px]) : img.data[px];
-                        g += isHalf ? halfToFloat(img.data[px + 1]) : img.data[px + 1];
-                        b += isHalf ? halfToFloat(img.data[px + 2]) : img.data[px + 2];
-                        cnt++;
-                    }
-                }
-                const o = (y * W + x) * 4;
-                out[o] = floatToHalf(r / cnt);
-                out[o + 1] = floatToHalf(g / cnt);
-                out[o + 2] = floatToHalf(b / cnt);
-                out[o + 3] = 0x3C00;
-            }
-        }
-        return new THREE.DataTexture(out, W, H, THREE.RGBAFormat, THREE.HalfFloatType);
-    } catch (e) {
-        console.warn('irradiance downsample failed:', e);
-        return null;
-    }
-};
 // True SH (spherical-harmonic, l<=2, 9-coefficient) cosine-convolution
-// irradiance for imported (dropped) environments — used by
-// loadEnvironmentFromFile in place of downsampleIrradiance above,
-// because an imported file never ships a matching prefiltered
-// <name>_irradiance.hdr: downsampleIrradiance's plain box blur (~5.6deg
-// for a 64x32 target) is not a cosine convolution, so
-// mx_environment_irradiance's diffuse term reads as a recognizable,
-// slightly-softened copy of the environment ("map painted on the
-// mesh"). Ramamoorthi & Hanrahan 2001, "An Efficient Representation
-// for Irradiance Environment Maps". Builds the SAME bare 64x32
-// RGBA/HalfFloat DataTexture shape downsampleIrradiance returns above
-// (mapping/wrap/filters/encoding are added later by prepareEnv() at
-// the call site, same as the box-blur path) — only the pixel contents
-// differ.
+// irradiance, used by buildEnvFromParsedTexture for EVERY environment —
+// the app's default env (getEnvironment(), a bare EXR with no paired
+// irradiance file) and user-imported ones (loadEnvironmentFromFile)
+// alike. There used to be an optional paired "<name>_irradiance.hdr"
+// convention with a box-blur fallback for files that lacked one; both
+// are gone (removed 2026-07-18) in favor of always
+// computing the real thing here — a plain box blur (~5.6deg for a 64x32
+// target) is not a cosine convolution, so mx_environment_irradiance's
+// diffuse term would read as a recognizable, slightly-softened copy of
+// the environment ("map painted on the mesh"). Ramamoorthi & Hanrahan
+// 2001, "An Efficient Representation for Irradiance Environment Maps".
+// Builds a bare 64x32 RGBA/HalfFloat DataTexture (mapping/wrap/filters/
+// encoding are added later by prepareEnv() at the call site).
 //
 // Direction convention (used identically by BOTH the projection pass
 // below and the evaluation pass — see Pass 2 comment for why any
@@ -1540,10 +1698,12 @@ const shIrradianceFromEquirect = (tex) => {
             srcIsHalf ? halfToFloat(srcImg.data[idx + 1]) : srcImg.data[idx + 1],
             srcIsHalf ? halfToFloat(srcImg.data[idx + 2]) : srcImg.data[idx + 2],
         ];
-        // Pass 0 (pre-downsample, same box-average approach as
-        // downsampleIrradiance above, just to a float buffer instead of
-        // a half-float DataTexture): caps the Pass 1 projection loop
-        // below at <=128x64 (<=8k) texels regardless of source size.
+        // Pass 0 (pre-downsample box-average — same technique the old
+        // box-blur irradiance helper used, before its removal 2026-07-18,
+        // see this function's header comment — just to a float buffer
+        // instead of a half-float DataTexture): caps the Pass 1
+        // projection loop below at <=128x64 (<=8k) texels regardless of
+        // source size.
         let W = srcImg.width, H = srcImg.height, get;
         if (W > 128 || H > 64) {
             const dW = Math.min(W, 128), dH = Math.min(H, 64);
@@ -1609,9 +1769,9 @@ const shIrradianceFromEquirect = (tex) => {
         // (A0=PI, A1=2*PI/3, A2=PI/4); the sum is then scaled by 1/PI
         // to convert accumulated irradiance back to "equivalent incoming
         // radiance" units, matching mx_environment_irradiance's expected
-        // input (the same convention downsampleIrradiance's plain
-        // average uses: a uniform env of radiance L must map to L, not
-        // PI*L). Sanity check for a uniform environment (L constant):
+        // input (the same convention a plain box average would use: a
+        // uniform env of radiance L must map to L, not PI*L). Sanity
+        // check for a uniform environment (L constant):
         //   c00 = L * Y00 * (integral of dOmega = 4*PI) = L*0.282095*4*PI
         //   E(N) = A0 * c00 * Y00 = PI * (L*0.282095*4*PI) * 0.282095
         //        = PI * L * 4*PI*0.282095^2  ~=  PI * L * 4*PI*(1/(4*PI)) = PI*L
@@ -1662,97 +1822,126 @@ const shIrradianceFromEquirect = (tex) => {
         return null;
     }
 };
-const IRRADIANCE_MAP_URL = './san_giuseppe_bridge_irradiance.hdr';
-const loadHDR = (url) => new Promise((resolve) => {
-    if (!THREE.RGBELoader) return resolve(null);
+// Parse a raw environment-file ArrayBuffer into a bare, un-prepared
+// THREE.DataTexture. `ext` is the lowercase extension including the dot
+// ('.hdr' | '.exr'). Shared by getEnvironment() (the app's default env,
+// fetched from ENV_MAP_URL) and loadEnvironmentFromFile (the Environment
+// dialog's Import...) so there is exactly ONE parsing implementation for
+// the two supported formats — the two callers used to duplicate this
+// (RGBELoader/EXRLoader construction + .setDataType + .parse +
+// DataTexture wrap) verbatim. Returns null on any failure (unsupported
+// ext, missing loader script, parse failure); callers decide how to
+// surface that — getEnvironment() treats null as "fall back to the
+// synthesized sky", loadEnvironmentFromFile throws a friendlier,
+// user-facing Error instead (its own loader-presence checks run BEFORE
+// calling this, purely so the dialog can show which specific loader is
+// missing — this function itself is silent on that distinction).
+const parseEnvBuffer = (buf, ext) => {
     try {
-        // r128's RGBELoader defaults to UnsignedByteType (RGBE-encoded
-        // data only built-in materials can decode); HalfFloatType makes
-        // it decode to linear float at load.
-        new THREE.RGBELoader()
-            .setDataType(THREE.HalfFloatType)
-            .load(url, resolve, undefined, () => resolve(null));
-    } catch (e) { resolve(null); }
-});
+        if (ext === '.hdr') {
+            if (typeof THREE.RGBELoader === 'undefined') return null;
+            // r128's RGBELoader defaults to UnsignedByteType (RGBE-
+            // encoded data only built-in materials can decode);
+            // HalfFloatType makes it decode to linear float at parse.
+            const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
+            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+        }
+        if (ext === '.exr') {
+            if (typeof THREE.EXRLoader === 'undefined') return null;
+            // HalfFloatType (not FloatType, unlike loadExrTexture's
+            // material-sampler use above): RGBA16F is core-filterable/
+            // mip-able on WebGL2, while RGBA32F needs optional
+            // extensions — and prepareEnv() below forces a mip chain for
+            // the IBL/background textures this feeds.
+            const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
+            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+        }
+        return null; // unrecognized extension
+    } catch (e) {
+        return null;
+    }
+};
+// Build the full { radiance, irradiance, mips, background,
+// prefilteredIrr } shape both getEnvironment() and
+// loadEnvironmentFromFile return, from a raw parseEnvBuffer() result.
+// Second half of the shared parse-and-build pipeline (see
+// parseEnvBuffer's header comment above for the first half) — folds
+// what used to be getEnvironment's and loadEnvironmentFromFile's own,
+// separately-duplicated environment-preparation steps into one place.
+// Irradiance is ALWAYS synthesized via true SH cosine convolution
+// (shIrradianceFromEquirect) — there is no more paired
+// "<name>_irradiance.hdr" convention (removed 2026-07-18 along with its
+// URL constant and box-blur helper, see shIrradianceFromEquirect's
+// header comment), so prefilteredIrr is always false; kept in the
+// return shape only because callers (createMtlxRenderView) still read
+// it.
+const buildEnvFromParsedTexture = (raw) => {
+    const radiance = prepareEnv(raw);
+    const irrSrc = shIrradianceFromEquirect(raw);
+    const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
+    const img = radiance.image;
+    const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
+    // Correctly-oriented copy for the visible skybox mesh (see
+    // makeBackgroundTexture — the IBL texture's flipY=false doesn't
+    // match the mirrored-sphere backdrop's sampling).
+    const background = makeBackgroundTexture(radiance);
+    return { radiance, irradiance, mips, background, prefilteredIrr: false };
+};
 const getEnvironment = () => {
     if (!envPromise) {
-        envPromise = Promise.all([
-            loadHDR(ENV_MAP_URL),
-            loadHDR(IRRADIANCE_MAP_URL),
-        ]).then(([radRaw, irrRaw]) => {
-            if (!radRaw) return null; // no file → synthesized sky
-            const radiance = prepareEnv(radRaw);
-            // Prefer the prefiltered irradiance file (drop the official
-            // viewer's Lights/irradiance/<name>.hdr next to the app as
-            // ./irradiance.hdr for exact parity); else downsample.
-            const irrSrc = irrRaw || downsampleIrradiance(radRaw);
-            const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
-            const img = radiance.image;
-            const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
-            // Correctly-oriented copy for the visible skybox mesh (see
-            // makeBackgroundTexture — the IBL texture's flipY=false
-            // doesn't match the mirrored-sphere backdrop's sampling).
-            const background = makeBackgroundTexture(radiance);
-            return { radiance, irradiance, mips, background, prefilteredIrr: !!irrRaw };
-        });
+        // fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
+        // loadEnvironmentFromFile's file.arrayBuffer() -> parseEnvBuffer
+        // path below (same helper, different byte source). Any failure
+        // anywhere in the chain (network, missing loader script, bad
+        // file) resolves null — the existing synthesized-sky fallback at
+        // the createMtlxRenderView call site (`env ? env.radiance :
+        // makeEnvTexture(...)`) handles that, so this promise never
+        // rejects.
+        const ext = ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase();
+        envPromise = fetch(ENV_MAP_URL)
+            .then((r) => (r.ok ? r.arrayBuffer() : null))
+            .catch(() => null)
+            .then((buf) => {
+                if (!buf) return null; // no file / fetch failed → synthesized sky
+                const raw = parseEnvBuffer(buf, ext);
+                if (!raw || !raw.image || !raw.image.data) return null; // parse failed → synthesized sky
+                return buildEnvFromParsedTexture(raw);
+            });
     }
     return envPromise;
 };
 
 // Load a user-dropped equirectangular environment file (Import... in the
 // Environment dialog) and build it into the SAME shape getEnvironment()
-// returns, by reusing its helpers. Always takes the downsample-irradiance
-// path (there's only one dropped file, never a matching prefiltered
-// irradiance file) — same as getEnvironment()'s no-irradiance-file
-// branch. Throws a friendly Error for unsupported extensions or missing
-// loaders/parse failures; callers (the dialog) catch and show it inline.
+// returns, by reusing its helpers (parseEnvBuffer +
+// buildEnvFromParsedTexture — see their header comments above; this used
+// to duplicate both loaders' construction AND the prepare/SH/mips/
+// background steps inline). Throws a friendly Error for unsupported
+// extensions or missing loaders/parse failures; callers (the dialog)
+// catch and show it inline. (Unlike getEnvironment(), this does NOT
+// resolve null on failure — there's no silent synthesized-sky fallback
+// for an explicit user Import; the dialog needs to know why it failed.)
 const loadEnvironmentFromFile = async (file) => {
     const name = ((file && file.name) || '').toLowerCase();
-    let raw = null;
-    if (name.endsWith('.hdr')) {
-        if (typeof THREE.RGBELoader === 'undefined') {
-            throw new Error('RGBELoader unavailable (script blocked/offline) — cannot load .hdr environments.');
-        }
-        const buf = await file.arrayBuffer();
-        // HalfFloatType mirrors getEnvironment()'s loadHDR path (the
-        // official-viewer-parity radiance/irradiance loader above), not
-        // loadHdrTexture's FloatType (that one is for per-material
-        // sampler textures, a different use case).
-        const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
-        if (d && d.data) raw = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
-    } else if (name.endsWith('.exr')) {
-        if (typeof THREE.EXRLoader === 'undefined') {
-            throw new Error('EXRLoader unavailable (script blocked/offline) — cannot load .exr environments.');
-        }
-        const buf = await file.arrayBuffer();
-        // HalfFloatType (not FloatType, unlike loadExrTexture's material-
-        // sampler use above): RGBA16F is core-filterable/mip-able on
-        // WebGL2, while RGBA32F needs optional extensions — and
-        // prepareEnv() below forces a mip chain for the IBL/background
-        // textures this feeds. Matches the .hdr branch just above,
-        // which already loads HalfFloat.
-        const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
-        if (d && d.data) raw = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
-    } else {
+    const ext = name.slice(name.lastIndexOf('.'));
+    if (ext !== '.hdr' && ext !== '.exr') {
         throw new Error('Unsupported environment file "' + (file && file.name) + '" — expected .hdr or .exr.');
     }
+    // Loader-presence checks run BEFORE parseEnvBuffer purely so the
+    // dialog can report which specific script is missing — parseEnvBuffer
+    // itself just returns null on this, with no message.
+    if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+        throw new Error('RGBELoader unavailable (script blocked/offline) — cannot load .hdr environments.');
+    }
+    if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+        throw new Error('EXRLoader unavailable (script blocked/offline) — cannot load .exr environments.');
+    }
+    const buf = await file.arrayBuffer();
+    const raw = parseEnvBuffer(buf, ext);
     if (!raw || !raw.image || !raw.image.data) {
         throw new Error('Failed to parse the environment image "' + (file && file.name) + '".');
     }
-    const radiance = prepareEnv(raw);
-    // A dropped file never ships a matching prefiltered irradiance map,
-    // so (unlike getEnvironment()'s irrRaw-or-downsample choice above)
-    // this always needs a convolution from the radiance itself. Use the
-    // real SH cosine convolution (see shIrradianceFromEquirect above),
-    // not downsampleIrradiance's box blur — a box blur isn't
-    // cosine-weighted, so the diffuse term would show a recognizable,
-    // only-slightly-softened copy of the environment.
-    const irrSrc = shIrradianceFromEquirect(raw);
-    const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
-    const img = radiance.image;
-    const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
-    const background = makeBackgroundTexture(radiance);
-    return { radiance, irradiance, mips, background, prefilteredIrr: false };
+    return buildEnvFromParsedTexture(raw);
 };
 
 // Set/clear the session-wide environment override (see envOverride
@@ -2103,14 +2292,56 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
     const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
     const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
-    // hwSrgbEncodeOutput makes MaterialX emit its own sRGB
-    // encode (visible as srgb-named code in the source). Only
-    // inject our fallback when the option didn't take in this
-    // wasm build — double-encoding would wash everything out.
+    // hwSrgbEncodeOutput is now set to false (see the genContext setup
+    // near the top of this file), so MaterialX should emit RAW LINEAR
+    // output with no display encode of its own — encodeDisplay() (ACES
+    // tone map + sRGB; see its header comment for the full rationale
+    // and the exact GLSL) is injected UNCONDITIONALLY below, not just as
+    // a fallback. A SAFETY NET is kept: if some wasm build ignores
+    // hwSrgbEncodeOutput and emits its own sRGB encode anyway, injecting
+    // ACES+sRGB on top of that would double-encode AND run the tone map
+    // on already-nonlinear data — warn loudly and skip the injection
+    // rather than silently producing a wrong image.
+    //
+    // SCOPED CHECK (2026-07-18 fix — was whole-shader /srgb/i.test(fs)):
+    // testing the ENTIRE shader string false-positives on essentially
+    // every standard_surface-based material. MaterialX's ESSL generator
+    // unconditionally emits its full color-management function LIBRARY
+    // into every shader, including mx_srgb_encode()/mx_srgb_decode()
+    // DEFINITIONS — those are always present in the source text
+    // regardless of whether any node in the graph actually CALLS them.
+    // With hwSrgbEncodeOutput=false those functions sit dead in the
+    // shader (0 call sites, confirmed by call-site analysis while
+    // diagnosing an "overblown / hard-clipped highlight" preview
+    // report), yet the old whole-file regex matched their names anyway
+    // and skipped encodeDisplay() on effectively every material,
+    // permanently disabling the ACES+sRGB injection app-wide — the
+    // shader's real last statement was plain `out1 =
+    // vec4(SR_marble1_out.color, 1.0);`, no encode call in sight.
+    //
+    // Fix: only ask whether the STATEMENT THAT WRITES THE FRAGMENT
+    // OUTPUT invokes an srgb encode, not whether the substring "srgb"
+    // appears anywhere in ~100KB of shared library code. Reuse
+    // encodeDisplay()'s own `out vec4 <name>;` detection to find the
+    // output variable, then test only the assignment(s) to THAT
+    // variable. If the output variable (or an assignment to it) can't
+    // be located at all — an unexpected shader shape this code has
+    // never seen — fail safe exactly as before: warn and skip injection
+    // rather than guess.
     let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
     fs = patchUnlitLightingRefs(fs);
-    if (!/srgb/i.test(fs)) fs = encodeDisplay(fs);
-    else if (DEBUG_SHADERS) console.log('generator emitted sRGB encode (hwSrgbEncodeOutput) — no injection');
+    const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
+    const outVar = outDeclMatch ? outDeclMatch[1] : null;
+    const outAssignments = outVar
+        ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g'))
+        : null;
+    if (!outVar || !outAssignments || !outAssignments.length) {
+        console.warn(`mtlx-engine: could not locate the fragment output assignment for "${label}" — skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);
+    } else if (/srgb/i.test(outAssignments.join('\n'))) {
+        console.warn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false) — skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);
+    } else {
+        fs = encodeDisplay(fs);
+    }
 
     // --- Uniform introspection (folded in from the callers — see the
     // block comment above). Still fully inside the mxExclusive lock:
@@ -2343,7 +2574,7 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 // Callers that never call applyMaterial() again can omit it; `aliveFn`
 // then falls back to `isMounted`, which is exactly today's behavior.
 // Returns { uniforms, introspected, vs, fs, controls, renderer,
-//           applyMaterial(), setGeometry(), setEnvironment(),
+//           applyMaterial(), setEnvironment(),
 //           setEnvExposure(), ..., dispose() } or null when
 // isMounted() went false mid-way through THIS build (already cleaned
 // up). Throws Error with a decoded MaterialX/GLSL message on failure.
@@ -2409,6 +2640,141 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 // ------------------------------------------------------------------
 const BG_BASE = -Math.PI / 2;
 const BG_SIGN = -1;
+
+// ------------------------------------------------------------------
+// Neutral-material env rotation (r128 built-ins have no scene.environment
+// rotation knob — scene.environmentRotation only lands in r162+, and a
+// PMREM render target has no .offset/.matrix the way an ordinary texture
+// does). This USED to be an accepted limitation (see the old comment this
+// replaced, above setEnvRotation below) — revoked: patch every neutral
+// glTF PBR material's compiled shader (via onBeforeCompile) so its two
+// env-sampling functions rotate their query direction by a live
+// `uEnvRotation` uniform before hitting the PMREM, exactly like
+// u_envMatrix already does for the generated MaterialX shader's own
+// u_envRadiance/u_envIrradiance lookups.
+//
+// EXACT TEXT PROVENANCE: NEUTRAL_ENV_ROTATION_CHUNK below is r128's OWN
+// THREE.ShaderChunk.envmap_physical_pars_fragment — verified byte-for-byte
+// against vendor/three/three.min.js's ShaderChunk table — with exactly
+// three lines added (marked ADDED): the `uniform mat3 uEnvRotation;`
+// declaration and one `= uEnvRotation * ...` rotation each in
+// getLightProbeIndirectIrradiance (rotates worldNormal) and
+// getLightProbeIndirectRadiance (rotates reflectVec). Every #ifdef branch
+// (ENVMAP_MODE_REFRACTION / ENVMAP_TYPE_CUBE / ENVMAP_TYPE_CUBE_UV /
+// TEXTURE_LOD_EXT) is untouched and the rotation is applied BEFORE the
+// branch, so whichever mapping type is actually active — CUBE_UV is what
+// PMREMGenerator's output uses, the only one exercised by scene.environment
+// here today — still gets rotated correctly.
+//
+// ROTATION CONVENTION DERIVATION — the punchline is a bare RotationY(rad),
+// NOT RotationY(PI/2 + rad) like u_envMatrix: two independent "+90 degrees"
+// conventions cancel out. Walking through it:
+//   - u_envMatrix rotates the QUERY direction by RotationY(PI/2 + rad)
+//     before MaterialX's own mx_latlong_projection (mx_microfacet_specular.
+//     glsl): longitude = atan2(dir.x, -dir.z) / 2PI + 0.5.
+//   - scene.environment's PMREM was baked (by THREE.PMREMGenerator, see
+//     the creation-time PMREM block in createMtlxRenderView below) from
+//     radianceSrc — the SAME texture bound as u_envRadiance — via r128's
+//     OWN internal equirectUv: u = atan2(dir.z, dir.x) / 2PI + 0.5. Once
+//     baked into the CubeUV mip atlas, sampling it at a world direction
+//     `d` returns the same texel equirectUv(d) would read directly off
+//     radianceSrc.
+//   - For the SAME direction, atan2(x,-z) is atan2(z,x) rotated +90
+//     degrees (rotating a 2D point (a,b) by +90 gives (-b,a), and
+//     (-z,x) is exactly (x,z) rotated that way) — so MaterialX's
+//     longitude leads three's u by a CONSTANT +0.25 (in u; +90 degrees),
+//     independent of any rotation applied upstream.
+//   - Composing: sampling direction R*d (R = RotationY(PI/2 + rad)) through
+//     mx_latlong_projection lands on the SAME texel, expressed in three's
+//     own u-convention, as sampling direction RotationY(rad)*d through
+//     equirectUv would — the u_envMatrix's own baked-in +90 and the
+//     cross-convention +90 cancel exactly. Confirmed both symbolically and
+//     numerically (representative directions, rad swept across [-PI, PI])
+//     before wiring this in; V3's screenshot diff is still the final word
+//     per the plan.
+const NEUTRAL_ENV_ROTATION_CHUNK = `#if defined( USE_ENVMAP )
+	#ifdef ENVMAP_MODE_REFRACTION
+		uniform float refractionRatio;
+	#endif
+	uniform mat3 uEnvRotation;
+	vec3 getLightProbeIndirectIrradiance( const in GeometricContext geometry, const in int maxMIPLevel ) {
+		vec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );
+		worldNormal = uEnvRotation * worldNormal;
+		#ifdef ENVMAP_TYPE_CUBE
+			vec3 queryVec = vec3( flipEnvMap * worldNormal.x, worldNormal.yz );
+			#ifdef TEXTURE_LOD_EXT
+				vec4 envMapColor = textureCubeLodEXT( envMap, queryVec, float( maxMIPLevel ) );
+			#else
+				vec4 envMapColor = textureCube( envMap, queryVec, float( maxMIPLevel ) );
+			#endif
+			envMapColor.rgb = envMapTexelToLinear( envMapColor ).rgb;
+		#elif defined( ENVMAP_TYPE_CUBE_UV )
+			vec4 envMapColor = textureCubeUV( envMap, worldNormal, 1.0 );
+		#else
+			vec4 envMapColor = vec4( 0.0 );
+		#endif
+		return PI * envMapColor.rgb * envMapIntensity;
+	}
+	float getSpecularMIPLevel( const in float roughness, const in int maxMIPLevel ) {
+		float maxMIPLevelScalar = float( maxMIPLevel );
+		float sigma = PI * roughness * roughness / ( 1.0 + roughness );
+		float desiredMIPLevel = maxMIPLevelScalar + log2( sigma );
+		return clamp( desiredMIPLevel, 0.0, maxMIPLevelScalar );
+	}
+	vec3 getLightProbeIndirectRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness, const in int maxMIPLevel ) {
+		#ifdef ENVMAP_MODE_REFLECTION
+			vec3 reflectVec = reflect( -viewDir, normal );
+			reflectVec = normalize( mix( reflectVec, normal, roughness * roughness) );
+		#else
+			vec3 reflectVec = refract( -viewDir, normal, refractionRatio );
+		#endif
+		reflectVec = inverseTransformDirection( reflectVec, viewMatrix );
+		reflectVec = uEnvRotation * reflectVec;
+		float specularMIPLevel = getSpecularMIPLevel( roughness, maxMIPLevel );
+		#ifdef ENVMAP_TYPE_CUBE
+			vec3 queryReflectVec = vec3( flipEnvMap * reflectVec.x, reflectVec.yz );
+			#ifdef TEXTURE_LOD_EXT
+				vec4 envMapColor = textureCubeLodEXT( envMap, queryReflectVec, specularMIPLevel );
+			#else
+				vec4 envMapColor = textureCube( envMap, queryReflectVec, specularMIPLevel );
+			#endif
+			envMapColor.rgb = envMapTexelToLinear( envMapColor ).rgb;
+		#elif defined( ENVMAP_TYPE_CUBE_UV )
+			vec4 envMapColor = textureCubeUV( envMap, reflectVec, roughness );
+		#endif
+		return envMapColor.rgb * envMapIntensity;
+	}
+#endif`;
+// ------------------------------------------------------------------
+
+// Full-scene mode (fullScene, see createMtlxRenderView below): the GLB's
+// authored camera has a FIXED vertical FOV (yfov, ~13.44deg for
+// shaderball.glb) sized for its own authored 16:9 aspect (~1.7778) — the
+// classic glTF "vertical-fit" camera convention. Adopting the CANVAS's
+// aspect (user decision: no letterbox/pillarbox, see the camera.aspect
+// assignments in createMtlxRenderView/syncSize below) is harmless when
+// the canvas is WIDER than 16:9 — the extra width just reveals more
+// scene at the same vertical framing — but on a NARROWER canvas (e.g.
+// the square graph panel) it CROPS THE SIDES: the vertical fov stays
+// fixed at 13.44deg while the horizontal fov shrinks with the aspect,
+// so the shaderball can spill outside the frame. Fix: derive the
+// authored HORIZONTAL half-fov from the authored (vFov, aspect) pair,
+// then re-derive a WIDENED vertical fov that reproduces that same
+// horizontal half-fov at the narrower canvas aspect — i.e. widen the
+// vertical field instead of cropping the horizontal one, guaranteeing
+// the whole authored 16:9 frame (and therefore the whole shaderball)
+// stays visible. No-op (returns the authored fov unchanged) once
+// canvasAspect >= authoredAspect — the ordinary wide-canvas case above.
+// Only used by fullScene; sphere/cube/simple modes keep today's fixed
+// 45-degree PerspectiveCamera fov untouched.
+const effectiveFullSceneVFov = (authoredFovDeg, authoredAspect, canvasAspect) => {
+    if (canvasAspect >= authoredAspect) return authoredFovDeg;
+    const authoredHalfVFov = (authoredFovDeg * Math.PI / 180) / 2;
+    const authoredHalfHFov = Math.atan(Math.tan(authoredHalfVFov) * authoredAspect);
+    const effHalfVFov = Math.atan(Math.tan(authoredHalfHFov) / canvasAspect);
+    return effHalfVFov * 2 * 180 / Math.PI;
+};
+
 const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
@@ -2423,22 +2789,36 @@ const createMtlxRenderView = async ({
     isMounted = () => true, isActive = () => true, isAlive = null, debugKind = '',
     // Initial camera pull-back. 3.6 is the classic roomy framing; small
     // square previews pass ~2.55 so the radius-1 shape fills the frame.
+    // IGNORED in full-scene mode (geomName === 'shaderball-scene'): the
+    // camera there is copied verbatim from the GLB's own embedded
+    // camera (see the detached-camera block below) — there is no
+    // pull-back distance to apply.
     cameraDistance = 3.6,
 }) => {
     // See the isAlive doc above: defaulting to isMounted here preserves
     // today's exact behavior for every caller that doesn't pass isAlive.
     const aliveFn = isAlive || isMounted;
+    // Mode derived from geomName, read throughout this function:
+    // 'shaderball-scene' -> the FULL authored GLB scene (graph preview
+    // only — detached embedded camera, no OrbitControls, see below);
+    // 'shaderball' -> the SIMPLE (ball-only) GLB scene, normalized like
+    // a sphere/cube preset, with today's ordinary orbit/zoom controls;
+    // 'sphere'/'cube' (or anything else, including a fallback — see
+    // sceneInst below) -> null, the original prepGeometry(
+    // buildPreviewGeometry(...)) path, completely unchanged.
+    const sceneMode = geomName === 'shaderball-scene' ? 'full'
+        : geomName === 'shaderball' ? 'simple' : null;
     let reqId = null;
     let renderer = null;
     let resizeObs = null;
     let controls = null;
     let stopped = false;
     // Shell-level material/geometry/uniforms state, reassigned by
-    // applyMaterialInternal()/setGeometry() (both defined further down)
-    // on every swap so the SAME shell (renderer/scene/camera/controls/
-    // env textures below) can back a long sequence of document edits
-    // instead of paying for a fresh createMtlxRenderView() call per
-    // edit. `uniforms` was a `const` before this persistent-shell
+    // applyMaterialInternal() (defined further down) on every swap so
+    // the SAME shell (renderer/scene/camera/controls/env textures
+    // below) can back a long sequence of document edits instead of
+    // paying for a fresh createMtlxRenderView() call per edit.
+    // `uniforms` was a `const` before this persistent-shell
     // restructure; it MUST be a `let` now — every closure below that
     // reads it (setUniforms, animate, the handle's setEnvRotation/
     // setEnvExposure/setEnvironment, bindMaterialUniforms,
@@ -2447,11 +2827,62 @@ const createMtlxRenderView = async ({
     // visible to all of them without threading a fresh value through
     // each one individually.
     let mesh = null, material = null, geometry = null, uniforms = null;
+    // Scene-mode state (both null/empty when sceneMode is null, i.e.
+    // the sphere/cube path — every sceneGroup-touching line below
+    // guards with `if (sceneGroup)`/`if (sceneInst)` and is a safe
+    // no-op there, mirroring bgMesh's established pattern in this
+    // function). sceneGroup: the instantiated GLB scene's root Object3D
+    // (added to `scene` below), holding `mesh` (material_surface) as
+    // one of its descendants. sceneOwnedMaterials: the per-view-cloned
+    // materials instantiateShaderballScene() created for every OTHER
+    // (non-material_surface) mesh in sceneGroup — disposed by
+    // disposePartial below; the shared, CACHED geometries/original
+    // materials they were cloned from never are (see loadGlbScene's
+    // cache-ownership comment above). pmremRT: the WebGLRenderTarget
+    // backing scene.environment (PMREM-baked IBL for sceneGroup's
+    // ordinary glTF meshes) — regenerated by setEnvironment below,
+    // disposed by disposePartial.
+    let sceneGroup = null, sceneOwnedMaterials = [], pmremRT = null;
     // The radiance texture, kept so the caller can toggle it as the
     // visible backdrop (setEnvBackground) via bgMesh below — the IBL
     // uniforms are bound regardless.
     let envBgTexture = null;
     let envRadSamplerName = null, envIrrSamplerName = null, envRotationRad = 0;
+    // See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
+    // derivation of why this is a bare RotationY(rad) — no extra PI/2.
+    const envRotationMatrix3 = (rad) =>
+        new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(rad));
+    // Attach the live-rotatable env patch (see NEUTRAL_ENV_ROTATION_CHUNK
+    // above) to one neutral glTF PBR material. Nested here (rather than a
+    // standalone top-level helper) so onBeforeCompile's closure reads
+    // `envRotationRad` — a `let` in THIS shell's scope — fresh at ACTUAL
+    // compile time (whenever three first builds this material's GL
+    // program, typically the first render) rather than a value snapshotted
+    // at attach time: a setEnvRotation() call landing in the narrow window
+    // between attach and first compile is picked up correctly instead of
+    // silently lost. setEnvRotation below (the live-update path, for AFTER
+    // first compile) reads back `material.userData.envRotationUniform`,
+    // stashed here once the program has actually compiled.
+    const patchNeutralMaterialEnvRotation = (material) => {
+        material.onBeforeCompile = (shader) => {
+            shader.uniforms.uEnvRotation = { value: envRotationMatrix3(envRotationRad) };
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <envmap_physical_pars_fragment>',
+                NEUTRAL_ENV_ROTATION_CHUNK
+            );
+            material.userData.envRotationUniform = shader.uniforms.uEnvRotation;
+        };
+        // customProgramCacheKey: r128's Material.prototype default already
+        // derives this from onBeforeCompile.toString() — since every
+        // patched material gets this SAME function body, that alone
+        // already keys them apart from any unpatched sibling. Set
+        // explicitly anyway (a stable constant, cheap) as documented
+        // insurance against a future edit that makes the closure
+        // material-specific (which would break toString-based caching by
+        // making every patched material's onBeforeCompile.toString()
+        // differ, or WORSE, coincidentally collide).
+        material.customProgramCacheKey = () => 'neutralEnvRotation';
+    };
     // Shell-owned skybox mesh — replaces scene.background entirely.
     // Built once (below, in the needsLighting env-fetch block) when an
     // env exists; stays null for unlit previews (needsLighting=false),
@@ -2521,6 +2952,34 @@ const createMtlxRenderView = async ({
                 bgMesh.material.dispose();
             }
         } catch (e) { /* already disposed/invalid, or scene never got this far */ }
+        // sceneGroup (scene-mode only — see its declaration above):
+        // drop the whole instantiated GLB hierarchy from the scene and
+        // dispose the per-view material CLONES instantiateShaderballScene
+        // made for it (sceneOwnedMaterials). Do NOT dispose any of
+        // sceneGroup's GEOMETRIES here (material_surface's own per-view
+        // geometry CLONE is already covered by the generic
+        // `geometry.dispose()` above — `geometry` and
+        // `mesh.geometry`/sceneInst.surfaceMesh.geometry are the SAME
+        // object in scene mode) and do NOT touch the cached gltf itself
+        // — the rest of sceneGroup's geometries are shared with every
+        // other view instantiated from the same glbSceneCache entry
+        // (see loadGlbScene's cache-ownership comment above).
+        try {
+            if (sceneGroup) {
+                scene.remove(sceneGroup);
+                sceneOwnedMaterials.forEach((m) => {
+                    try { m.dispose(); } catch (e) { /* already disposed/invalid */ }
+                });
+            }
+        } catch (e) { /* already disposed/invalid, or scene never got this far */ }
+        // pmremRT: this view's OWN prefiltered-environment render
+        // target (see the env block below) — safe to dispose outright.
+        // Do NOT dispose the PMREMGenerator instance that produced it
+        // (see the env block's comment on why: r128's PMREMGenerator
+        // shares its LOD-plane geometries at MODULE scope, and
+        // disposing any one instance tears those down for every other
+        // PMREMGenerator, present or future).
+        try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total — everything below, from shader
@@ -2592,18 +3051,132 @@ const createMtlxRenderView = async ({
                 }
 
                 const scene = new THREE.Scene();
+
+                // Instantiate the scene-mode GLB (if any) BEFORE the
+                // camera below: full-scene mode needs the GLB's own
+                // embedded camera to construct the shell camera from.
+                // isMounted bail mirrors every other await in this
+                // function — nothing GL-scene-side has been added yet,
+                // so disposePartial() is still a safe no-op beyond
+                // flagging `stopped`.
+                const sceneInst = sceneMode ? await instantiateShaderballScene(sceneMode) : null;
+                if (!isMounted()) { disposePartial(); return null; }
+                if (sceneMode && !sceneInst) {
+                    // GLB missing/corrupt, GLTFLoader unavailable, or
+                    // the asset lacks a material_surface mesh — degrade
+                    // exactly like the old remote-shaderball fetch
+                    // failure did: fall back to the plain sphere
+                    // (buildPreviewGeometry's default branch handles any
+                    // unrecognized geomName, scene names included) with
+                    // a single console warning instead of crashing.
+                    console.warn('shaderball scene unavailable, falling back to sphere:', geomName);
+                }
+                if (sceneInst) {
+                    sceneGroup = sceneInst.group;
+                    sceneOwnedMaterials = sceneInst.ownedMaterials;
+                    // Env-rotation patch: every neutral glTF PBR material
+                    // (base/core/sss_bars, backdrop, grid — anything lit by
+                    // scene.environment/PMREM below) EXCEPT the backplanes'
+                    // MeshBasicMaterial clones, which have no envMap at all
+                    // and so don't sample it. 'envMapIntensity' in m is the
+                    // SAME duck-typing check setEnvExposure below already
+                    // uses to find this exact set of materials.
+                    sceneOwnedMaterials.forEach((m) => {
+                        if ('envMapIntensity' in m) patchNeutralMaterialEnvRotation(m);
+                    });
+                }
+                // fullScene: the GRAPH-only preset (shaderball.glb) —
+                // fixed authored camera, no orbit/zoom, no fallback
+                // spin (see the controls + fallbackSpin + animate()
+                // changes below). 'simple' scene mode (viewer/docs)
+                // behaves like an ordinary orbitable preset and is NOT
+                // fullScene.
+                const fullScene = !!(sceneInst && sceneMode === 'full');
+                // Populated only in the fullScene-adoption branch just
+                // below; read again by syncSize further down on every
+                // resize. null in every other mode — those keep the
+                // fixed-45-degree camera untouched (see
+                // effectiveFullSceneVFov's header comment above).
+                let fullSceneAuthoredFov = null;
+                let fullSceneAuthoredAspect = null;
+
                 const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
                 // Slightly elevated three-quarter framing; the elevation
                 // scales with the distance so the viewing angle stays the
                 // same whether the caller wants breathing room (3.6) or a
                 // frame-filling close-up (~2.55 in the square previews).
+                // (fullScene overrides this wholesale immediately below.)
                 camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+
+                if (fullScene && sceneInst.glbCamera) {
+                    const gc = sceneInst.glbCamera;
+                    // DETACHED camera — WHY: the GLB's camera node sits
+                    // under 'standard_shader_ball_scene', a root node
+                    // that bakes in a 0.01 scale (see the GLB layout
+                    // note in instantiateShaderballScene's header
+                    // comment above). Rendering gc itself IN-HIERARCHY
+                    // (as a live child of sceneGroup) would carry that
+                    // 0.01 scale into its composed matrixWorld, and
+                    // camera.matrixWorldInverse — used verbatim by
+                    // WebGLRenderer every frame — is that matrix's
+                    // INVERSE: view-space distances would come out
+                    // ~100x too large, pushing the entire scene past
+                    // this camera's own authored zfar=10 (everything
+                    // clips). Copying WORLD position + WORLD quaternion
+                    // (the 0.01 scale factor cancels out of a pure
+                    // rotation, so quaternion needs no correction) onto
+                    // the shell's OWN, never-parented camera sidesteps
+                    // the problem entirely.
+                    sceneGroup.updateMatrixWorld(true); // sceneGroup isn't added to `scene` until below; compute its world matrices standalone first
+                    gc.getWorldPosition(camera.position);
+                    gc.getWorldQuaternion(camera.quaternion);
+                    // gc.near/far are already in the units
+                    // THREE.PerspectiveCamera expects (GLTFLoader's
+                    // camera loader builds gc as a real PerspectiveCamera)
+                    // — copy verbatim. gc.fov (the AUTHORED vertical fov,
+                    // already in degrees) is captured below instead of
+                    // being copied straight onto camera.fov — see
+                    // effectiveFullSceneVFov's header comment above for
+                    // why.
+                    camera.near = gc.near;
+                    camera.far = gc.far;
+                    // Authored aspect: gc.aspect (GLTFLoader's camera
+                    // constructor uses `aspectRatio || 1`; this GLB
+                    // authors ~1.7778/16:9, so gc.aspect already reads
+                    // that value). The `|| 1.7778` fallback only matters
+                    // for a hypothetical GLB that omits aspectRatio
+                    // entirely, where gc.aspect would otherwise be the
+                    // constructor's bare `1` default rather than a real
+                    // authored value. Stashed in the outer closure vars
+                    // above so syncSize (below) can redo this same
+                    // computation on every resize, not just at adoption.
+                    fullSceneAuthoredFov = gc.fov;
+                    fullSceneAuthoredAspect = gc.aspect || 1.7778;
+                    // Aspect from the CANVAS, not the GLB's own authored
+                    // aspect — user decision: adopt the preview
+                    // viewport's aspect so there's no letterbox/pillarbox
+                    // and no layout change, same as every other preset.
+                    // Naively keeping gc's fixed vertical fov here would
+                    // CROP THE SIDES on a narrower-than-authored canvas
+                    // (e.g. the square graph panel); route through
+                    // effectiveFullSceneVFov so the vertical fov widens
+                    // instead, keeping the whole authored 16:9 frame (and
+                    // therefore the whole shaderball) visible.
+                    camera.aspect = cw / ch;
+                    camera.fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
+                    camera.updateProjectionMatrix();
+                }
 
                 // Orbit + zoom + auto-rotate. Rotating the CAMERA (not
                 // the mesh) lets manual orbiting, zooming, and the
-                // pause button all compose naturally.
+                // pause button all compose naturally. Full-scene mode
+                // gets NEITHER: the authored camera above is meant to
+                // stay exactly where the GLB placed it (user decision:
+                // no mouse interaction, rotation button hidden — see
+                // setAutoRotate's no-op below and js/graph/preview.jsx's
+                // ViewportControls props).
                 controls = null;
-                if (THREE.OrbitControls) {
+                if (THREE.OrbitControls && !fullScene) {
                     controls = new THREE.OrbitControls(camera, canvas);
                     controls.enableDamping = true;
                     controls.dampingFactor = 0.08;
@@ -2619,6 +3192,89 @@ const createMtlxRenderView = async ({
                     controls.autoRotate = !!autoRotate;
                     controls.autoRotateSpeed = 1.5;
                 }
+                // No-OrbitControls-script fallback spin (see
+                // fallbackSpin's declaration above) must also stay off
+                // in full-scene mode — there is no controls instance to
+                // gate it, so force it here explicitly.
+                if (fullScene) fallbackSpin = false;
+
+                // Fullscreen "fit to ball" (setFullscreenFit handle method,
+                // below): while on, the whole shaderball's world bounding
+                // sphere must stay inside the frame at all times, layered
+                // ON TOP of the everyday effectiveFullSceneVFov framing
+                // above/below (only ever WIDENS the fov — never narrower
+                // than the everyday framing). Camera position/orientation
+                // are never touched here — this is a pure fov (zoom) change.
+                // fullScene-only; sphere/cube/simple previews have ordinary
+                // OrbitControls zoom instead and never set this flag (see
+                // js/graph/preview.jsx, the only caller).
+                let fullscreenFit = false;
+                // World-space bounding sphere of the whole ball assembly
+                // (material_surface + neutral_objects together), computed
+                // ONCE per scene and cached here — see getBallBoundingSphere
+                // just below.
+                let ballBoundingSphere = null;
+
+                // Finds (and caches) the ball assembly's world bounding
+                // sphere: the GLB's 'shader_ball' node by name (holds
+                // material_surface + neutral_objects), falling back to
+                // material_surface's own parent if that name isn't present
+                // in some future re-export, and finally sceneGroup itself
+                // as a last resort so this can never throw. Box3.
+                // setFromObject reads world matrices, so force them current
+                // first — cheap, and this whole function only runs its
+                // Box3/Sphere computation once per scene (later calls hit
+                // the ballBoundingSphere cache above).
+                const getBallBoundingSphere = () => {
+                    if (ballBoundingSphere) return ballBoundingSphere;
+                    if (!sceneGroup) return null;
+                    const ballNode = sceneGroup.getObjectByName('shader_ball')
+                        || (mesh && mesh.parent)
+                        || sceneGroup;
+                    ballNode.updateMatrixWorld(true);
+                    const box = new THREE.Box3().setFromObject(ballNode);
+                    ballBoundingSphere = box.getBoundingSphere(new THREE.Sphere());
+                    return ballBoundingSphere;
+                };
+
+                // Single entry point for every fov-affecting event (every
+                // resize via syncSize below, and the fit toggle itself) so
+                // they can never disagree with each other: starts from the
+                // everyday effectiveFullSceneVFov framing, then — ONLY
+                // while fullscreenFit is on — widens further if the ball's
+                // angular size at the FIXED camera position would otherwise
+                // exceed the frame on either axis. Writes camera.fov only;
+                // callers own their own camera.updateProjectionMatrix().
+                const recomputeCameraFov = () => {
+                    if (fullSceneAuthoredFov == null) return; // non-fullScene modes keep their fixed fov untouched
+                    let fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
+                    if (fullscreenFit) {
+                        const sphere = getBallBoundingSphere();
+                        const dist = sphere ? camera.position.distanceTo(sphere.center) : 0;
+                        if (sphere && dist > sphere.radius) {
+                            // Angular radius of the ball as seen from the
+                            // camera: asin(r / d), clamped to 1 to guard
+                            // fp overshoot when dist is only fractionally
+                            // larger than radius.
+                            const theta = Math.asin(Math.min(1, sphere.radius / dist));
+                            // The ball must fit BOTH axes: the vertical
+                            // half-fov must cover theta directly, and the
+                            // horizontal half-fov (also theta -- the
+                            // sphere's silhouette is a circle, same
+                            // angular radius on every axis) must cover
+                            // theta once converted back to a vertical fov
+                            // through the aspect ratio (the same
+                            // tan/atan identity effectiveFullSceneVFov
+                            // above uses).
+                            const vFovForVertical = 2 * theta;
+                            const vFovForHorizontal = 2 * Math.atan(Math.tan(theta) / camera.aspect);
+                            const FIT_MARGIN = 1.06; // ~6% breathing room so the ball doesn't touch the frame edge
+                            const fitFovDeg = Math.max(vFovForVertical, vFovForHorizontal) * 180 / Math.PI * FIT_MARGIN;
+                            fov = Math.max(fov, fitFovDeg); // only ever widen -- never crop back below the everyday framing
+                        }
+                    }
+                    camera.fov = fov;
+                };
 
                 // Keep the drawing buffer + aspect in sync with layout:
                 // the params panel appears after init (flex reflow), and
@@ -2629,6 +3285,19 @@ const createMtlxRenderView = async ({
                     const h = canvas.clientHeight || ch;
                     renderer.setSize(w, h, false);
                     camera.aspect = w / h;
+                    // fullScene only (fullSceneAuthoredFov stays null in
+                    // every other mode, see its declaration above):
+                    // resize can change WHICH side of the
+                    // canvasAspect >= authoredAspect comparison we're on
+                    // (e.g. a panel widening past 16:9 on a layout reflow,
+                    // or entering/exiting fullscreen), so this must be
+                    // recomputed on every resize, not just once at
+                    // adoption — recomputeCameraFov above also folds in the
+                    // fullscreen "fit to ball" widening while that flag is
+                    // on. sphere/cube/simple modes are untouched — they
+                    // keep today's fixed 45-degree fov (recomputeCameraFov
+                    // no-ops when fullSceneAuthoredFov is null).
+                    recomputeCameraFov();
                     camera.updateProjectionMatrix();
                 };
                 if (window.ResizeObserver) {
@@ -2636,75 +3305,152 @@ const createMtlxRenderView = async ({
                     resizeObs.observe(canvas);
                 }
 
-                // Image-based lighting for lit surfaces/BSDFs — fetched
-                // ONCE here, at SHELL level, rather than inside every
-                // material apply below: the env textures (radiance/
-                // irradiance/background) never change across a document
-                // edit, so re-fetching (or, on the no-file fallback,
-                // re-synthesizing) them on every swap would be pure
-                // waste. The per-material BINDING of these textures onto
-                // the CURRENT shader's actual declared sampler names still
-                // happens fresh on every apply — see bindMaterialUniforms
-                // below — since that depends on what THAT particular
-                // generated shader declares.
-                if (needsLighting) {
+                // Image-based lighting for lit surfaces/BSDFs, AND/OR
+                // (widened gate — new) scene-mode's ordinary glTF
+                // meshes (neutral ball parts, backdrop, grid), which
+                // are ALWAYS lit via scene.environment/PMREM below
+                // regardless of whether the GENERATED material itself
+                // needsLighting: an unlit color node's shaderball
+                // preview still shows those neighboring parts lit, per
+                // the design brief. Fetched ONCE here, at SHELL level,
+                // rather than inside every material apply below: the
+                // env textures (radiance/irradiance/background) never
+                // change across a document edit, so re-fetching (or, on
+                // the no-file fallback, re-synthesizing) them on every
+                // swap would be pure waste. The per-material BINDING of
+                // these textures onto the CURRENT shader's actual
+                // declared sampler names still happens fresh on every
+                // apply — see bindMaterialUniforms below — since that
+                // depends on what THAT particular generated shader
+                // declares.
+                if (needsLighting || sceneInst) {
                     const env = envOverride || await getEnvironment();
                     if (!isMounted()) { disposePartial(); return null; }
-                    if (env) {
-                        envRadiance = env.radiance; envIrradiance = env.irradiance; envMips = env.mips;
-                        envBgTexture = env.background;
-                        envHasFile = true;
-                        envPrefilteredIrr = !!env.prefilteredIrr;
-                    } else {
-                        envRadiance = makeEnvTexture(256, 128, false);
-                        envIrradiance = makeEnvTexture(64, 32, true);
-                        envMips = Math.floor(Math.log2(256)) + 1;
-                        // Same convention gap as the HDR path: the
-                        // synthesized data is top-first too, so the
-                        // background needs its own flipY=true copy.
-                        envBgTexture = makeBackgroundTexture(envRadiance);
-                        envHasFile = false;
+                    // Independent of envRadiance/etc. below (which only
+                    // the needsLighting branch populates): scene-mode's
+                    // PMREM further down needs A radiance source even
+                    // when THIS material is unlit and never touches the
+                    // u_env* uniforms/envRadiance at all.
+                    const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
+                    if (needsLighting) {
+                        if (env) {
+                            envRadiance = env.radiance; envIrradiance = env.irradiance; envMips = env.mips;
+                            envBgTexture = env.background;
+                            envHasFile = true;
+                            envPrefilteredIrr = !!env.prefilteredIrr;
+                        } else {
+                            envRadiance = makeEnvTexture(256, 128, false);
+                            envIrradiance = makeEnvTexture(64, 32, true);
+                            envMips = Math.floor(Math.log2(256)) + 1;
+                            // Same convention gap as the HDR path: the
+                            // synthesized data is top-first too, so the
+                            // background needs its own flipY=true copy.
+                            envBgTexture = makeBackgroundTexture(envRadiance);
+                            envHasFile = false;
+                        }
+                        // Shell-owned skybox mesh — see bgMesh's
+                        // declaration above for the WHY-not-scene.
+                        // background rationale. SphereGeometry + the x-
+                        // mirror is the canonical r128 "camera inside a
+                        // sphere" panorama recipe. R=50 sits well inside
+                        // the camera's far=100 (see the PerspectiveCamera
+                        // constructed above) with plenty of margin.
+                        // MeshBasicMaterial is unlit (a backdrop, not a
+                        // lit surface) with depthWrite:false + a very low
+                        // renderOrder so it's drawn FIRST and every real
+                        // object simply paints over it — depthWrite:false
+                        // means it never touches the depth buffer, so draw
+                        // order (not depth testing) is what keeps it
+                        // behind everything, regardless of the actual
+                        // (large) sphere radius.
+                        // rotation.y is seeded from envRotationRad (not a
+                        // bare 0) so a persisted rotation is already
+                        // correct on the very first rendered frame — same
+                        // DELIBERATE TWEAK pattern u_envMatrix uses in
+                        // bindMaterialUniforms below. See BG_BASE/BG_SIGN's
+                        // derivation comment above createMtlxRenderView.
+                        const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
+                        bgGeometry.scale(-1, 1, 1);
+                        bgMesh = new THREE.Mesh(
+                            bgGeometry,
+                            new THREE.MeshBasicMaterial({ map: envBgTexture, depthWrite: false })
+                        );
+                        bgMesh.renderOrder = -1000;
+                        bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
+                        bgMesh.visible = !!envBackground;
+                        scene.add(bgMesh);
                     }
-                    // Shell-owned skybox mesh — see bgMesh's
-                    // declaration above for the WHY-not-scene.
-                    // background rationale. SphereGeometry + the x-
-                    // mirror is the canonical r128 "camera inside a
-                    // sphere" panorama recipe. R=50 sits well inside
-                    // the camera's far=100 (see the PerspectiveCamera
-                    // constructed above) with plenty of margin.
-                    // MeshBasicMaterial is unlit (a backdrop, not a
-                    // lit surface) with depthWrite:false + a very low
-                    // renderOrder so it's drawn FIRST and every real
-                    // object simply paints over it — depthWrite:false
-                    // means it never touches the depth buffer, so draw
-                    // order (not depth testing) is what keeps it
-                    // behind everything, regardless of the actual
-                    // (large) sphere radius.
-                    // rotation.y is seeded from envRotationRad (not a
-                    // bare 0) so a persisted rotation is already
-                    // correct on the very first rendered frame — same
-                    // DELIBERATE TWEAK pattern u_envMatrix uses in
-                    // bindMaterialUniforms below. See BG_BASE/BG_SIGN's
-                    // derivation comment above createMtlxRenderView.
-                    const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
-                    bgGeometry.scale(-1, 1, 1);
-                    bgMesh = new THREE.Mesh(
-                        bgGeometry,
-                        new THREE.MeshBasicMaterial({ map: envBgTexture, depthWrite: false })
-                    );
-                    bgMesh.renderOrder = -1000;
-                    bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
-                    bgMesh.visible = !!envBackground;
-                    scene.add(bgMesh);
+                    if (sceneInst) {
+                        // Scene-mode lighting for sceneGroup's ordinary
+                        // glTF meshes: bake radianceSrc into a PMREM
+                        // (prefiltered mip-mapped radiance environment
+                        // map) and drive scene.environment from it —
+                        // three's standard IBL path for MeshStandard-
+                        // family materials. This is a COMPLETELY
+                        // separate lighting mechanism from the u_env*
+                        // uniform binding above (the generated MaterialX
+                        // shader samples its own u_envRadiance/
+                        // u_envIrradiance directly and only lights
+                        // `mesh`/material_surface) — the two coexist
+                        // without conflict because they light disjoint
+                        // sets of meshes. A fresh PMREMGenerator is used
+                        // here and NEVER disposed: r128's
+                        // PMREMGenerator shares its LOD-plane blur
+                        // geometries at MODULE scope (built once,
+                        // reused by every instance), and calling
+                        // .dispose() on any ONE instance tears those
+                        // down for every PMREMGenerator in the page,
+                        // present or future — breaking every other
+                        // scene-mode view for the rest of the session.
+                        // Only the returned render target (pmremRT) is
+                        // this view's own — see disposePartial above,
+                        // which disposes it.
+                        pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);
+                        scene.environment = pmremRT.texture;
+                    }
                 }
 
-                // Selected preview geometry (sphere/cube/shaderball),
-                // attributes aliased to MaterialX names + tangents. Built
-                // ONCE here, at shell level — moved above the first
-                // material apply below so setGeometry() on the handle can
-                // later swap it in place without touching the material/
-                // renderer/env textures.
-                geometry = prepGeometry(await buildPreviewGeometry(geomName));
+                // Selected preview geometry. Scene mode (sceneInst,
+                // resolved above): add the instantiated GLB hierarchy to
+                // the scene and PRE-ASSIGN the shell's `mesh`/`geometry`
+                // to its material_surface mesh/geometry — this is what
+                // makes the FIRST applyMaterialInternal() call below
+                // (which checks `if (!mesh)`) take the `mesh.material =
+                // material` branch instead of constructing a fresh
+                // THREE.Mesh: the generated MaterialX material lands on
+                // material_surface exactly as it would land on a
+                // freshly-built sphere/cube mesh. Its geometry was
+                // already prepGeometry'd (attributes aliased to
+                // MaterialX names + tangents) inside
+                // instantiateShaderballScene. Otherwise (sphere/cube,
+                // or the scene-load-failure fallback where sceneInst is
+                // null) — today's unchanged path.
+                if (sceneInst) {
+                    scene.add(sceneGroup);
+                    mesh = sceneInst.surfaceMesh;
+                    geometry = mesh.geometry;
+                    // Force sceneGroup's (and every descendant's,
+                    // including `mesh`) matrixWorld to be current RIGHT
+                    // NOW rather than leaving it at construction-time
+                    // identity until the first renderer.render() call
+                    // (render() is what normally keeps this in sync, via
+                    // its own scene.updateMatrixWorld() — see r128's
+                    // WebGLRenderer.render). That matters here because
+                    // animate()'s first tick calls setUniforms() —
+                    // which reads mesh.matrixWorld directly — BEFORE its
+                    // own renderer.render() call. The sphere/cube path
+                    // never needed this: `mesh` sits directly under
+                    // `scene`, whose own transform is always identity,
+                    // so a stale matrixWorld there is coincidentally
+                    // still correct. sceneGroup ('simple' mode's
+                    // normalizing wrapper Group, in particular) is NOT
+                    // identity, so skipping this would show the ball at
+                    // its raw, un-normalized transform for exactly one
+                    // frame.
+                    sceneGroup.updateMatrixWorld(true);
+                } else {
+                    geometry = prepGeometry(await buildPreviewGeometry(geomName));
+                }
                 if (!isMounted()) { disposePartial(); return null; }
 
                 const vp = new THREE.Matrix4();
@@ -2850,14 +3596,40 @@ const createMtlxRenderView = async ({
                         if (has('u_refractionEnv')) newUniforms.u_refractionEnv = { value: true };
                         // Direct light rig (struct-array uniform; three maps
                         // {type,direction,color,intensity} onto the generated
-                        // LightData struct members by name).
+                        // LightData struct members by name). nLights is 0
+                        // whenever environment_map.mtlx defines no
+                        // <directional_light> blocks (the default, current
+                        // rig) — no hardcoded fallback is pushed anymore
+                        // (see getMxEnv() above), so pure IBL is the normal
+                        // case. That's safe end to end: codegen always
+                        // reserves LightData[] capacity >= 1 regardless of
+                        // rig content (hwMaxActiveLightSources forced to
+                        // >=1 in getMxEnv), so the shader compiles either
+                        // way; u_numActiveLightSources=0 makes its light
+                        // loop a no-op at runtime; and skipping the
+                        // u_lightData upload below when nLights is 0 just
+                        // leaves that uniform unset on `newUniforms` —
+                        // three.js's RawShaderMaterial path
+                        // (WebGLUniforms.seqWithValue) silently drops any
+                        // declared-but-unset uniform from the upload list,
+                        // same "no default -> WebGL's implicit 0" pattern
+                        // used throughout applyIntrospectedUniformDefaults
+                        // above. A rig that DOES author lights still works
+                        // unchanged: nLights > 0 uploads u_lightData as
+                        // before.
                         const nLights = (lightData && lightData.length) || 0;
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
                         if (nLights && has('u_lightData')) newUniforms.u_lightData = { value: lightData };
                         if (DEBUG_SHADERS) {
+                            // envPrefilteredIrr is always false now (see
+                            // buildEnvFromParsedTexture's header comment
+                            // — the paired-<name>_irradiance.hdr
+                            // convention was removed 2026-07-18); kept in
+                            // the log purely as a future-proofing hook if
+                            // that convention ever comes back.
                             console.log('env bound → radiance:', radSampler && radSampler.name,
                                         '| irradiance:', irrSampler && irrSampler.name,
-                                        envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance downsampled — drop ./irradiance.hdr for official parity)') : '(synthesized)',
+                                        envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)') : '(synthesized)',
                                         '| direct lights:', (lightData && lightData.length) || 0);
                             const envUnbound = declared.filter((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && !newUniforms[u.name]);
                             if (envUnbound.length) console.warn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
@@ -2988,7 +3760,16 @@ const createMtlxRenderView = async ({
                         controls.update(); // damping + autoRotate
                     } else if (fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
-                        mesh.rotation.y += 0.005;
+                        // Spin the WHOLE assembled scene when present
+                        // (simple-mode shaderball) — rotating just
+                        // `mesh` would leave its neutral parts/backdrop
+                        // stationary while the ball itself spun away
+                        // from them. sceneGroup is null on the
+                        // sphere/cube path, so this is `mesh` there,
+                        // same as before. (fullScene forces
+                        // fallbackSpin false above, so this branch never
+                        // fires for the fixed-camera graph preset.)
+                        (sceneGroup || mesh).rotation.y += 0.005;
                     }
                     setUniforms();
                     renderer.render(scene, camera);
@@ -3001,10 +3782,32 @@ const createMtlxRenderView = async ({
                 }
         const handle = {
             uniforms, introspected, vs, fs, controls, renderer,
-            // Live auto-orbit toggle (no regen needed).
+            // Live auto-orbit toggle (no regen needed). No-op in
+            // full-scene mode: there's no `controls` instance to toggle
+            // (see the Controls block above) and letting fallbackSpin
+            // turn on would rotate the authored, otherwise-fixed
+            // sceneGroup — js/graph/preview.jsx (the only fullScene
+            // caller) hides the rotate button entirely, but this guard
+            // keeps the contract correct even if something calls it
+            // anyway.
             setAutoRotate: (on) => {
+                if (fullScene) return;
                 fallbackSpin = !!on;
                 if (controls) controls.autoRotate = !!on;
+            },
+            // Fullscreen "fit to ball" toggle (see recomputeCameraFov/
+            // getBallBoundingSphere above) — js/graph/preview.jsx calls
+            // this with the live fullscreen state so the whole shaderball
+            // stays visible while fullscreen, and reverts to today's exact
+            // everyday framing the moment fullscreen ends. FOV-only:
+            // camera position/orientation are never touched. No-op outside
+            // full-scene mode — sphere/cube/simple previews have ordinary
+            // OrbitControls zoom instead.
+            setFullscreenFit: (on) => {
+                if (!fullScene) return;
+                fullscreenFit = !!on;
+                recomputeCameraFov();
+                camera.updateProjectionMatrix();
             },
             // Show/hide the environment map as the visible backdrop
             // (bgMesh). No-op when there is no env (unlit previews —
@@ -3021,6 +3824,20 @@ const createMtlxRenderView = async ({
             // u_envMatrix above) and adds the user's offset on top.
             // Uniform mutation takes effect next frame on this
             // RawShaderMaterial (no material/shader rebuild needed).
+            // FORMERLY an accepted r128 limitation that this only
+            // re-oriented `mesh`'s own u_envMatrix uniform and bgMesh,
+            // leaving sceneGroup's neutral parts/backdrop (lit via
+            // scene.environment, a PMREM render TARGET with no r128
+            // scene.environmentRotation — that lands only in r162+) static
+            // — REVOKED: every qualifying sceneOwnedMaterials entry was
+            // patched at creation (see patchNeutralMaterialEnvRotation and
+            // NEUTRAL_ENV_ROTATION_CHUNK's derivation comment, both above
+            // createMtlxRenderView) with a live `uEnvRotation` uniform;
+            // fan the same rad out to it below instead of rebaking the
+            // whole PMREM per slider tick (which stays reserved for
+            // setEnvironment's Import/Reset, where a full rebake is
+            // unavoidable anyway since the SOURCE texture changes there,
+            // not just its orientation).
             setEnvRotation: (rad) => {
                 if (uniforms.u_envMatrix) {
                     uniforms.u_envMatrix.value = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
@@ -3035,6 +3852,20 @@ const createMtlxRenderView = async ({
                 // previews with no env; guard so this stays a no-op
                 // there, mirroring hasEnvBackground()'s contract.
                 if (bgMesh) bgMesh.rotation.y = BG_BASE + BG_SIGN * rad;
+                // Scene-mode neutral parts: mirror the SAME offset onto
+                // every patched material's live uEnvRotation uniform (see
+                // patchNeutralMaterialEnvRotation above). Guarded per-
+                // material because onBeforeCompile only populates
+                // userData.envRotationUniform once three actually compiles
+                // that material's GL program (typically the first render)
+                // — a call landing before that is a safe no-op here, since
+                // patchNeutralMaterialEnvRotation's onBeforeCompile reads
+                // this same envRotationRad fresh at compile time, so the
+                // eventual first compile still seeds correctly.
+                sceneOwnedMaterials.forEach((m) => {
+                    const u = m.userData.envRotationUniform;
+                    if (u) u.value = envRotationMatrix3(rad);
+                });
             },
             // IBL-only exposure multiplier — direct lights are
             // unaffected, but IBL is the dominant light source in these
@@ -3048,14 +3879,33 @@ const createMtlxRenderView = async ({
                 // exposure the user last set here instead of resetting
                 // to 1.0.
                 envExposure = x;
+                // Scene-mode's sceneGroup meshes (neutral ball parts,
+                // backdrop, grid) are ordinary glTF PBR materials lit by
+                // scene.environment/PMREM rather than the generated
+                // shader's u_envLightIntensity uniform above — their
+                // per-material envMapIntensity is the equivalent
+                // exposure knob, so fan the same value out to every one
+                // of them. Skip `mesh` (material_surface): its exposure
+                // is already driven by the uniform write above, on the
+                // MaterialX RawShaderMaterial — it has no
+                // envMapIntensity property at all.
+                if (sceneGroup) {
+                    sceneGroup.traverse((obj) => {
+                        if (obj.isMesh && obj !== mesh && obj.material && 'envMapIntensity' in obj.material) {
+                            obj.material.envMapIntensity = x;
+                        }
+                    });
+                }
             },
             // Live-swap the environment (radiance/irradiance/mips/
             // background) without a shader rebuild — used by the
             // Environment dialog's Import.../Reset. Swaps bgMesh's
             // texture in place (rotation/visibility are left exactly
             // as they were — this only changes WHAT's shown, never
-            // WHETHER it's shown). No-op (safely) on views with no
-            // lighting/env samplers.
+            // WHETHER it's shown). Also regenerates scene-mode's PMREM
+            // (see below) so sceneGroup's meshes follow an Import/Reset
+            // too. No-op (safely) on views with no lighting/env
+            // samplers AND no sceneGroup.
             setEnvironment: (env) => {
                 if (!env) return;
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
@@ -3079,6 +3929,34 @@ const createMtlxRenderView = async ({
                 if (bgMesh) {
                     bgMesh.material.map = envBgTexture;
                     bgMesh.material.needsUpdate = true;
+                }
+                // Scene-mode PMREM regen: unlike the uniform swaps above,
+                // a PMREM render target is baked from a SPECIFIC source
+                // texture at generation time — there is no live-texture-
+                // swap API on it, so the only way to point
+                // scene.environment at the new radiance is to rebuild
+                // the prefiltered target from scratch and swap it in.
+                // try/catch is a pure backstop (mirrors the bgMesh guard
+                // above and setEnvOverride's own per-view try/catch) —
+                // WebGLRenderTarget allocation can only realistically
+                // fail on a lost/invalid GL context.
+                if (sceneGroup) {
+                    try {
+                        const oldPmremRT = pmremRT;
+                        // Fresh PMREMGenerator, never disposed — see the
+                        // creation-time PMREM block above for why
+                        // disposing one would break every other
+                        // PMREMGenerator on the page (r128 shares LOD-
+                        // plane geometries at module scope).
+                        pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(env.radiance);
+                        scene.environment = pmremRT.texture;
+                        // The OLD render target IS this view's own,
+                        // ordinary GPU resource — safe to dispose once
+                        // superseded (unlike the generator that made it).
+                        if (oldPmremRT) oldPmremRT.dispose();
+                    } catch (e) {
+                        console.warn('environment PMREM regeneration failed:', e);
+                    }
                 }
             },
             // Apply a newly-generated (or already-generated, via `srcs`)
@@ -3136,22 +4014,6 @@ const createMtlxRenderView = async ({
                         + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
                 }
                 return handle;
-            },
-            // Swap the preview geometry (sphere/cube/shaderball) onto the
-            // EXISTING mesh in place — no renderer/material/camera touch.
-            // Low-risk: every preview geometry gets identical i_*
-            // attribute aliasing (see prepGeometry above), so the
-            // currently-bound material's attribute locations stay valid;
-            // r128's WebGL2 VAO-per-(geometry,program) binding state
-            // handles a mesh.geometry reassignment on its own.
-            setGeometry: async (name) => {
-                if (stopped) return;
-                const newGeometry = prepGeometry(await buildPreviewGeometry(name));
-                if (stopped) { newGeometry.dispose(); return; }
-                const oldGeometry = geometry;
-                geometry = newGeometry;
-                if (mesh) mesh.geometry = newGeometry;
-                if (oldGeometry) oldGeometry.dispose();
             },
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so

@@ -1,12 +1,12 @@
 // js/mtlx-assets.js — MaterialX asset resolver: local-first probe that
-// decides, once per page load, whether MaterialX spec/template/geometry
-// files ship inside vendor/materialx/ (a future offline/packaged build)
-// or must be fetched live from the upstream GitHub repo (the web build,
-// as it works today). Every consumer that needs a URL into the MaterialX
-// repo — the spec parser, the viewer/graph default documents, the graph
-// editor's curated presets, the node-preview shaderball — goes through
-// this module instead of hardcoding raw.githubusercontent.com itself, so
-// the offline/online split lives in exactly one place.
+// decides, once per page load, whether MaterialX spec/template files ship
+// inside vendor/materialx/ (a future offline/packaged build) or must be
+// fetched live from the upstream GitHub repo (the web build, as it works
+// today). Every consumer that needs a URL into the MaterialX repo — the
+// spec parser, the viewer/graph default documents, the graph editor's
+// curated presets — goes through this module instead of hardcoding
+// raw.githubusercontent.com itself, so the offline/online split lives in
+// exactly one place.
 //
 // PLAIN SCRIPT — deliberately NOT JSX, NOT an ES module. Loaded via a
 // normal <script src="js/mtlx-assets.js"> tag in BOTH entry HTMLs
@@ -51,8 +51,7 @@
 // vendor/materialx/ in local mode surfaces as an ordinary LOCAL 404,
 // which every consumer already has an error path for (the spec-docs
 // "could not load spec text" console warning in js/spec-parser.js,
-// js/graph-app.jsx's "Could not load preset" error, mtlx-engine.js's
-// shaderball load failure falling back to a plain sphere,
+// js/graph-app.jsx's "Could not load preset" error, and
 // js/viewer-app.jsx's default-material load catch). There is no code
 // path anywhere in this file — nor in any consumer, since every remote
 // MaterialX URL in the codebase is required to be produced EXCLUSIVELY
@@ -81,14 +80,7 @@
 //                            this exactly once, before any view's deps
 //                            load, so every lazily-loaded view (docs,
 //                            viewer, graph) can treat the rest of this
-//                            API as synchronous. The one exception is
-//                            js/mtlx-engine.js's shaderball loader, which
-//                            IS loaded eagerly, before the probe can
-//                            possibly have settled — but it only calls
-//                            ghPagesUrl() lazily, inside
-//                            getShaderballGeometry(), at first-preview
-//                            time, long after `ready` has resolved in
-//                            practice.
+//                            API as synchronous.
 //   .isLocal()               boolean. Meaningful only after `ready`
 //                            resolves; before that it reflects the
 //                            not-yet-final pre-probe default (remote) —
@@ -103,9 +95,6 @@
 //                            outright — the vendored tree is a single
 //                            fixed snapshot, there's no such thing as
 //                            picking a tag offline.
-//   .ghPagesUrl(relPath)     Absolute URL to `relPath` on the MaterialX
-//                            repo's gh-pages branch (today: only the
-//                            shaderball .glb).
 //   .resourcesRoot()         Absolute URL to the repo's resources/
 //                            directory for the ACTIVE mode — the prefix
 //                            consumers should use to sanity-check that a
@@ -129,7 +118,6 @@
 //   vendor/materialx/documents/Specification/*.md
 //   vendor/materialx/resources/Materials/Examples/**   <- presets + default docs (+ their xi:include deps)
 //   vendor/materialx/resources/Images/**               <- textures reached via ../../../Images/ path math
-//   vendor/materialx/gh-pages/Geometry/shaderball.glb
 // Dropping those files in requires ZERO changes to this file, or to any
 // consumer of it — the probe above picks up local mode automatically the
 // next time the page loads.
@@ -153,7 +141,7 @@
     // Set exactly once, when `ready` settles below. Read only through
     // isLocal() so every read funnels through one place. Starts `false`
     // (remote) — nothing in this codebase is supposed to call
-    // isLocal()/repoUrl()/ghPagesUrl()/resourcesRoot() before `ready`
+    // isLocal()/repoUrl()/resourcesRoot() before `ready`
     // resolves, but should a caller do it anyway, this default keeps
     // that early call on today's already-safe remote behavior instead of
     // silently pretending to be an (unverified) local build.
@@ -191,11 +179,6 @@
             (tag || DEFAULT_TAG) + '/' + relPath;
     }
 
-    function ghPagesUrl(relPath) {
-        if (localMode) return localUrl('gh-pages/' + relPath);
-        return 'https://raw.githubusercontent.com/' + REPO + '/gh-pages/' + relPath;
-    }
-
     function resourcesRoot() {
         return repoUrl('resources/');
     }
@@ -204,7 +187,6 @@
         ready: ready,
         isLocal: isLocal,
         repoUrl: repoUrl,
-        ghPagesUrl: ghPagesUrl,
         resourcesRoot: resourcesRoot,
     };
 })();

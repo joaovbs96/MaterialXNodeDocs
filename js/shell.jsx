@@ -31,6 +31,10 @@ const IN_VSCODE = !!window.__MTLX_VSCODE__;
 // ------------------------------------------------------------------
 // Script/CSS loading utilities (module scope, cached by URL so repeated
 // activations of a view are no-ops after the first).
+// Note: <script>/<link> tags have no fetch-cache-mode equivalent, so these
+// two loaders are left as-is; the vendored files they load are
+// version-pinned (see scripts/vendor.mjs), so browser cache staleness is
+// harmless there.
 // ------------------------------------------------------------------
 const __scriptCache = new Map();
 function loadScript(src) {
@@ -79,7 +83,14 @@ function loadCss(href) {
 async function loadJsxApp(src) {
     if (__scriptCache.has(src)) return __scriptCache.get(src);
     const p = (async () => {
-        const res = await fetch(src);
+        // These files are fetched lazily, well after page load (only on a
+        // view's first activation), so a browser hard-refresh never gets a
+        // chance to revalidate them — against static hosts with heuristic
+        // caching, a stale cached copy can persist indefinitely. `cache:
+        // 'no-cache'` forces a conditional request every time (sends
+        // If-Modified-Since/ETag, so an unchanged file is a cheap 304 and an
+        // edited one is a fresh 200) without disabling caching outright.
+        const res = await fetch(src, { cache: 'no-cache' });
         if (!res.ok) throw new Error('Failed to fetch ' + src + ': ' + res.status);
         const source = await res.text();
         const { code } = Babel.transform(source, {
@@ -221,9 +232,9 @@ async function loadViewDeps(viewName) {
         // asynchronously (a fetch). Awaiting it here, once, before any
         // view's deps load, is what lets every lazily-loaded view below
         // (docs/viewer/graph, and everything they in turn load) treat
-        // window.MtlxAssets's isLocal()/repoUrl()/ghPagesUrl()/
-        // resourcesRoot() as a plain SYNCHRONOUS API instead of each
-        // having to await readiness itself — this is the single choke
+        // window.MtlxAssets's isLocal()/repoUrl()/resourcesRoot() as a
+        // plain SYNCHRONOUS API instead of each having to await
+        // readiness itself — this is the single choke
         // point all lazy view loading passes through.
         await window.MtlxAssets.ready;
         for (const href of dep.css) await loadCss(href);

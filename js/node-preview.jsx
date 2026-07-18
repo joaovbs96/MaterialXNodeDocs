@@ -1414,7 +1414,29 @@
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreenView}
                         />
-                        <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
+                        {/* object-contain, not the default 'fill': on every
+                            node switch, initViewer's synchronous state resets
+                            (setParams([]) etc., top of the effect) commit and
+                            paint BEFORE the async doc/shadergen/buildView
+                            pipeline runs — and params.length===0 briefly
+                            drops the side panel (below), widening/narrowing
+                            THIS container via the flex reflow. The canvas's
+                            drawing buffer (width/height attrs) still holds
+                            the PREVIOUS node's view until the new view's
+                            renderer.setSize() finally runs, so for that
+                            window the buffer's aspect and the CSS box's
+                            aspect genuinely diverge (measured: 620x318 buffer
+                            inside a reflowed 956x318 box). A plain <canvas>
+                            is a replaced element that STRETCHES its bitmap
+                            non-uniformly to fill a mismatched box by default
+                            — the reported "smeared wide ball" behind the
+                            loading overlay. object-contain letterboxes
+                            instead (into this container's own bg-gray-900,
+                            so the bars are invisible), and is a no-op once
+                            steady: mtlx-engine.js's ResizeObserver keeps the
+                            buffer's aspect equal to the CSS box's aspect
+                            whenever a view is live. */}
+                        <canvas ref={canvasRef} className="w-full h-full block object-contain cursor-grab active:cursor-grabbing" />
                     </div>
                     {params.length > 0 && (
                         <div className={embed ? "w-full md:w-80 md:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 md:h-80 md:max-h-none" : "w-full lg:w-80 lg:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-80 lg:max-h-none"}>

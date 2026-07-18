@@ -377,54 +377,63 @@
             // createMtlxRenderView's `isAlive` option so the shell's own
             // rAF loop (mtlx-engine.js) keeps animating across docRev-
             // triggered effect re-runs that now reuse the same shell via
-            // applyMaterial()/setGeometry() instead of tearing it down and
-            // creating a fresh one each time (see mtlx-engine.js's H-A1
+            // applyMaterial() instead of tearing it down and creating a
+            // fresh one each time (see mtlx-engine.js's H-A1
             // comment above createMtlxRenderView). Flips to false exactly
             // once, in the mount-once cleanup below, right before dispose.
             const shellAliveRef = React.useRef(true);
 
             // ---- Viewport controls (item F2.1) — mirrors node-preview.jsx's
-            // copy exactly. Preview geometry (persisted): shares the SAME
-            // localStorage key as the docs previewer ('mtlx_preview_geom')
-            // since it's the identical setting in spirit — a value picked in
-            // one view carries over to the other. Falls back to 'shaderball'
-            // (this preview's long-standing hardcoded default) rather than
-            // node-preview.jsx's 'sphere' when nothing is stored yet.
-            // Preview geometry (persisted, shared 'mtlx_preview_geom' key —
-            // usePersistedGeom, js/shared/mtlx-ui.jsx) since it's the
-            // identical setting in spirit as the docs previewer's — a
-            // value picked in one view carries over to the other — but
-            // falls back to 'shaderball' (this preview's long-standing
-            // hardcoded default) rather than node-preview.jsx's 'sphere'
-            // when nothing is stored yet. Auto-orbit + env-background
-            // toggles, the view-epoch bump, fullscreen and the screenshot
-            // action (useViewportControls, same file) are applied live via
-            // the view handle (the SAME ref the parent passes in and reads
-            // elsewhere — see previewViewRef in graph-app.jsx) and re-read
-            // fresh at creation time so they survive a geometry-triggered
-            // rebuild.
-            const [geom, pickGeom] = usePersistedGeom('shaderball');
+            // copy, minus geometry selection: the graph preview always
+            // renders the full shaderball scene (backdrop, grid, emitter
+            // panels, neutral ball parts) through its own embedded, detached
+            // camera, so there's no geometry to pick and nothing to persist
+            // — showGeomSelect/showRotate below hide those controls
+            // entirely. Env-background toggle, the view-epoch bump,
+            // fullscreen and the screenshot action (useViewportControls,
+            // same file) are applied live via the view handle (the SAME ref
+            // the parent passes in and reads elsewhere — see
+            // previewViewRef in graph-app.jsx) and re-read fresh at
+            // creation time so they survive a docRev-triggered rebuild.
             const {
-                rotating, toggleRotating,
                 envBg, toggleEnvBg,
                 envAvail, setEnvAvail,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(viewRef, viewportRef, () => label + '_' + geom);
+            } = useViewportControls(viewRef, viewportRef, () => label + '_shaderball');
             const takeScreenshot = () => {
                 try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
+
+            // Fullscreen "fit to ball" (setFullscreenFit, js/mtlx-engine.js):
+            // the graph preview's fixed authored camera only guarantees the
+            // whole shaderball stays in frame at the panel's everyday
+            // (docked, roughly square) aspect — going fullscreen can change
+            // the aspect enough to crop it, so tell the live view to widen
+            // its fov (zoom out, camera position/orientation untouched)
+            // while fullscreen and revert the instant it ends. Re-fires on
+            // isFullscreen flips AND on viewEpoch bumps (a fresh view from a
+            // docRev-triggered FIRST-BUILD, which starts with fit off) so a
+            // rebuild that happens WHILE already fullscreen still gets the
+            // flag applied right away rather than waiting for a later
+            // isFullscreen change. No-op (both in this effect and inside
+            // setFullscreenFit itself) if the view isn't ready yet or isn't
+            // the full-scene mode.
+            React.useEffect(() => {
+                const view = viewRef.current;
+                if (view && view.setFullscreenFit) view.setFullscreenFit(isFullscreen);
+            }, [isFullscreen, viewEpoch]);
 
             // Component-lifetime handle to the CURRENTLY LIVE, GL-compiled
             // render view (if any) — persists ACROSS the main effect's
             // docRev-triggered re-runs so a fast-refresh (item F3c below) or
             // an in-place material swap (the APPLY path further down) can
             // reuse it instead of tearing it down. Disposal only happens on
-            // the no-renderable path, a failed in-place geometry swap, the
-            // FIRST-BUILD path's defensive stale-view guard, or actual
-            // unmount — a superseded/stale run must never touch it
-            // otherwise (see the mounted-staleness comments below).
+            // the no-renderable path, the FIRST-BUILD path's defensive
+            // stale-view guard, or actual unmount — a superseded/stale run
+            // must never touch it otherwise (see the mounted-staleness
+            // comments below).
             const liveViewRef = React.useRef(null);
 
             // Mount-once: disposes whatever view is still live when this
@@ -526,50 +535,14 @@
                             return;
                         }
 
-                        // GEOMETRY-SWAP STEP — before the fast path below: a
-                        // pure geometry change (the `geom` dep just flipped,
-                        // e.g. the shaderball/sphere/cube picker) no longer
-                        // forces a full rebuild. Swap the mesh geometry in
-                        // place on the EXISTING live view via the handle's
-                        // setGeometry() (mtlx-engine.js) so the fast-path
-                        // gate right below (`live.__geom === geom`) passes
-                        // afterward and the material itself is left
-                        // completely untouched — camera/controls/env
-                        // textures/material all persist across a geometry
-                        // switch now, instead of the old full teardown.
-                        const liveForGeom = liveViewRef.current;
-                        if (liveForGeom && liveForGeom.__geom !== geom) {
-                            try {
-                                await liveForGeom.setGeometry(geom);
-                                liveForGeom.__geom = geom;
-                            } catch (e) {
-                                // Geometry rebuild failed (buildPreviewGeometry
-                                // threw, view disposed mid-await, etc.) — the
-                                // shell may be in a bad state; drop it so this
-                                // run falls through to a full FIRST-BUILD
-                                // below instead of limping along on a stale
-                                // mesh/geometry pairing.
-                                try { liveForGeom.dispose(); } catch (e2) { /* best-effort */ }
-                                liveViewRef.current = null;
-                                if (viewRef) viewRef.current = null;
-                            }
-                            // setGeometry awaits buildPreviewGeometry — a
-                            // superseding run may have started (and flipped
-                            // `mounted`) while this was in flight; same
-                            // wrapper-cleanup idiom as every other await
-                            // point in this effect.
-                            if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
-                        }
-
                         // FAST PATH (item F3c) — before any teardown: try
                         // to refresh the EXISTING compiled view in place
-                        // instead of a full rebuild. Only attempted when a
-                        // live view exists for the SAME geometry — the
-                        // geometry-swap step above already resolves a pure
-                        // geometry change, so by this point `live.__geom`
-                        // matches `geom` whenever a live view survived it.
+                        // instead of a full rebuild. The scene is fixed (no
+                        // geometry picker anymore), so any live view is
+                        // eligible — the only question is whether the
+                        // material itself needs regenerating.
                         const live = liveViewRef.current;
-                        if (live && live.__geom === geom) {
+                        if (live) {
                             let res = { refreshed: false };
                             try {
                                 // Async since the shared-wasm serialization
@@ -707,9 +680,8 @@
 
                         // FIRST-BUILD PATH — reached only when there is no
                         // live view to apply onto (liveViewRef.current was
-                        // null on entry, or the geometry-swap step above
-                        // discarded a broken shell): full teardown+recreate
-                        // via createMtlxRenderView. Every LATER document
+                        // null on entry): full teardown+recreate via
+                        // createMtlxRenderView. Every LATER document
                         // edit instead takes the APPLY path above, which
                         // reuses this same shell via live.applyMaterial()
                         // rather than paying for this block again.
@@ -740,19 +712,20 @@
                                 canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                 label: built.label || parsed.label,
                                 needsLighting: true,
-                                geomName: geom,
-                                autoRotate: rotating,
+                                geomName: 'shaderball-scene',
+                                // The full shaderball scene carries its own
+                                // authored (detached) camera, so it isn't
+                                // orbit/turntable-driven or mouse-
+                                // interactive — auto-rotation stays off.
+                                autoRotate: false,
                                 envBackground: envBg,
-                                // The preview is square now — pull the camera
-                                // in so the shaderball fills the frame.
-                                cameraDistance: 2.55,
                                 isMounted: () => mounted,
                                 isActive: () => activeRef.current,
                                 // The shell this builds can outlive THIS
                                 // run's `mounted` — a LATER docRev re-run
-                                // reuses it via applyMaterial()/setGeometry()
-                                // instead of a fresh createMtlxRenderView()
-                                // call, so its rAF loop needs a liveness
+                                // reuses it via applyMaterial() instead of a
+                                // fresh createMtlxRenderView() call, so its
+                                // rAF loop needs a liveness
                                 // check that survives across runs. isAlive
                                 // is exactly that (see mtlx-engine.js's H-A1
                                 // comment above createMtlxRenderView);
@@ -771,7 +744,6 @@
                         }
                         if (!view) return;
                         if (!mounted) { view.dispose(); return; }
-                        view.__geom = geom;
                         liveViewRef.current = view;
                         if (viewRef) viewRef.current = view;
                         setViewEpoch((n) => n + 1);
@@ -801,17 +773,16 @@
                 // must never dispose the live view (it might still be the
                 // one on screen, or the one an in-place APPLY is mid-swap
                 // on). Disposal now happens inline: on the no-renderable
-                // path, a failed in-place geometry swap, and the FIRST-
-                // BUILD path's defensive guard above (all only reachable by
-                // a run that itself passed every `mounted` check up to that
-                // point), or on actual unmount (the mount-once effect
-                // above). The APPLY path never disposes the live view at
-                // all — it swaps the material in place and leaves the
-                // shell standing either way.
+                // path, and the FIRST-BUILD path's defensive guard above
+                // (all only reachable by a run that itself passed every
+                // `mounted` check up to that point), or on actual unmount
+                // (the mount-once effect above). The APPLY path never
+                // disposes the live view at all — it swaps the material in
+                // place and leaves the shell standing either way.
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap, geom]);
+            }, [parsed, target, docRev, fileMap]);
 
             return (
                 <div
@@ -819,23 +790,30 @@
                     className="flex flex-col flex-none w-full border-b border-gray-700"
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
-                    {/* Viewport controls (item F2.1): geometry picker,
-                        rotate/env toggles, screenshot, fullscreen \u2014 the same
-                        strip node-preview.jsx and viewer-app.jsx use. Moved
-                        above the canvas (item F2c) so it has its own row
-                        instead of floating over the square preview. The
+                    {/* Viewport controls (item F2.1): env toggle,
+                        screenshot, fullscreen \u2014 the same strip
+                        node-preview.jsx and viewer-app.jsx use, with the
+                        geometry picker and rotate button hidden
+                        (showGeomSelect/showRotate={false}) since the graph
+                        preview always renders the fixed shaderball scene
+                        through its own authored, non-interactive camera.
+                        Moved above the canvas (item F2c) so it has its own
+                        row instead of floating over the square preview. The
                         pin toggle below keeps its own top-left overlay slot
                         (unchanged) since it doesn't share the strip's
                         top-right corner or button styling; trailingChildren
                         carries the new "send to Material Viewer" button. */}
                     <ViewportControls
-                        geom={geom}
-                        onGeomChange={pickGeom}
-                        rotating={rotating}
-                        onToggleRotating={toggleRotating}
+                        showGeomSelect={false}
+                        showRotate={false}
                         envBg={envBg}
                         onToggleEnvBg={toggleEnvBg}
                         envAvail={envAvail}
+                        // The full GLB scene's backdrop box fully occludes
+                        // the engine's env-background sky sphere, so the
+                        // Background On/Off toggle in the Environment
+                        // popover would be a no-op here — hide it.
+                        showBackgroundToggle={false}
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}

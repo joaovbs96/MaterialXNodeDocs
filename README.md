@@ -73,7 +73,7 @@ npx serve .
 
 Then open <http://localhost:8000/>.
 
-> **Maintainers:** `vendor/` only needs to be regenerated after changing a pinned version in `package.json` devDependencies: `npm install && npm run vendor`. For a fully offline build that also snapshots MaterialX spec/preset/texture content and the shaderball geometry into `vendor/materialx/` (gitignored, produced on demand), run `npm run vendor:offline` instead.
+> **Maintainers:** `vendor/` only needs to be regenerated after changing a pinned version in `package.json` devDependencies: `npm install && npm run vendor`. For a fully offline build that also snapshots MaterialX spec/preset/texture content into `vendor/materialx/` (gitignored, produced on demand), run `npm run vendor:offline` instead.
 
 ### URLs / routing
 
@@ -105,6 +105,8 @@ Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off aga
 
 **`js/JsMaterialXCore*` and `js/JsMaterialXGenShader*`** (`.js`/`.wasm`/`.data`, v1.39.5) are the MaterialX WebAssembly modules themselves, obtained from the official MaterialX build and committed manually. They predate, and are not managed by, `scripts/vendor.mjs`.
 
+**`models/`** ships two user-authored shaderball GLBs, committed in-repo (no download/vendoring step): `shaderball.glb`, the full scene used by the Node Graph Editor's live preview (backdrop, grid, emissive panels, and an embedded camera), and `shaderball_simple.glb`, a plain ball used by the Material Viewer and docs previews. In both, the generated MaterialX material is applied only to the mesh named `material_surface`; every other mesh keeps its authored glTF material.
+
 ---
 
 ## Tech stack
@@ -116,7 +118,7 @@ Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off aga
 - [Tailwind CSS](https://tailwindcss.com/) (vendored Play build) for styling
 - [KaTeX](https://katex.org/) for math in the docs, [highlight.js](https://highlightjs.org/) for XML highlighting, [JSZip](https://stuk.github.io/jszip/) for zipped texture sets
 
-All third-party JS/CSS libraries are vendored: `npm run vendor` installs pinned versions from npm (see `package.json` devDependencies) and copies the needed dist files into a committed `vendor/` folder, served locally alongside the app — no CDN requests at runtime. The one direct download is the Tailwind Play build, fetched by URL and verified against a pinned sha256. MaterialX spec/template/example documents and the shaderball geometry are the one exception: the web app fetches them from `raw.githubusercontent.com` on demand unless a local `vendor/materialx/` snapshot is present, in which case they're read from disk instead and the app performs zero network access (see `js/mtlx-assets.js`). A packaged offline build ships that snapshot.
+All third-party JS/CSS libraries are vendored: `npm run vendor` installs pinned versions from npm (see `package.json` devDependencies) and copies the needed dist files into a committed `vendor/` folder, served locally alongside the app — no CDN requests at runtime. The one direct download is the Tailwind Play build, fetched by URL and verified against a pinned sha256. MaterialX spec/template/example documents are the one exception: the web app fetches them from `raw.githubusercontent.com` on demand unless a local `vendor/materialx/` snapshot is present, in which case they're read from disk instead and the app performs zero network access (see `js/mtlx-assets.js`). A packaged offline build ships that snapshot.
 
 ---
 
