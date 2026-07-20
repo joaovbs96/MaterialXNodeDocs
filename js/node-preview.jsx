@@ -791,6 +791,8 @@
                             label: nodeName,
                             needsLighting,
                             geomName: geom,
+                            // Constrained orbit for the full scene; ignored for other geoms.
+                            sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
                             envBackground: envBg,
                             isMounted: () => mounted,
@@ -1405,6 +1407,15 @@
                             onGeomChange={pickGeom}
                             rotating={rotating}
                             onToggleRotating={toggleRotating}
+                            // Engine no-ops auto-rotate for the full scene, and the
+                            // backdrop box fully occludes the env-background sky
+                            // sphere - hide both controls while it's selected.
+                            showRotate={geom !== 'shaderball-scene'}
+                            showBackgroundToggle={geom !== 'shaderball-scene'}
+                            onCameraReset={() => {
+                                const v = viewRef.current;
+                                if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+                            }}
                             envBg={envBg}
                             onToggleEnvBg={toggleEnvBg}
                             envAvail={envAvail}
@@ -1456,7 +1467,7 @@
                                         title="Open this node in the node graph editor"
                                         className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                                     >
-                                        <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                        <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                     </button>
                                     )}
                                     <button

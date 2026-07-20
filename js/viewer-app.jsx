@@ -449,6 +449,8 @@
                             label: target.name,
                             needsLighting: true,
                             geomName: geom,
+                            // Constrained orbit for the full scene; ignored for other geoms.
+                            sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
                             envBackground: envBg,
                             isMounted: () => mounted,
@@ -565,6 +567,15 @@
                                         onGeomChange={setGeom}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
+                                        // Engine no-ops auto-rotate for the full scene, and the
+                                        // backdrop box fully occludes the env-background sky
+                                        // sphere - hide both controls while it's selected.
+                                        showRotate={geom !== 'shaderball-scene'}
+                                        showBackgroundToggle={geom !== 'shaderball-scene'}
+                                        onCameraReset={() => {
+                                            const v = viewRef.current;
+                                            if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+                                        }}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
                                         viewRef={viewRef}
@@ -583,7 +594,7 @@
                                                     title="Open this material in the node graph editor"
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
-                                                    <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                                    <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                                 </button>
                                                 )}
                                                 {/* Presets: browser-only, multi-document
@@ -700,8 +711,7 @@
                                 <div className="text-xs text-gray-500">
                                     Drag &amp; drop a <code>.mtlx</code> document anywhere on this page — alone, with its
                                     textures (loose files or a subfolder), or as a <code>.zip</code> — and render it
-                                    with the same engine as the node previews. Drag orbits, wheel/pinch zooms.
-                                    Textures are matched by relative path; unresolved images fall back to a UV checker.
+                                    with the same engine as the node previews.
                                 </div>
 
                                 <div
@@ -773,6 +783,9 @@
                                         ))}
                                     </div>
                                 )}
+                            </div>
+                            <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
+                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
                             </div>
                         </div>
                     ) : (

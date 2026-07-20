@@ -772,17 +772,16 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
     };
 };
 
-// The `mtlx_preview_geom` localStorage read/validate/write pattern shared
-// by node-preview.jsx and graph/preview.jsx: on mount, read the stored
-// geometry choice and fall back to `defaultGeom` if it's missing or no
-// longer one of the valid options (guards against a stale persisted value
-// rendering the geometry dropdown empty). `pickGeom` writes a new choice
-// back to the SAME key (both previews intentionally share one setting,
-// best-effort — some browsers block localStorage entirely) and updates
-// state. Returns [geom, pickGeom].
+// The `mtlx_preview_geom` localStorage read/validate/write pattern used by
+// node-preview.jsx (the only caller): on mount, read the stored geometry
+// choice and fall back to `defaultGeom` if it's missing or no longer one
+// of the valid options (guards against a stale persisted value rendering
+// the geometry dropdown empty). `pickGeom` writes a new choice back to the
+// SAME key (best-effort - some browsers block localStorage entirely) and
+// updates state. Returns [geom, pickGeom].
 const usePersistedGeom = (defaultGeom) => {
     const [geom, setGeom] = React.useState(() => {
-        const valid = ['shaderball', 'sphere', 'cube'];
+        const valid = ['shaderball', 'shaderball-scene', 'sphere', 'cube'];
         try {
             const g = localStorage.getItem('mtlx_preview_geom');
             return valid.indexOf(g) !== -1 ? g : defaultGeom;
@@ -935,6 +934,10 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass 
 // sky sphere, so the toggle would be a no-op there; it passes false.
 // The material viewer and docs preview don't pass it, so the toggle
 // keeps showing exactly as today.
+// `onCameraReset` (default undefined) renders an icon-only "reset
+// camera" button next to the rotate button when provided; when the prop
+// is absent NOTHING renders for it, so callers that don't pass it (the
+// graph editor) are unaffected by construction.
 // Anchored popover for the "Environment" button (replaces the old plain
 // show/hide toggle). Portaled to document.body — same containing-block
 // rationale as ColorSwatch above (this app's panels use backdrop-blur,
@@ -1093,12 +1096,24 @@ const EnvDialog = ({
     );
 };
 
+// Friendly labels for the preview-geometry <select>'s raw values (which
+// also double as engine geomName / persisted-storage values - never
+// changed, only how they're displayed). Falls back to the raw value for
+// anything not listed here.
+const GEOM_LABELS = {
+    'shaderball': 'Shader ball',
+    'shaderball-scene': 'Shader ball scene',
+    'sphere': 'Sphere',
+    'cube': 'Cube',
+};
+
 const ViewportControls = ({
-    geomList = ['shaderball', 'sphere', 'cube'],
+    geomList = ['shaderball', 'shaderball-scene', 'sphere', 'cube'],
     geom, onGeomChange,
     showGeomSelect = true,
     rotating, onToggleRotating,
     showRotate = true,
+    onCameraReset,
     envBg, onToggleEnvBg, envAvail = true,
     showBackgroundToggle = true,
     viewRef, viewEpoch,
@@ -1193,7 +1208,7 @@ const ViewportControls = ({
                 title="Preview geometry"
                 className={selectClassName}
             >
-                {geomList.map((g) => <option key={g} value={g}>{g}</option>)}
+                {geomList.map((g) => <option key={g} value={g}>{GEOM_LABELS[g] || g}</option>)}
             </select>
         )}
         {showRotate && (
@@ -1203,6 +1218,15 @@ const ViewportControls = ({
                 className={buttonClassName(rotating)}
             >
                 <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
+            </button>
+        )}
+        {onCameraReset && (
+            <button
+                onClick={onCameraReset}
+                title="Reset camera"
+                className={buttonClassName(false)}
+            >
+                <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
             </button>
         )}
         {envAvail && (

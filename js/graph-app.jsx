@@ -5356,7 +5356,7 @@
                                         title="Open in Material Viewer"
                                         className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
                                     >
-                                        <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                        <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                     </button>
                                     )
                                 }

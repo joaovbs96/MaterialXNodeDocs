@@ -1468,8 +1468,10 @@ const loadGlbScene = (url) => {
 };
 
 // Instantiate a PER-VIEW copy of the shaderball scene from the shared
-// cache above. mode: 'full' (shaderball.glb, graph preview only — the
-// embedded camera + every backdrop/emitter mesh) or 'simple'
+// cache above. mode: 'full' (shaderball.glb - the embedded camera +
+// every backdrop/emitter mesh; fixed-camera preset for the graph editor,
+// or an orbitable preset for docs/viewer when the caller opts in with
+// sceneOrbit) or 'simple'
 // (shaderball_simple.glb, viewer/docs — ball only, framed like the
 // sphere/cube presets). Returns null when the GLB failed to load OR
 // (defensively) doesn't contain a mesh named 'material_surface' — the
@@ -3255,13 +3257,20 @@ const createMtlxRenderView = async ({
     // camera (see the detached-camera block below) — there is no
     // pull-back distance to apply.
     cameraDistance = 3.6,
+    // false (default) = authored GLB camera fixed and non-interactive (graph
+    // editor, unchanged); true (docs/viewer) = OrbitControls with pivot on
+    // the authored view ray at the ball's depth, zoom capped at the authored
+    // distance, polar clamp at the backdrop floor, Box3 containment
+    // backstop; ignored outside full-scene mode.
+    sceneOrbit = false,
 }) => {
     // See the isAlive doc above: defaulting to isMounted here preserves
     // today's exact behavior for every caller that doesn't pass isAlive.
     const aliveFn = isAlive || isMounted;
     // Mode derived from geomName, read throughout this function:
-    // 'shaderball-scene' -> the FULL authored GLB scene (graph preview
-    // only — detached embedded camera, no OrbitControls, see below);
+    // 'shaderball-scene' -> the FULL authored GLB scene, detached embedded
+    // camera; fixed by default (no OrbitControls, graph editor) or
+    // constrained-orbitable when the caller passes sceneOrbit (docs/viewer);
     // 'shaderball' -> the SIMPLE (ball-only) GLB scene, normalized like
     // a sphere/cube preset, with today's ordinary orbit/zoom controls;
     // 'sphere'/'cube' (or anything else, including a fallback — see
@@ -3546,12 +3555,13 @@ const createMtlxRenderView = async ({
                         if ('envMapIntensity' in m) patchNeutralMaterialEnvRotation(m);
                     });
                 }
-                // fullScene: the GRAPH-only preset (shaderball.glb) —
-                // fixed authored camera, no orbit/zoom, no fallback
-                // spin (see the controls + fallbackSpin + animate()
-                // changes below). 'simple' scene mode (viewer/docs)
-                // behaves like an ordinary orbitable preset and is NOT
-                // fullScene.
+                // fullScene: the full authored preset (shaderball.glb) -
+                // fixed authored camera and no fallback spin by default
+                // (graph editor); docs/viewer opt into constrained
+                // orbit/zoom via sceneOrbit (see the controls +
+                // fallbackSpin + animate() changes below). 'simple' scene
+                // mode (viewer/docs) behaves like an ordinary orbitable
+                // preset and is NOT fullScene.
                 const fullScene = !!(sceneInst && sceneMode === 'full');
                 // Populated only in the fullScene-adoption branch just
                 // below; read again by syncSize further down on every
@@ -3560,6 +3570,12 @@ const createMtlxRenderView = async ({
                 // effectiveFullSceneVFov's header comment above).
                 let fullSceneAuthoredFov = null;
                 let fullSceneAuthoredAspect = null;
+                // Authored GLB camera pose cached at adoption time below -
+                // the scene-orbit config block restores it (OrbitControls'
+                // constructor re-aims the camera at the placeholder (0,0,0)
+                // target), and resetCamera() returns to it via OrbitControls
+                // saveState/reset.
+                let sceneAuthoredPose = null;
 
                 const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
                 // Slightly elevated three-quarter framing; the elevation
@@ -3591,6 +3607,7 @@ const createMtlxRenderView = async ({
                     sceneGroup.updateMatrixWorld(true); // sceneGroup isn't added to `scene` until below; compute its world matrices standalone first
                     gc.getWorldPosition(camera.position);
                     gc.getWorldQuaternion(camera.quaternion);
+                    sceneAuthoredPose = { position: camera.position.clone(), quaternion: camera.quaternion.clone() };
                     // gc.near/far are already in the units
                     // THREE.PerspectiveCamera expects (GLTFLoader's
                     // camera loader builds gc as a real PerspectiveCamera)
@@ -3631,13 +3648,15 @@ const createMtlxRenderView = async ({
                 // Orbit + zoom + auto-rotate. Rotating the CAMERA (not
                 // the mesh) lets manual orbiting, zooming, and the
                 // pause button all compose naturally. Full-scene mode
-                // gets NEITHER: the authored camera above is meant to
-                // stay exactly where the GLB placed it (user decision:
-                // no mouse interaction, rotation button hidden — see
-                // setAutoRotate's no-op below and js/graph/preview.jsx's
-                // ViewportControls props).
+                // gets a FIXED camera by default: the authored camera
+                // above stays exactly where the GLB placed it (graph
+                // editor - no mouse interaction, rotation button hidden,
+                // see setAutoRotate's no-op below and js/graph/preview.jsx's
+                // ViewportControls props). Callers that want interaction
+                // in full-scene mode (docs/viewer) opt in with sceneOrbit;
+                // the graph editor passes nothing and stays fixed.
                 controls = null;
-                if (THREE.OrbitControls && !fullScene) {
+                if (THREE.OrbitControls && (!fullScene || sceneOrbit)) {
                     controls = new THREE.OrbitControls(camera, canvas);
                     controls.enableDamping = true;
                     controls.dampingFactor = 0.08;
@@ -3675,6 +3694,21 @@ const createMtlxRenderView = async ({
                 // ONCE per scene and cached here — see getBallBoundingSphere
                 // just below.
                 let ballBoundingSphere = null;
+                // Scene-orbit hard-containment box (sceneGroup bounds inset
+                // 2%/axis, union-expanded by the authored camera position so
+                // the default pose is always legal); null in every other
+                // mode - see the scene-orbit config block and animate().
+                let sceneOrbitClampBox = null;
+                // Reference camera->ball distance for scene-orbit framing,
+                // captured once at setup from the AUTHORED pose (not the
+                // live, user-zoomed distance) so recomputeCameraFov's
+                // fit-to-ball fov stays constant while the user zooms.
+                // null in every non-(fullScene+sceneOrbit) mode.
+                let sceneOrbitFitDist = null;
+                // Radius of the framing target (the ball proper, see the
+                // config block below), paired with sceneOrbitFitDist for the
+                // scene-orbit fov fit. null in every other mode.
+                let sceneOrbitFitRadius = null;
 
                 // Finds (and caches) the ball assembly's world bounding
                 // sphere: the GLB's 'shader_ball' node by name (holds
@@ -3709,6 +3743,28 @@ const createMtlxRenderView = async ({
                 const recomputeCameraFov = () => {
                     if (fullSceneAuthoredFov == null) return; // non-fullScene modes keep their fixed fov untouched
                     let fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
+                    // Scene-orbit default framing: fit the ball PROPER (the
+                    // material_surface mesh, captured in the config block
+                    // below) to the ACTUAL viewport aspect from its runtime
+                    // bounds, rather than trusting the authored ~16:9
+                    // vertical fov (which overflows on the wider docs/viewer
+                    // canvases). Uses the fixed setup distance so zooming
+                    // (which moves the camera, not the fov) never rescales
+                    // the frame; recomputed on resize so a reflow re-fits to
+                    // the new aspect. Same both-axes sphere-fit identity as
+                    // the fullscreenFit branch below, but it REPLACES the
+                    // base fov here (the ball, not the whole authored 16:9
+                    // frame, is what must fit). fullscreenFit stays
+                    // graph-only and never combines with this (the graph
+                    // never passes sceneOrbit).
+                    if (sceneOrbitFitDist != null && sceneOrbitFitRadius != null
+                        && sceneOrbitFitDist > sceneOrbitFitRadius) {
+                        const theta = Math.asin(Math.min(1, sceneOrbitFitRadius / sceneOrbitFitDist));
+                        const vForV = 2 * theta;
+                        const vForH = 2 * Math.atan(Math.tan(theta) / camera.aspect);
+                        const SCENE_FIT_MARGIN = 1.15; // ball ~1/1.15 of the limiting dimension - tight hero framing
+                        fov = Math.max(vForV, vForH) * 180 / Math.PI * SCENE_FIT_MARGIN;
+                    }
                     if (fullscreenFit) {
                         const sphere = getBallBoundingSphere();
                         const dist = sphere ? camera.position.distanceTo(sphere.center) : 0;
@@ -3913,6 +3969,85 @@ const createMtlxRenderView = async ({
                     geometry = prepGeometry(await buildPreviewGeometry(geomName));
                 }
                 if (!isMounted()) { disposePartial(); return null; }
+
+                if (fullScene && sceneOrbit && controls) {
+                    // OrbitControls' constructor already ran update() against its
+                    // placeholder (0,0,0) target and re-aimed the camera - restore
+                    // the authored pose before deriving the pivot ray from it.
+                    if (sceneAuthoredPose) {
+                        camera.position.copy(sceneAuthoredPose.position);
+                        camera.quaternion.copy(sceneAuthoredPose.quaternion);
+                    }
+                    const sphere = getBallBoundingSphere();
+                    // Pivot on the authored view ray at the ball's depth: orientation is
+                    // unchanged by OrbitControls' first lookAt(target) (the GLB camera
+                    // has zero roll), and the orbit pivots at the ball.
+                    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                    let d = sphere ? sphere.center.clone().sub(camera.position).dot(fwd) : 0;
+                    if (!(d > 0)) d = sphere ? camera.position.distanceTo(sphere.center) : 0.5;
+                    controls.target.copy(camera.position).addScaledVector(fwd, d);
+                    controls.minDistance = Math.min(d, sphere ? sphere.radius * 1.5 : d * 0.5);
+                    // Auto-rotate stays OFF regardless of the caller's autoRotate arg:
+                    // the rotate button is hidden for the scene preset and setAutoRotate
+                    // no-ops for fullScene - honoring a stale `rotating` here would start
+                    // a turntable the user can't stop.
+                    controls.autoRotate = false;
+                    // Containment: sceneGroup bounds == the backdrop box. Inset 2% per
+                    // axis (5% in y would pin the floor clamp at the target's own height),
+                    // then union the authored camera position so the default pose is legal.
+                    const box = new THREE.Box3().setFromObject(sceneGroup);
+                    const size = box.getSize(new THREE.Vector3());
+                    box.min.x += size.x * 0.02; box.max.x -= size.x * 0.02;
+                    box.min.y += size.y * 0.02; box.max.y -= size.y * 0.02;
+                    box.min.z += size.z * 0.02; box.max.z -= size.z * 0.02;
+                    box.expandByPoint(camera.position);
+                    sceneOrbitClampBox = box;
+                    // Zoom-out limit: back up along the authored eye ray until
+                    // the containment wall - the ray-box EXIT distance from the
+                    // pivot through the camera (the pivot sits inside the box,
+                    // so intersectBox returns the exit face). Always >= the
+                    // authored distance, so the initial framing is reachable
+                    // and never disturbed. No polar-angle clamp: the animate()
+                    // containment clamp below enforces the floor and side walls
+                    // directly; a static angle scaled to maxDistance would
+                    // forbid low angles at close range.
+                    const back = camera.position.clone().sub(controls.target).normalize();
+                    const exit = box.containsPoint(controls.target)
+                        ? new THREE.Ray(controls.target.clone(), back).intersectBox(box, new THREE.Vector3())
+                        : null;
+                    controls.maxDistance = exit ? controls.target.distanceTo(exit) : d * 4;
+                    // Capture the setup distance + tight ball radius, then apply
+                    // the aspect-correct fit-to-ball fov now (recomputeCameraFov
+                    // also re-runs on every resize via syncSize). saveState()
+                    // below snapshots the resulting default framing for
+                    // resetCamera(). Framing target = the ball PROPER (the
+                    // material_surface mesh `mesh`), not the whole shader_ball
+                    // assembly (base + clips). Radius = HALF the largest world
+                    // AABB extent - NOT Box3.getBoundingSphere(), which returns
+                    // the box's circumscribed sphere (half the diagonal, ~sqrt(3)x
+                    // too large for a roughly spherical mesh) and framed the ball
+                    // ~1.7x too far out. Falls back to the assembly `sphere` if
+                    // `mesh` is somehow absent.
+                    let fitCenter = null, fitRadius = null;
+                    if (mesh) {
+                        mesh.updateMatrixWorld(true);
+                        const bb = new THREE.Box3().setFromObject(mesh);
+                        fitCenter = bb.getCenter(new THREE.Vector3());
+                        const bs = bb.getSize(new THREE.Vector3());
+                        fitRadius = Math.max(bs.x, bs.y, bs.z) / 2;
+                    } else if (sphere) {
+                        fitCenter = sphere.center;
+                        fitRadius = sphere.radius;
+                    }
+                    sceneOrbitFitRadius = fitRadius;
+                    sceneOrbitFitDist = fitCenter ? camera.position.distanceTo(fitCenter) : null;
+                    recomputeCameraFov();
+                    camera.updateProjectionMatrix();
+                    // Snapshot for resetCamera(): position0/target0 now hold the
+                    // authored pose + derived pivot, so controls.reset() restores
+                    // this exact framing.
+                    controls.saveState();
+                }
 
                 const vp = new THREE.Matrix4();
                 // Hoisted above the first material apply (previously
@@ -4254,6 +4389,16 @@ const createMtlxRenderView = async ({
                     if (!isActive()) return;
                     if (controls) {
                         controls.update(); // damping + autoRotate
+                        // Scene-orbit hard containment (null in every other mode): the
+                        // PRIMARY floor/side-wall enforcement now that maxDistance is the
+                        // only OrbitControls-native limit. r128's update() recomputes its
+                        // spherical from position-target each call, so this external clamp
+                        // is stable frame to frame; re-aim at the target so the clamped
+                        // frame stays coherent.
+                        if (sceneOrbitClampBox && !sceneOrbitClampBox.containsPoint(camera.position)) {
+                            sceneOrbitClampBox.clampPoint(camera.position, camera.position);
+                            camera.lookAt(controls.target);
+                        }
                     } else if (fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
                         // Spin the WHOLE assembled scene when present
@@ -4280,13 +4425,14 @@ const createMtlxRenderView = async ({
             uniforms, introspected, vs, fs, controls, renderer,
             isTransparent: !!transparent,
             // Live auto-orbit toggle (no regen needed). No-op in
-            // full-scene mode: there's no `controls` instance to toggle
-            // (see the Controls block above) and letting fallbackSpin
-            // turn on would rotate the authored, otherwise-fixed
-            // sceneGroup — js/graph/preview.jsx (the only fullScene
-            // caller) hides the rotate button entirely, but this guard
-            // keeps the contract correct even if something calls it
-            // anyway.
+            // full-scene mode by contract: every full-scene caller hides
+            // the rotate button (js/graph/preview.jsx; docs/viewer with
+            // the scene preset selected - see ViewportControls' showRotate
+            // prop), and letting fallbackSpin turn on would rotate the
+            // authored sceneGroup that's meant to stay put. In sceneOrbit
+            // mode the scene-orbit config block already forces
+            // controls.autoRotate false regardless; this guard keeps the
+            // contract correct even if something calls it anyway.
             setAutoRotate: (on) => {
                 if (fullScene) return;
                 fallbackSpin = !!on;
@@ -4305,6 +4451,20 @@ const createMtlxRenderView = async ({
                 fullscreenFit = !!on;
                 recomputeCameraFov();
                 camera.updateProjectionMatrix();
+            },
+            // Reset the camera framing to this view's default. With
+            // OrbitControls, saveState/reset does it uniformly: for
+            // scene-orbit the state saved at setup is the authored pose +
+            // derived pivot; for sphere/cube/simple views the constructor
+            // snapshotted the standard pull-back pose at creation. The
+            // graph's fixed-camera full scene has controls === null and a
+            // camera that never moves - nothing to do. The no-OrbitControls
+            // fallback restores the standard pose manually.
+            resetCamera: () => {
+                if (controls) { controls.reset(); return; }
+                if (fullScene) return;
+                camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+                camera.lookAt(0, 0, 0);
             },
             // Show/hide the environment map as the visible backdrop
             // (bgMesh). No-op when there is no env (unlit previews —
@@ -4810,6 +4970,7 @@ const MTLX_ICON_PATHS = {
     'zoom-in-area': { filled: false, inner: '<path d="M15 13v4"/><path d="M13 15h4"/><path d="M10 15a5 5 0 1 0 10 0a5 5 0 1 0 -10 0"/><path d="M22 22l-3 -3"/><path d="M6 18h-1a2 2 0 0 1 -2 -2v-1"/><path d="M3 11v-1"/><path d="M3 6v-1a2 2 0 0 1 2 -2h1"/><path d="M10 3h1"/><path d="M15 3h1a2 2 0 0 1 2 2v1"/>' },
     'code': { filled: false, inner: '<path d="M7 8l-4 4l4 4"/><path d="M17 8l4 4l-4 4"/><path d="M14 4l-4 16"/>' },
     'share': { filled: false, inner: '<path d="M3 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>' },
+    'transfer': { filled: false, inner: '<path d="M20 10h-16l5.5 -6" /><path d="M4 14h16l-5.5 6" />' },
     'reorder': { filled: false, inner: '<path d="M3 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M10 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M17 16a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -2"/><path d="M5 11v-3a3 3 0 0 1 3 -3h8a3 3 0 0 1 3 3v3"/><path d="M16.5 8.5l2.5 2.5l2.5 -2.5"/>' },
     'file-download': { filled: true, inner: '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M16 3a1 1 0 0 1 .707 .293l4 4a1 1 0 0 1 .293 .707v10a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h1v4a1 1 0 0 0 .883 .993l.117 .007h6a1 1 0 0 0 1 -1v-4zm-4 8a2.995 2.995 0 0 0 -2.995 2.898a1 1 0 0 0 -.005 .102a3 3 0 1 0 3 -3m1 -8v3h-4v-3z" />' },
     'arrow-back-up': { filled: false, inner: '<path d="M9 14l-4 -4l4 -4" /><path d="M5 10h11a4 4 0 1 1 0 8h-1" />' },
@@ -4826,6 +4987,7 @@ const MTLX_ICON_PATHS = {
     x: { filled: false, inner: '<path d="M18 6l-12 12"/><path d="M6 6l12 12"/>' },
     'settings-cog': { filled: false, inner: '<path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" />' },
     'presets': { filled: false, inner: '<path d="M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18" /><path d="M18 12a6 6 0 0 1 -6 6" />' },
+    'camera-reset': { filled: false, inner: '<path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M4 8v-2a2 2 0 0 1 2 -2h2" /><path d="M4 16v2a2 2 0 0 0 2 2h2" /><path d="M16 4h2a2 2 0 0 1 2 2v2" /><path d="M16 20h2a2 2 0 0 0 2 -2v-2" />' },
 };
 
 // React component (plain createElement — this file stays JSX-free).
