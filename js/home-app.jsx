@@ -4,8 +4,9 @@
 // `active`. Written in classic JSX like the other view apps (see
 // js/viewer-app.jsx) — the shell Babel-transforms it on first activation.
 
-// The three feature cards, in nav order (mirrors js/site-header.js's NAV
-// entries for docs/viewer/graph).
+// The four feature cards, in nav order (mirrors js/site-header.js's NAV
+// entries for docs/viewer/graph, plus Tutorials — a real page at
+// tutorials/, not a hash view, unlike the other three).
 const HOME_CARDS = [
     {
         href: '#!docs',
@@ -28,6 +29,15 @@ const HOME_CARDS = [
         desc: 'Visually build MaterialX graphs with nested nodegraphs, a live 3D preview, validation, and XML view/export.',
         img: 'images/preview-nodegraph.jpg',
     },
+    {
+        href: 'tutorials/',
+        icon: 'school',
+        title: 'Tutorials',
+        desc: 'Step-by-step guides: get set up and build your first node graph in the playground.',
+        // Placeholder image — reuses the node-graph preview until a
+        // dedicated tutorials screenshot exists.
+        img: 'images/preview-nodegraph.jpg',
+    },
 ];
 
 function HomeApp({ active } = {}) {
@@ -36,7 +46,7 @@ function HomeApp({ active } = {}) {
     const version = window.__mtlxVersion;
 
     return (
-        <div className="max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">
+        <div className="max-w-7xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">
             {/* Hero */}
             <div className="text-center space-y-4">
                 <svg
@@ -53,7 +63,7 @@ function HomeApp({ active } = {}) {
             </div>
 
             {/* Feature cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
                 {HOME_CARDS.map((card) => (
                     <a
                         key={card.href}
