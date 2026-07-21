@@ -13,7 +13,8 @@
   "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXNodeDocs" },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
-    "vendor:offline": "node scripts/vendor.mjs --with-materialx"
+    "vendor:offline": "node scripts/vendor.mjs --with-materialx",
+    "build:learn": "node scripts/build-learn.mjs"
   },
   "devDependencies": {
     "react": "18.3.1",
