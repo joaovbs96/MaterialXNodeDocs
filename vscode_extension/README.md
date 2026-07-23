@@ -252,7 +252,14 @@ editor.
   (the Viewer fills the tab instead, and its material picker moves to the
   viewport overlay), the Send-to-Viewer/Send-to-Editor buttons (both views
   are always in sync already — see "Viewer/Graph sync" below), and the
-  docs view's Copy-link and open-in-new-tab actions.
+  docs view's Copy-link and open-in-new-tab actions. The header's
+  **Tutorials** tab and its **Node Library & Documentation** tab are
+  hidden too — Tutorials is a page navigation that doesn't apply inside
+  the single-document webview, and the node-library docs stay reachable
+  without a tab via the graph editor's "?" dialog and via the
+  `MaterialX Playground: Open Node Library Documentation` command's own
+  standalone panel. That standalone docs panel, in turn, shows no view
+  tabs at all — it's a single-view panel with nothing else to switch to.
 - **Write-back is Node Graph Editor-only, and only on Ctrl+S.** The
   webview holds an in-memory copy of the document (plus any resolved
   includes/textures); nothing is saved back to the `.mtlx` file until you

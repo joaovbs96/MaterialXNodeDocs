@@ -117,23 +117,32 @@
     }
     var brandHref = IS_TUTORIALS ? (APP_ROOT + '#!home') : (IS_SHELL ? '#!home' : 'index.html');
 
-    // Inside the VS Code webview there's no landing page to navigate to —
-    // the editor is bound to a single opened .mtlx file — so drop the Home
-    // tab from both the desktop and mobile nav copies below. No-op (same
-    // NAV array) in the plain browser.
+    // Inside the VS Code webview, three NAV entries are dropped
+    // unconditionally from both the desktop and mobile nav copies below
+    // (no-op — same NAV array — in the plain browser):
+    //   - home: there's no landing page to navigate to — the editor is
+    //     bound to a single opened .mtlx file.
+    //   - tutorials: it's a real page navigation out to /tutorials/,
+    //     which makes no sense inside the single-document webview.
+    //   - docs (Node Library & Documentation): the reference docs stay
+    //     reachable without the tab — via the graph editor's "?" dialog
+    //     and via the standalone panel opened by the "MaterialX
+    //     Playground: Open Node Library Documentation" command — so the
+    //     tab itself would just be redundant here.
     //
     // Additionally, inside the STANDALONE docs panel specifically (window.
     // __MTLX_DOCS_ONLY__, set by vscode_extension/media/bootstrap.js from
     // webview.html's data-docs-only attribute — see editorProvider.js's
-    // buildHtml) also drop the Viewer and Graph tabs, keeping only Docs:
-    // that panel isn't backed by a .mtlx document at all (it's the
-    // document-less "MaterialX: Open Node Documentation" command), so the
-    // file-bound Viewer/Graph views have nothing to show there. The
-    // file-backed MaterialX Playground custom editor never sets
-    // __MTLX_DOCS_ONLY__, so it keeps every tab exactly as before.
+    // buildHtml) also drop the Viewer and Graph tabs: that panel isn't
+    // backed by a .mtlx document at all (it's the document-less command
+    // above), so the file-bound Viewer/Graph views have nothing to show
+    // there. Combined with the drops above, this leaves the docs-only
+    // panel with no tabs at all — expected, since it's a single-view
+    // panel. The file-backed MaterialX Playground custom editor never
+    // sets __MTLX_DOCS_ONLY__, so it keeps the Viewer and Graph tabs.
     var navItems = window.__MTLX_VSCODE__
         ? NAV.filter(function (t) {
-            if (t.id === 'home') return false;
+            if (t.id === 'home' || t.id === 'tutorials' || t.id === 'docs') return false;
             if (window.__MTLX_DOCS_ONLY__ && (t.id === 'viewer' || t.id === 'graph')) return false;
             return true;
         })
