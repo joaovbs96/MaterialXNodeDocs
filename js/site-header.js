@@ -45,12 +45,17 @@
     // scripts/vendor.mjs's --check guards this literal against drift.
     var MTLX_TAG = (window.MtlxAssets && window.MtlxAssets.MTLX_TAG) || 'v1.39.5';
 
+    // SINGLE SOURCE OF TRUTH for repo/spec URLs, exposed as window.SITE_LINKS
+    // below. Add new external links here, never hardcode them in app files.
     var LINKS = {
         repo: 'https://github.com/joaovbs96/MaterialXPlayground',
         spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/' + MTLX_TAG + '/documents/Specification',
         // The footer's "source of truth" link deliberately points at main,
         // not the pinned tag: it names the authority, not what we parse.
         specMain: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification',
+        // Per-node spec markdown deep-link base, consumed by
+        // js/docs/doc-links.jsx (specUrlForNode's derivation fallback).
+        specBlobBase: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/',
     };
     LINKS.issues = LINKS.repo + '/issues';
 

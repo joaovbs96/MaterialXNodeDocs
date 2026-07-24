@@ -32,7 +32,9 @@ const HOME_CARDS = [
 
 function HomeApp({ active } = {}) {
     const title = window.SITE_TITLE || 'MaterialX Playground';
-    const links = window.SITE_LINKS || { repo: 'https://github.com/joaovbs96/MaterialXPlayground' };
+    // js/site-header.js sets window.SITE_LINKS synchronously before any app
+    // JSX runs (in both the browser shell and the VS Code webview).
+    const links = window.SITE_LINKS;
 
     return (
         <div className="max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">

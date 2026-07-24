@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Try the live playground
+    url: https://joaovbs96.github.io/MaterialXPlayground/
+    about: See if your issue reproduces on the live site before filing a report.

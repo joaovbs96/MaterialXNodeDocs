@@ -5,12 +5,11 @@
 // its own function scope, so the public API is exported onto window at
 // the bottom.
 
-        // Project links. The shared header (js/site-header.js) is the single
-        // source of truth when it's loaded; the literals below are fallbacks
-        // so doc-ui also works standalone.
-        const REPO_URL = (window.SITE_LINKS && window.SITE_LINKS.repo) || 'https://github.com/joaovbs96/MaterialXPlayground';
-        const ISSUES_URL = (window.SITE_LINKS && window.SITE_LINKS.issues) || (REPO_URL + '/issues');
-        const SPEC_DOCS_URL = (window.SITE_LINKS && window.SITE_LINKS.spec) || 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification';
+        // Project links. js/site-header.js is the single source of truth and
+        // sets window.SITE_LINKS synchronously before this file runs.
+        const REPO_URL = window.SITE_LINKS.repo;
+        const ISSUES_URL = window.SITE_LINKS.issues;
+        const SPEC_DOCS_URL = window.SITE_LINKS.spec;
 
         // Permalinks: a node is addressed by lib/group/name in the URL hash,
         // e.g. #/stdlib/math/add — hash routing needs no server config, so it
@@ -123,7 +122,7 @@
         // follow the hyphenated "node-<name>" convention observed in the MD
         // (e.g. oren_nayar_diffuse_bsdf → #node-oren-nayar-diffuse-bsdf).
         // GitHub resolves those fragments to user-content-prefixed ids.
-        const SPEC_BASE = 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/';
+        const SPEC_BASE = window.SITE_LINKS.specBlobBase;
         // Library -> spec markdown file mapping. This is only ever a
         // FALLBACK: specUrlForNode below prefers node.info.spec_url (which
         // the pregenerated js/gen/nodelib.json always supplies) and only
