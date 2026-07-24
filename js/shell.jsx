@@ -317,12 +317,12 @@ function Shell() {
     React.useEffect(() => {
         if (EMBED) return;
         const titles = {
-            home: 'MaterialX Playground — Node Library, 3D Viewer & Graph Editor',
+            home: 'MaterialX Playground — Node Library, Viewer & Graph Editor',
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
         };
-        document.title = titles[activeView] || 'MaterialX Playground — Node Library, 3D Viewer & Graph Editor';
+        document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
 
     const renderView = (view) => {
