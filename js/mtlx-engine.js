@@ -1427,12 +1427,13 @@ const normalizeGeometry = (geometry) => {
     return geometry;
 };
 
-// The MaterialX shaderball: two user-authored GLBs shipped locally
-// under models/ (ASWF standard-shader-ball layout) — shaderball.glb
-// (full scene: backdrop box, grid, emitter backplanes, neutral ball
-// parts, an embedded camera) and shaderball_simple.glb (ball only, no
-// camera). Both replace the old remote gh-pages fetch entirely: the
-// URL is resolved via `new URL(..., document.baseURI).href` — the SAME
+// Shaderball: two GLB exports of the ASWF/USD-WG Standard
+// Shader Ball shipped locally under models/ (see models/LICENSE.txt) —
+// shaderball.glb (full scene: backdrop box, grid, emitter backplanes,
+// neutral ball parts, an embedded camera) and shaderball_simple.glb
+// (ball only, no camera). Both replace the old remote gh-pages fetch
+// entirely: the URL is resolved via `new URL(..., document.baseURI).href`
+// — the SAME
 // document.baseURI idiom js/mtlx-assets.js's own local-mode URLs use —
 // so this resolves correctly against the plain website's origin AND
 // the VS Code webview's `<base href>`, with no asset-resolver probe (or

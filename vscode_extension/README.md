@@ -297,9 +297,8 @@ editor.
 - `src/editorProvider.js` builds the webview's HTML from
   `media/webview.html` (generated from `../index.html` by
   `scripts/build-webview.mjs` — see the comment at the top of that file,
-  and [How this repo is built](../README.md#how-this-repo-is-built) in the
-  root README) and wires up the extension<->webview messaging + live
-  reload.
+  and [How this repo is built](../docs/BUILDING.md) in the root docs)
+  and wires up the extension<->webview messaging + live reload.
   Also backs the document-less docs panel singleton
   (`materialxPlayground.openDocs`), threading an arbitrary `location.hash`
   (`#!docs`, or `#/<category>` for a hover's deep link) through to a

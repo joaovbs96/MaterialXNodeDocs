@@ -110,6 +110,12 @@ export const STAMP_TABLE = [
   },
   {
     path: "README.md",
+    describe: "MaterialX version badge",
+    re: /MaterialX-(v[\d.]+)-/,
+    replacement: (meta) => `MaterialX-${meta.tag}-`,
+  },
+  {
+    path: "docs/BUILDING.md",
     describe: "JsMaterialX* files' version note",
     re: /\(`\.js`\/`\.wasm`\/`\.data`, (v[\d.]+)\)/,
     replacement: (meta) => `(\`.js\`/\`.wasm\`/\`.data\`, ${meta.tag})`,
